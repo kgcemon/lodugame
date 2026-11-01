@@ -127,11 +127,12 @@ export function animationMs(events: GameEvent[]): number {
   let ms = 0;
   for (const e of events) {
     switch (e.type) {
-      case 'rolled': ms += 1300; break;
+      case 'rolled': ms += 1050; break;
       case 'moved': ms += 230 * Math.max(1, e.to - Math.max(e.from, 0)) + 250; break;
       case 'captured': ms += 750; break;
       case 'tokenHome': ms += 450; break;
-      case 'noMoves': case 'forfeitSixes': ms += 900; break;
+      // Short: a roll that can't move anything should pass the turn quickly.
+      case 'noMoves': case 'forfeitSixes': ms += 450; break;
       case 'extraTurn': ms += 350; break;
       case 'turn': ms += 300; break;
       default: break;
@@ -813,7 +814,7 @@ export class RoomManager {
   }
 
   /** Hold before the next player may act after a roll its owner could still re-roll. */
-  private static readonly REROLL_HOLD_MS = 2500;
+  private static readonly REROLL_HOLD_MS = 1500;
 
   /**
    * Apply an action. `base` replaces the current state as the starting point (re-rolls
