@@ -84,7 +84,7 @@ public class MainActivity extends BaseActivity {
         TextView t = Ui.title(this, "Can't reach the game server");
         t.setGravity(Gravity.CENTER);
         l.addView(t);
-        TextView m = Ui.muted(this, message + "\n\nServer: " + app.serverUrl());
+        TextView m = Ui.muted(this, message);
         m.setGravity(Gravity.CENTER);
         m.setPadding(0, Ui.dp(this, 8), 0, Ui.dp(this, 20));
         l.addView(m);
@@ -93,9 +93,6 @@ public class MainActivity extends BaseActivity {
             root.addView(Ui.spinner(this));
             loadSession();
         }));
-        TextView change = Ui.button(this, "Change server", "ghost", v -> toAuth());
-        Ui.margins(change, this, 0, 8, 0, 0);
-        l.addView(change);
         root.addView(l, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 

@@ -115,7 +115,7 @@ final class ProfileTab {
         sec.addView(link("🚪  Sign out", a::signOut));
         col.addView(sec);
 
-        TextView server = Ui.muted(a, "Server: " + app.serverUrl() + " · app " + com.ludo3d.game.BuildConfig.VERSION_NAME);
+        TextView server = Ui.muted(a, "Ludo 3D " + com.ludo3d.game.BuildConfig.VERSION_NAME);
         server.setGravity(Gravity.CENTER);
         server.setPadding(0, Ui.dp(a, 12), 0, 0);
         col.addView(server);

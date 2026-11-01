@@ -35,7 +35,8 @@ buildConfigField 'String', 'DEFAULT_SERVER_URL', '"https://freefirediamondtopup.
 * Emulator + `npm run dev` on this PC: `http://10.0.2.2:3001`.
 * Real phone on the same Wi-Fi + `npm run dev`: `http://<your PC's IP>:3001`.
 
-Players can also change it on the sign-in screen (**⚙ Server**). The app needs no CORS
+Release builds always use this address and never show it. In a **debug** build you can point
+the app at a test server: long-press the 🎲 logo on the sign-in screen. The app needs no CORS
 settings on the server.
 
 Before publishing, also:

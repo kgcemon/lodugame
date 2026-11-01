@@ -50,6 +50,8 @@ public class LudoApp extends Application {
     }
 
     public String serverUrl() {
+        // Release builds always use the built-in server; only debug builds can be pointed elsewhere.
+        if (!BuildConfig.DEBUG) return BuildConfig.DEFAULT_SERVER_URL.replaceAll("/+$", "");
         String s = prefs.getString("server_url", BuildConfig.DEFAULT_SERVER_URL);
         return s.replaceAll("/+$", "");
     }

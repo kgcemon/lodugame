@@ -32,6 +32,13 @@ public class AuthActivity extends BaseActivity {
         TextView logo = Ui.text(this, "🎲", 54, Ui.INK);
         logo.setGravity(Gravity.CENTER);
         logo.setPadding(0, Ui.dp(this, 24), 0, 0);
+        // Developers only: long-press the logo in a debug build to point the app at a test server.
+        if (com.ludo3d.game.BuildConfig.DEBUG) {
+            logo.setOnLongClickListener(v -> {
+                editServer();
+                return true;
+            });
+        }
         col.addView(logo);
         TextView name = Ui.title(this, "Ludo 3D");
         name.setGravity(Gravity.CENTER);
@@ -130,10 +137,6 @@ public class AuthActivity extends BaseActivity {
             links.addView(link("Already have an account? Sign in", "login"));
         }
         col.addView(links);
-
-        TextView server = Ui.smallButton(this, "⚙ Server: " + app.serverUrl(), "ghost", v -> editServer());
-        Ui.margins(server, this, 0, 24, 0, 0);
-        col.addView(server);
     }
 
     private TextView link(String text, String target) {
