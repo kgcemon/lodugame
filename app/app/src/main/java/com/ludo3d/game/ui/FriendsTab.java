@@ -1,6 +1,5 @@
 package com.ludo3d.game.ui;
 
-import androidx.appcompat.app.AlertDialog;
 import android.content.Intent;
 import android.text.InputType;
 import android.widget.EditText;
@@ -190,17 +189,14 @@ final class FriendsTab {
     }
 
     private void confirmRemove(JSONObject f) {
-        new AlertDialog.Builder(a)
-                .setTitle("Remove friend?")
-                .setMessage("Remove " + f.optString("username") + " from your friends?")
-                .setPositiveButton("Remove", (d, w) -> app.api.delete("/friends/" + f.optString("publicId"), new Api.Cb(a) {
+        Popup.message(a, "Remove friend?", "Remove " + f.optString("username") + " from your friends?",
+                Popup.plain("Cancel", null),
+                Popup.danger("Remove", () -> app.api.delete("/friends/" + f.optString("publicId"), new Api.Cb(a) {
                     @Override
                     public void ok(JSONObject r) {
                         LudoApp.toast(f.optString("username") + " removed");
                         a.selectTab(1);
                     }
-                }))
-                .setNegativeButton("Cancel", null)
-                .show();
+                })));
     }
 }

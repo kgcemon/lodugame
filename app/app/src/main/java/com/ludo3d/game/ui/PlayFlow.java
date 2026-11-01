@@ -1,6 +1,5 @@
 package com.ludo3d.game.ui;
 
-import androidx.appcompat.app.AlertDialog;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -98,12 +97,9 @@ final class PlayFlow {
     }
 
     void insufficient() {
-        new AlertDialog.Builder(a)
-                .setTitle("Insufficient Coins!")
-                .setMessage("Play more matches or collect your free daily bonus.")
-                .setPositiveButton("Open wallet", (d, w) -> a.startActivity(new android.content.Intent(a, WalletActivity.class)))
-                .setNegativeButton("Close", null)
-                .show();
+        Popup.message(a, "Insufficient Coins!", "🪙\nPlay more matches or collect your free daily bonus.",
+                Popup.plain("Close", null),
+                new Popup.Btn("Open wallet", "gold", () -> a.startActivity(new android.content.Intent(a, WalletActivity.class))));
     }
 
     private void emitRoom(String event, JSONObject payload) {

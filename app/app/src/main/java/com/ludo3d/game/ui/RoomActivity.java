@@ -1,6 +1,5 @@
 package com.ludo3d.game.ui;
 
-import androidx.appcompat.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -55,8 +54,8 @@ public class RoomActivity extends BaseActivity {
     }
 
     private void alertAndClose(String reason) {
-        new AlertDialog.Builder(this).setTitle("Room closed").setMessage(reason)
-                .setPositiveButton("OK", (d, w) -> finish()).setOnCancelListener(d -> finish()).show();
+        Popup p = Popup.message(this, "Room closed", reason, Popup.ok("OK", this::finish));
+        p.setOnCancelListener(d -> finish());
     }
 
     private void render() {
@@ -127,10 +126,10 @@ public class RoomActivity extends BaseActivity {
             if (isHost && i != you && !isPublic) {
                 final int seat = i;
                 TextView x = Ui.text(this, "  ✕", 18, Ui.MUTED);
-                x.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Remove " + s.optString("name") + "?")
-                        .setMessage(fee > 0 ? "Their entry fee is refunded." : null)
-                        .setPositiveButton("Remove", (d, w) -> app.socket.emit("room:kick", PlayFlow.obj("seat", seat), PlayFlow.toastOnError()))
-                        .setNegativeButton("Cancel", null).show());
+                x.setOnClickListener(v -> Popup.message(this, "Remove " + s.optString("name") + "?",
+                        fee > 0 ? "Their entry fee is refunded." : "They can rejoin with the room code.",
+                        Popup.plain("Cancel", null),
+                        Popup.danger("Remove", () -> app.socket.emit("room:kick", PlayFlow.obj("seat", seat), PlayFlow.toastOnError()))));
                 row.addView(x);
             }
             list.addView(row);

@@ -1,11 +1,9 @@
 package com.ludo3d.game.ui;
 
 import android.content.Context;
-import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.RippleDrawable;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -28,12 +26,12 @@ import java.util.TimeZone;
 public final class Ui {
     private Ui() {}
 
-    public static final int BG = 0xff0b0e2a;
-    public static final int CARD = 0xff161b45;
-    public static final int CARD_2 = 0xff1f2560;
-    public static final int STROKE = 0x24ffffff;
-    public static final int INK = 0xfff4f6ff;
-    public static final int MUTED = 0xffa3a8cf;
+    public static final int BG = 0xff2a0b63;
+    public static final int CARD = 0xff3d1a85;
+    public static final int CARD_2 = 0xff4c1d95;
+    public static final int STROKE = 0x33ffffff;
+    public static final int INK = 0xffffffff;
+    public static final int MUTED = 0xffc8bdf5;
     public static final int GOLD = 0xffffb547;
     public static final int PRIMARY = 0xff2f7cf0;
     public static final int DANGER = 0xffe53945;
@@ -97,16 +95,15 @@ public final class Ui {
         return t;
     }
 
+    /** Screen title in gold game lettering. */
     public static TextView title(Context c, CharSequence s) {
-        TextView t = text(c, s, 24, INK);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        return t;
+        return new Fx.GoldText(c, s, 26);
     }
 
+    /** Section heading: white game lettering with a purple outline. */
     public static TextView heading(Context c, CharSequence s) {
-        TextView t = text(c, s, 17, INK);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setPadding(0, dp(c, 18), 0, dp(c, 8));
+        TextView t = Fx.GoldText.label(c, s, 18, 0xff3b0d8c);
+        t.setPadding(dp(c, 2), dp(c, 16), dp(c, 2), dp(c, 8));
         return t;
     }
 
@@ -119,43 +116,44 @@ public final class Ui {
         return t;
     }
 
-    /** Pill button. Styles: "primary" (gold), "blue", "glass", "danger", "ghost". */
+    /**
+     * Chunky 3D game button that sinks when pressed. Styles: "primary" (gold), "blue",
+     * "glass" (purple), "danger" (red), "ok" (green), "ghost" (flat text link).
+     */
     public static TextView button(Context c, CharSequence label, String style, View.OnClickListener onClick) {
-        TextView b = text(c, label, 15, INK);
-        b.setTypeface(Typeface.DEFAULT_BOLD);
-        b.setGravity(Gravity.CENTER);
-        b.setPadding(dp(c, 18), dp(c, 12), dp(c, 18), dp(c, 12));
-        int bg;
-        switch (style) {
-            case "primary":
-                bg = GOLD;
-                b.setTextColor(0xff2a1600);
-                break;
-            case "blue":
-                bg = PRIMARY;
-                break;
-            case "danger":
-                bg = DANGER;
-                break;
-            case "ghost":
-                bg = Color.TRANSPARENT;
-                b.setTextColor(MUTED);
-                break;
-            default:
-                bg = CARD_2;
-        }
-        GradientDrawable shape = round(bg, dp(c, 999));
-        if ("glass".equals(style)) shape.setStroke(dp(c, 1), STROKE);
-        b.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33ffffff), shape, round(Color.WHITE, dp(c, 999))));
-        b.setOnClickListener(onClick);
-        b.setClickable(true);
-        return b;
+        return make3d(c, label, style, onClick, false);
     }
 
     public static TextView smallButton(Context c, CharSequence label, String style, View.OnClickListener onClick) {
-        TextView b = button(c, label, style, onClick);
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        b.setPadding(dp(c, 12), dp(c, 7), dp(c, 12), dp(c, 7));
+        return make3d(c, label, style, onClick, true);
+    }
+
+    private static TextView make3d(Context c, CharSequence label, String style, View.OnClickListener onClick, boolean small) {
+        TextView b = text(c, label, small ? 13 : 15, INK);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        b.setGravity(Gravity.CENTER);
+        b.setShadowLayer(dp(c, 1.5f), 0, dp(c, 1), 0x66000000);
+        int padH = dp(c, small ? 12 : 18), padV = dp(c, small ? 6 : 11);
+        if ("ghost".equals(style)) {
+            b.setTextColor(MUTED);
+            b.setShadowLayer(0, 0, 0, 0);
+            b.setPadding(padH, padV, padH, padV);
+        } else {
+            int[] colors = "primary".equals(style) ? Fx.YELLOW : "blue".equals(style) ? Fx.BLUE : "danger".equals(style) ? Fx.RED
+                    : "ok".equals(style) ? Fx.GREEN : Fx.PURPLE;
+            if ("primary".equals(style)) {
+                b.setTextColor(0xff4a2600);
+                b.setShadowLayer(dp(c, 1), 0, dp(c, 1), 0x66ffffff);
+            }
+            int depth = Fx.bevel(b, colors, small ? 12 : 16, small ? 3 : 5, true);
+            b.setPadding(padH, padV, padH, padV + depth);
+        }
+        b.setOnClickListener(v -> {
+            com.ludo3d.game.audio.Sfx s = com.ludo3d.game.audio.Sfx.get();
+            if (s != null) s.play(com.ludo3d.game.audio.Sfx.S.CLICK, 0.7f, 1f);
+            if (onClick != null) onClick.onClick(v);
+        });
+        b.setClickable(true);
         return b;
     }
 
@@ -164,11 +162,12 @@ public final class Ui {
         v.setAlpha(enabled ? 1f : 0.45f);
     }
 
+    /** A raised 3D purple panel. */
     public static LinearLayout card(Context c) {
         LinearLayout l = vbox(c);
-        l.setBackground(roundStroke(CARD, dp(c, 18), dp(c, 1), STROKE));
+        int depth = Fx.bevel(l, Fx.PANEL, 18, 5, false);
         int p = dp(c, 16);
-        l.setPadding(p, p, p, p);
+        l.setPadding(p, p, p, p + depth);
         LinearLayout.LayoutParams lp = lpMatchWrap();
         lp.bottomMargin = dp(c, 12);
         l.setLayoutParams(lp);
@@ -178,7 +177,7 @@ public final class Ui {
     public static EditText input(Context c, String hint, int inputType) {
         EditText e = new EditText(c);
         e.setHint(hint);
-        e.setHintTextColor(0x88a3a8cf);
+        e.setHintTextColor(0x99c8bdf5);
         e.setTextColor(INK);
         e.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         // setSingleLine() replaces the text transformation, so it must come before setInputType(),
@@ -190,7 +189,11 @@ public final class Ui {
         }
         // Password inputs default to a monospace font; keep the app font.
         e.setTypeface(Typeface.DEFAULT);
-        e.setBackground(roundStroke(0xff10143a, dp(c, 12), dp(c, 1), STROKE));
+        // Sunken field: dark at the top (inner shadow), a light rim at the bottom edge.
+        GradientDrawable well = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xff1c0a45, Fx.FIELD[1]});
+        well.setCornerRadius(dp(c, 14));
+        well.setStroke(dp(c, 1), 0x44ffffff);
+        e.setBackground(well);
         e.setPadding(dp(c, 14), dp(c, 12), dp(c, 14), dp(c, 12));
         LinearLayout.LayoutParams lp = lpMatchWrap();
         lp.bottomMargin = dp(c, 10);

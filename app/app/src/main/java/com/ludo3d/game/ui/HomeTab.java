@@ -3,6 +3,8 @@ package com.ludo3d.game.ui;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -14,7 +16,10 @@ import com.ludo3d.game.net.Api;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Home: current room, daily bonus, paid matches, private rooms, stats and online friends. */
+/**
+ * Home, game style: the LUDO 3D logo with side buttons (free daily bonus, ranks, rules,
+ * friends), big 3D tiles for two- and four-player matches, friends, join and online play.
+ */
 final class HomeTab {
     private final MainActivity a;
     private final LudoApp app;
@@ -27,37 +32,245 @@ final class HomeTab {
     }
 
     void render() {
+        col.setPadding(Ui.dp(a, 14), Ui.dp(a, 6), Ui.dp(a, 14), Ui.dp(a, 18));
+        hero();
         roomBanner();
         verifyNotice();
-        dailyBonus();
 
-        col.addView(Ui.heading(a, "Online matches (coins)"));
+        // Two big tiles: 1-vs-1 and four-player online matches.
+        LinearLayout big = Ui.hbox(a);
+        big.addView(modeTile(Fx.GREEN, "2", "TWO PLAYER", 0xff1f6d0a, new Fx.Pawns(a, 0xffe53945, 0xff2f7cf0), v -> pickMode(2)),
+                tileLp(1, 172, 0, 6));
+        big.addView(modeTile(Fx.RED, "4", "FOUR PLAYER", 0xff8a0d16, new Fx.Pawns(a, 0xff22b46b, 0xfff6bf26, 0xffe53945, 0xff2f7cf0), v -> pickMode(4)),
+                tileLp(1, 172, 6, 0));
+        col.addView(big, Ui.lpMatchWrap());
+
+        // Three smaller tiles.
+        LinearLayout small = Ui.hbox(a);
+        Ui.margins(small, a, 0, 14, 0, 0);
+        View board = new Fx.MiniBoard(a);
+        small.addView(artTile(Fx.ORANGE, "PLAY WITH\nFRIENDS", 0xff9c3410, board, v -> createRoom()), tileLp(1, 150, 0, 5));
+        small.addView(artTile(Fx.BLUE, "JOIN\nROOM", 0xff0b5a9e, new Fx.Die(a), v -> joinRoom()), tileLp(1, 150, 5, 5));
+        small.addView(artTile(Fx.YELLOW, "PLAY\nONLINE", 0xffa66f00, emoji("🌍", 44), v -> pickMode(0)), tileLp(1, 150, 5, 0));
+        col.addView(small);
+
+        banner();
+        onlineFriends();
+    }
+
+    /** A wide 3D banner: collect today's free coins, or open your match history. */
+    private void banner() {
+        JSONObject d = app.wallet.optJSONObject("dailyBonus");
+        boolean bonus = d != null && d.optLong("amount") > 0 && !d.optBoolean("claimedToday");
+        Fx.Tile t = new Fx.Tile(a, bonus ? Fx.YELLOW : Fx.PURPLE, 18, 6);
+        LinearLayout row = Ui.hbox(a);
+        row.setPadding(Ui.dp(a, 16), 0, Ui.dp(a, 16), 0);
+        row.addView(emoji(bonus ? "🎁" : "📜", 32));
+        LinearLayout txt = Ui.vbox(a);
+        txt.setPadding(Ui.dp(a, 12), 0, 0, 0);
+        txt.addView(Fx.GoldText.label(a, bonus ? "COLLECT " + Ui.fmt(d.optLong("amount")) + " FREE COINS" : "MATCH HISTORY", 17,
+                bonus ? 0xffa66f00 : 0xff3b0d8c));
+        TextView sub = Ui.bold(Ui.text(a, bonus ? "Your daily bonus is ready" : "Results, coins won and reports", 12, bonus ? 0xff5c3a00 : 0xffe9e2ff));
+        sub.setPadding(Ui.dp(a, 4), 0, 0, 0);
+        txt.addView(sub);
+        row.addView(txt, Ui.weight(1));
+        row.addView(Fx.GoldText.label(a, "▶", 20, bonus ? 0xffa66f00 : 0xff3b0d8c));
+        t.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        t.setOnClickListener(v -> {
+            if (bonus) claimBonus(d, true);
+            else a.startActivity(new android.content.Intent(a, HistoryActivity.class));
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 78));
+        lp.topMargin = Ui.dp(a, 14);
+        col.addView(t, lp);
+    }
+
+    // ------------------------------------------------------------------ hero: logo + side buttons
+
+    private void hero() {
+        FrameLayout hero = new FrameLayout(a);
+        LinearLayout logo = Ui.vbox(a);
+        logo.setGravity(Gravity.CENTER_HORIZONTAL);
+        TextView crown = Ui.text(a, "👑", 34, Ui.INK);
+        crown.setGravity(Gravity.CENTER);
+        logo.addView(crown);
+        LinearLayout title = Ui.hbox(a);
+        title.setGravity(Gravity.CENTER);
+        title.addView(new Fx.GoldText(a, "LUDO", 54));
+        Fx.GoldText three = new Fx.GoldText(a, "3D", 24, new int[]{0xffffffff, 0xffe0d4ff, 0xffb69cff}, 0xff3b0d8c);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tlp.gravity = Gravity.TOP;
+        title.addView(three, tlp);
+        logo.addView(title);
+        FrameLayout stage = new FrameLayout(a);
+        stage.addView(new Fx.MiniBoard(a), new FrameLayout.LayoutParams(Ui.dp(a, 190), Ui.dp(a, 70), Gravity.CENTER));
+        stage.addView(new Fx.Die(a), new FrameLayout.LayoutParams(Ui.dp(a, 44), Ui.dp(a, 44), Gravity.CENTER));
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(Ui.dp(a, 200), Ui.dp(a, 72));
+        slp.topMargin = -Ui.dp(a, 14);
+        logo.addView(stage, slp);
+        hero.addView(logo, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL));
+
+        LinearLayout left = Ui.vbox(a);
+        left.addView(freeBonus());
+        left.addView(sideButton("🏆", "RANKS", v -> a.selectTab(2)));
+        hero.addView(left, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.START | Gravity.TOP));
+        LinearLayout right = Ui.vbox(a);
+        right.addView(sideButton("❓", "RULES", v -> rules()));
+        right.addView(sideButton("👥", "FRIENDS", v -> a.selectTab(1)));
+        hero.addView(right, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END | Gravity.TOP));
+        col.addView(hero, Ui.lpMatchWrap());
+    }
+
+    private View sideButton(String emoji, String label, View.OnClickListener onClick) {
+        LinearLayout c = Ui.vbox(a);
+        c.setGravity(Gravity.CENTER_HORIZONTAL);
+        c.addView(Fx.badge(a, emoji, Fx.PURPLE, 50, onClick), new LinearLayout.LayoutParams(Ui.dp(a, 50), Ui.dp(a, 54)));
+        c.addView(Fx.GoldText.label(a, label, 10, 0xff3b0d8c));
+        Ui.margins(c, a, 0, 4, 0, 6);
+        return c;
+    }
+
+    /** The daily bonus as a bouncing "FREE" bag; greyed out once collected today. */
+    private View freeBonus() {
+        JSONObject d = app.wallet.optJSONObject("dailyBonus");
+        boolean available = d != null && d.optLong("amount") > 0 && !d.optBoolean("claimedToday");
+        LinearLayout c = Ui.vbox(a);
+        c.setGravity(Gravity.CENTER_HORIZONTAL);
+        Fx.Tile bag = Fx.badge(a, "💰", available ? Fx.YELLOW : Fx.PURPLE_DARK, 50, v -> claimBonus(d, available));
+        c.addView(bag, new LinearLayout.LayoutParams(Ui.dp(a, 50), Ui.dp(a, 54)));
+        c.addView(available ? new Fx.GoldText(a, "FREE", 13) : Fx.GoldText.label(a, "DONE ✓", 10, 0xff3b0d8c));
+        if (available) {
+            android.animation.ObjectAnimator bounce = android.animation.ObjectAnimator.ofFloat(bag, "translationY", 0, -Ui.dp(a, 6), 0);
+            bounce.setDuration(900);
+            bounce.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            bounce.setStartDelay(300);
+            bounce.start();
+        }
+        Ui.margins(c, a, 0, 4, 0, 6);
+        return c;
+    }
+
+    private void claimBonus(JSONObject d, boolean available) {
+        if (!available) {
+            LudoApp.toast("Daily bonus collected — come back tomorrow!");
+            return;
+        }
+        app.api.post("/wallet/daily-bonus", null, new Api.Cb(a) {
+            @Override
+            public void ok(JSONObject res) {
+                app.mergeWallet(res.optJSONObject("wallet"));
+                com.ludo3d.game.audio.Sfx.get().play(com.ludo3d.game.audio.Sfx.S.HOME);
+                LudoApp.toast("+" + Ui.fmt(d.optLong("amount")) + " coins collected!");
+                a.refreshHeader();
+                a.selectTab(0);
+            }
+        });
+    }
+
+    private void rules() {
+        a.alert("How to play",
+                "• Roll a 6 to bring a token out of your yard.\n"
+                        + "• Move clockwise round the board and up your coloured lane to the centre.\n"
+                        + "• Land on an opponent to send them home (not on star or start squares).\n"
+                        + "• A 6, a capture or reaching home gives you another roll. Three 6s in a row lose the turn.\n"
+                        + "• Get all four tokens home first to win. In paid matches the winner takes the payout.");
+    }
+
+    // ------------------------------------------------------------------ tiles
+
+    private static LinearLayout.LayoutParams tileLp(float weight, int heightDp, int leftDp, int rightDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, 0, weight);
+        lp.height = (int) (heightDp * android.content.res.Resources.getSystem().getDisplayMetrics().density);
+        lp.leftMargin = (int) (leftDp * android.content.res.Resources.getSystem().getDisplayMetrics().density);
+        lp.rightMargin = (int) (rightDp * android.content.res.Resources.getSystem().getDisplayMetrics().density);
+        return lp;
+    }
+
+    /** Big tile: pawn artwork with a huge gold number, label at the bottom. */
+    private View modeTile(int[] colors, String number, String label, int outline, View pawns, View.OnClickListener onClick) {
+        Fx.Tile t = new Fx.Tile(a, colors, 20, 7);
+        FrameLayout art = new FrameLayout(a);
+        art.addView(pawns, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 96), Gravity.TOP));
+        Fx.GoldText n = new Fx.GoldText(a, number, 64);
+        art.addView(n, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL | Gravity.TOP));
+        Fx.GoldText l = Fx.GoldText.label(a, label, 17, outline);
+        l.setGravity(Gravity.CENTER);
+        art.addView(l, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+        art.setPadding(Ui.dp(a, 8), Ui.dp(a, 8), Ui.dp(a, 8), Ui.dp(a, 10));
+        t.addView(art, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        t.setOnClickListener(onClick);
+        return t;
+    }
+
+    private View artTile(int[] colors, String label, int outline, View art, View.OnClickListener onClick) {
+        Fx.Tile t = new Fx.Tile(a, colors, 18, 6);
+        LinearLayout c = Ui.vbox(a);
+        c.setGravity(Gravity.CENTER_HORIZONTAL);
+        c.setPadding(Ui.dp(a, 4), Ui.dp(a, 10), Ui.dp(a, 4), Ui.dp(a, 8));
+        c.addView(art, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        Fx.GoldText l = Fx.GoldText.label(a, label, 13, outline);
+        l.setGravity(Gravity.CENTER);
+        c.addView(l, Ui.lpMatchWrap());
+        t.addView(c, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        t.setOnClickListener(onClick);
+        return t;
+    }
+
+    private TextView emoji(String e, float sp) {
+        TextView t = Ui.text(a, e, sp, Ui.INK);
+        t.setGravity(Gravity.CENTER);
+        return t;
+    }
+
+    /**
+     * Choose a match: players = 2 (1-vs-1 modes), 4 (four-player modes) or 0 (every online mode).
+     * Each mode is a 3D tile showing its fee and the winner's payout.
+     */
+    private void pickMode(int players) {
         JSONArray modes = app.modes();
+        LinearLayout list = Ui.vbox(a);
+        list.setPadding(0, Ui.dp(a, 4), 0, 0);
+        final Popup[] dlg = new Popup[1];
+        int[][] palette = {Fx.GREEN, Fx.BLUE, Fx.ORANGE, Fx.RED, Fx.YELLOW};
+        int n = 0;
         for (int i = 0; i < modes.length(); i++) {
             JSONObject m = modes.optJSONObject(i);
             if (m == null || m.optBoolean("privateOnly") || !m.optBoolean("enabled", true)) continue;
-            col.addView(modeCard(m));
+            int max = m.optInt("maxPlayers", 4);
+            if (players == 2 && max != 2) continue;
+            if (players == 4 && max < 3) continue;
+            Fx.Tile t = new Fx.Tile(a, palette[n++ % palette.length], 16, 5);
+            LinearLayout row = Ui.hbox(a);
+            row.setPadding(Ui.dp(a, 14), 0, Ui.dp(a, 14), 0);
+            LinearLayout txt = Ui.vbox(a);
+            txt.addView(Fx.GoldText.label(a, m.optString("name"), 17, 0x99000000));
+            TextView sub = Ui.bold(Ui.text(a, m.optString("matchType") + " · winner gets " + Ui.fmt(Math.round(m.optLong("entryFee") * app.payoutMultiplier())), 12, 0xeeffffff));
+            sub.setPadding(Ui.dp(a, 4), 0, 0, 0);
+            txt.addView(sub);
+            row.addView(txt, Ui.weight(1));
+            row.addView(new Fx.GoldText(a, "🪙" + Ui.fmt(m.optLong("entryFee")), 18));
+            t.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            t.setOnClickListener(v -> {
+                if (dlg[0] != null) dlg[0].dismiss();
+                a.play.quick(m);
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 74));
+            lp.bottomMargin = Ui.dp(a, 10);
+            list.addView(t, lp);
         }
+        if (n == 0) list.addView(Ui.muted(a, "No matches of this kind are open right now."));
+        String title = players == 2 ? "Two player matches" : players == 4 ? "Four player matches" : "Play online";
+        dlg[0] = Popup.show(a, title, list, Popup.plain("Close", null));
+    }
 
-        col.addView(Ui.heading(a, "Play with friends"));
-        LinearLayout friends = Ui.card(a);
-        friends.addView(Ui.muted(a, "Create a private room and invite friends, or join one with its code."));
-        TextView create = Ui.button(a, "＋ Create room", "blue", v -> createRoom());
-        Ui.margins(create, a, 0, 12, 0, 0);
-        friends.addView(create);
-        LinearLayout join = Ui.hbox(a);
-        Ui.margins(join, a, 0, 12, 0, 0);
+    private void joinRoom() {
+        LinearLayout box = Ui.vbox(a);
+        box.addView(Ui.muted(a, "Enter the room code your friend shared."));
         EditText code = Ui.input(a, "Room code", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         code.setFilters(new InputFilter[]{new InputFilter.AllCaps(), new InputFilter.LengthFilter(8)});
-        LinearLayout.LayoutParams clp = Ui.weight(1);
-        clp.rightMargin = Ui.dp(a, 8);
-        join.addView(code, clp);
-        join.addView(Ui.button(a, "Join", "glass", v -> a.play.joinCode(code.getText().toString())));
-        friends.addView(join);
-        col.addView(friends);
-
-        stats();
-        onlineFriends();
+        Ui.margins(code, a, 0, 12, 0, 0);
+        box.addView(code);
+        a.dialog("Join a room", box, "Join", () -> a.play.joinCode(code.getText().toString()));
     }
 
     private void roomBanner() {
@@ -94,57 +307,7 @@ final class HomeTab {
         col.addView(c);
     }
 
-    private void dailyBonus() {
-        JSONObject d = app.wallet.optJSONObject("dailyBonus");
-        if (d == null || d.optLong("amount") <= 0) return;
-        LinearLayout c = Ui.card(a);
-        LinearLayout r = Ui.hbox(a);
-        LinearLayout t = Ui.vbox(a);
-        t.addView(Ui.bold(Ui.text(a, "🎁 Daily bonus", 16, Ui.INK)));
-        t.addView(Ui.muted(a, d.optBoolean("claimedToday") ? "Collected today — come back tomorrow!" : "Collect " + Ui.fmt(d.optLong("amount")) + " free coins"));
-        r.addView(t, Ui.weight(1));
-        if (!d.optBoolean("claimedToday")) {
-            r.addView(Ui.smallButton(a, "Collect", "primary", v -> {
-                Ui.setEnabled(v, false);
-                app.api.post("/wallet/daily-bonus", null, new Api.Cb(a) {
-                    @Override
-                    public void ok(JSONObject res) {
-                        app.mergeWallet(res.optJSONObject("wallet"));
-                        LudoApp.toast("+" + Ui.fmt(d.optLong("amount")) + " coins collected!");
-                        a.refreshHeader();
-                        a.selectTab(0);
-                    }
 
-                    @Override
-                    public void done() {
-                        Ui.setEnabled(v, true);
-                    }
-                });
-            }));
-        }
-        c.addView(r);
-        col.addView(c);
-    }
-
-    private LinearLayout modeCard(JSONObject m) {
-        LinearLayout c = Ui.card(a);
-        LinearLayout top = Ui.hbox(a);
-        LinearLayout t = Ui.vbox(a);
-        t.addView(Ui.bold(Ui.text(a, m.optString("name"), 17, Ui.INK)));
-        t.addView(Ui.text(a, m.optString("matchType"), 12, Ui.GOLD));
-        top.addView(t, Ui.weight(1));
-        TextView fee = Ui.bold(Ui.text(a, Ui.coins(m.optLong("entryFee")), 15, Ui.GOLD));
-        top.addView(fee);
-        c.addView(top);
-        TextView desc = Ui.muted(a, m.optString("description"));
-        desc.setPadding(0, Ui.dp(a, 6), 0, Ui.dp(a, 6));
-        c.addView(desc);
-        LinearLayout bottom = Ui.hbox(a);
-        bottom.addView(Ui.muted(a, "Winner gets " + Ui.coins(Math.round(m.optLong("entryFee") * app.payoutMultiplier()))), Ui.weight(1));
-        bottom.addView(Ui.smallButton(a, "▶ Play", "primary", v -> a.play.quick(m)));
-        c.addView(bottom);
-        return c;
-    }
 
     private void createRoom() {
         JSONArray modes = app.modes();
@@ -162,7 +325,7 @@ final class HomeTab {
             if (chosen[0] == null) chosen[0] = m;
             long fee = m.optLong("entryFee");
             TextView opt = Ui.text(a, m.optString("name") + "  ·  " + (fee > 0 ? Ui.coins(fee) : "free"), 15, Ui.INK);
-            opt.setPadding(Ui.dp(a, 12), Ui.dp(a, 10), Ui.dp(a, 12), Ui.dp(a, 10));
+            opt.setPadding(Ui.dp(a, 14), Ui.dp(a, 10), Ui.dp(a, 14), Ui.dp(a, 14));
             opt.setTag(m);
             opt.setOnClickListener(v -> {
                 chosen[0] = (JSONObject) v.getTag();
@@ -177,7 +340,7 @@ final class HomeTab {
             final int count = n;
             TextView b = Ui.text(a, String.valueOf(n), 16, Ui.INK);
             b.setGravity(Gravity.CENTER);
-            b.setPadding(0, Ui.dp(a, 10), 0, Ui.dp(a, 10));
+            b.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 12));
             b.setOnClickListener(v -> {
                 players[0] = count;
                 refresh[0].run();
@@ -194,67 +357,25 @@ final class HomeTab {
             for (int i = 0; i < modeList.getChildCount(); i++) {
                 TextView o = (TextView) modeList.getChildAt(i);
                 boolean sel = o.getTag() == chosen[0];
-                o.setBackground(Ui.roundStroke(sel ? 0x332f7cf0 : 0x10ffffff, Ui.dp(a, 12), Ui.dp(a, 1), sel ? Ui.PRIMARY : Ui.STROKE));
+                Fx.bevel(o, sel ? Fx.YELLOW : Fx.PURPLE_DARK, 14, 4, true);
+                o.setTextColor(sel ? 0xff4a2600 : Ui.INK);
             }
             for (int i = 0; i < 3; i++) {
                 boolean allowed = i + 2 <= max;
                 boolean sel = i + 2 == players[0];
                 counts[i].setEnabled(allowed);
                 counts[i].setAlpha(allowed ? 1f : 0.3f);
-                counts[i].setBackground(Ui.roundStroke(sel ? 0x33ffb547 : 0x10ffffff, Ui.dp(a, 12), Ui.dp(a, 1), sel ? Ui.GOLD : Ui.STROKE));
+                Fx.bevel(counts[i], sel ? Fx.YELLOW : Fx.PURPLE_DARK, 14, 4, true);
+                counts[i].setTextColor(sel ? 0xff4a2600 : Ui.INK);
             }
         };
         refresh[0].run();
-        android.widget.ScrollView sv = new android.widget.ScrollView(a);
-        sv.addView(box);
-        a.dialog("Create a room", sv, "Continue", () -> {
+        a.dialog("Create a room", box, "Continue", () -> {
             if (chosen[0] != null) a.play.create(chosen[0], players[0]);
         });
     }
 
-    private void stats() {
-        LinearLayout c = Ui.card(a);
-        c.addView(Ui.bold(Ui.text(a, "Your stats", 16, Ui.INK)));
-        col.addView(Ui.heading(a, "Overview"));
-        col.addView(c);
-        app.api.get("/me/stats", new Api.Cb(a) {
-            @Override
-            public void ok(JSONObject r) {
-                JSONObject s = r.optJSONObject("stats");
-                if (s == null) return;
-                LinearLayout grid = Ui.hbox(a);
-                Ui.margins(grid, a, 0, 10, 0, 0);
-                grid.addView(stat(Ui.fmt(s.optLong("matches")), "Matches"), Ui.weight(1));
-                grid.addView(stat(Ui.fmt(s.optLong("wins")), "Wins"), Ui.weight(1));
-                grid.addView(stat(s.optDouble("winRate") + "%", "Win rate"), Ui.weight(1));
-                grid.addView(stat("#" + s.optInt("rank"), "Rank"), Ui.weight(1));
-                c.addView(grid);
-                JSONArray recent = s.optJSONArray("recent");
-                if (recent != null && recent.length() > 0) {
-                    StringBuilder sb = new StringBuilder("Recent: ");
-                    for (int i = 0; i < recent.length(); i++) sb.append("W".equals(recent.optString(i)) ? "🟢" : "🔴");
-                    TextView rt = Ui.muted(a, sb);
-                    rt.setPadding(0, Ui.dp(a, 10), 0, 0);
-                    c.addView(rt);
-                }
-                TextView more = Ui.smallButton(a, "Match history →", "ghost", a.open(HistoryActivity.class));
-                c.addView(more);
-            }
 
-            @Override
-            public void err(Api.Error e) {
-                c.addView(Ui.muted(a, e.message));
-            }
-        });
-    }
-
-    private LinearLayout stat(String value, String label) {
-        LinearLayout l = Ui.vbox(a);
-        l.setGravity(Gravity.CENTER_HORIZONTAL);
-        l.addView(Ui.bold(Ui.text(a, value, 18, Ui.INK)));
-        l.addView(Ui.text(a, label, 12, Ui.MUTED));
-        return l;
-    }
 
     private void onlineFriends() {
         app.api.get("/friends", new Api.Cb(a) {

@@ -2,7 +2,7 @@ package com.ludo3d.game.ui;
 
 import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
-import androidx.appcompat.app.AlertDialog;
+import android.graphics.Color;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
 import android.graphics.drawable.GradientDrawable;
@@ -27,6 +27,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.ludo3d.game.LudoApp;
+import com.ludo3d.game.audio.Sfx;
 import com.ludo3d.game.game.Board;
 import com.ludo3d.game.game.GameState;
 import com.ludo3d.game.game.Social;
@@ -68,7 +69,7 @@ public class GameActivity extends BaseActivity {
     private FrameLayout effects;
     private LinearLayout chatPanel, emotePanel, chatList;
     private ScrollView chatScroll;
-    private AlertDialog resultDialog;
+    private Popup resultDialog;
 
     private final Runnable ticker = new Runnable() {
         @Override
@@ -82,6 +83,8 @@ public class GameActivity extends BaseActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         renderer = new GameRenderer();
+        // Feel it when one of your tokens is sent home.
+        renderer.listener = () -> runOnUiThread(() -> gl.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS));
         gl = new GLSurfaceView(this);
         gl.setEGLContextClientVersion(2);
         gl.setEGLConfigChooser(new ConfigChooser());
@@ -160,8 +163,7 @@ public class GameActivity extends BaseActivity {
                 break;
             case "room:closed":
                 dismissResult();
-                new AlertDialog.Builder(this).setTitle("Match closed").setMessage(String.valueOf(data))
-                        .setPositiveButton("OK", (d, w) -> finish()).setOnCancelListener(d -> finish()).show();
+                Popup.message(this, "Match closed", String.valueOf(data), Popup.ok("OK", this::finish)).setOnCancelListener(d -> finish());
                 break;
             case "room:left":
                 finish();
@@ -170,6 +172,9 @@ public class GameActivity extends BaseActivity {
                 if (state != null && "over".equals(state.phase)) showResult(true);
                 break;
             case "chat:message":
+                if (!app.socket.mySeatId().equals(((JSONObject) data).optString("seatId"))) Sfx.get().play(Sfx.S.MESSAGE, 0.8f, 1f);
+                renderChat();
+                break;
             case "chat:history":
                 renderChat();
                 break;
@@ -304,7 +309,10 @@ public class GameActivity extends BaseActivity {
         renderStatus();
         app.socket.emit("game:roll", new JSONObject(), res -> {
             busy = false;
-            if (!res.optBoolean("ok")) LudoApp.toast(res.optString("error", "Can't roll now"));
+            if (!res.optBoolean("ok")) {
+                Sfx.get().play(Sfx.S.ERROR);
+                LudoApp.toast(res.optString("error", "Can't roll now"));
+            }
             renderStatus();
         });
     }
@@ -315,6 +323,7 @@ public class GameActivity extends BaseActivity {
             busy = false;
             if (!res.optBoolean("ok")) {
                 gl.queueEvent(() -> renderer.setSelected(-1, -1));
+                Sfx.get().play(Sfx.S.ERROR);
                 LudoApp.toast(res.optString("error", "Can't move that token"));
             }
             renderStatus();
@@ -338,7 +347,7 @@ public class GameActivity extends BaseActivity {
         LinearLayout bar = Ui.hbox(this);
         TextView leave = Ui.text(this, "✕", 18, Ui.INK);
         leave.setGravity(Gravity.CENTER);
-        leave.setBackground(Ui.roundStroke(0x991a1f4f, Ui.dp(this, 999), Ui.dp(this, 1), Ui.STROKE));
+        leave.setPadding(0, 0, 0, Fx.bevel(leave, Fx.RED, 20, 3, true));
         leave.setContentDescription("Leave match");
         leave.setOnClickListener(v -> confirmLeave());
         bar.addView(leave, new LinearLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40)));
@@ -354,8 +363,20 @@ public class GameActivity extends BaseActivity {
         bar.addView(info, Ui.weight(1));
         connView = Ui.text(this, "", 12, Ui.MUTED);
         connView.setPadding(Ui.dp(this, 10), Ui.dp(this, 5), Ui.dp(this, 10), Ui.dp(this, 5));
-        connView.setBackground(Ui.round(0x661a1f4f, Ui.dp(this, 999)));
+        connView.setBackground(Ui.round(0x664c1d95, Ui.dp(this, 999)));
         bar.addView(connView);
+        TextView mute = Ui.text(this, Sfx.get().isEnabled() ? "🔊" : "🔇", 18, Ui.INK);
+        mute.setGravity(Gravity.CENTER);
+        mute.setContentDescription("Sound on or off");
+        mute.setPadding(0, 0, 0, Fx.bevel(mute, Fx.PURPLE, 20, 3, true));
+        mute.setOnClickListener(v -> {
+            Sfx.get().setEnabled(!Sfx.get().isEnabled());
+            mute.setText(Sfx.get().isEnabled() ? "🔊" : "🔇");
+            Sfx.get().play(Sfx.S.CLICK);
+        });
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40));
+        mlp.leftMargin = Ui.dp(this, 8);
+        bar.addView(mute, mlp);
         top.addView(bar);
         panels = Ui.vbox(this);
         Ui.margins(panels, this, 0, 10, 0, 0);
@@ -371,7 +392,7 @@ public class GameActivity extends BaseActivity {
         LinearLayout bottom = Ui.vbox(this);
         bottom.setPadding(pad, Ui.dp(this, 4), pad, Ui.dp(this, 10));
         LinearLayout statusBox = Ui.vbox(this);
-        statusBox.setBackground(Ui.round(0xcc121640, Ui.dp(this, 16)));
+        statusBox.setBackground(Ui.round(0xcc2e1065, Ui.dp(this, 16)));
         statusBox.setPadding(Ui.dp(this, 14), Ui.dp(this, compact ? 5 : 8), Ui.dp(this, 14), Ui.dp(this, compact ? 5 : 8));
         status = Ui.bold(Ui.text(this, "", 15, Ui.INK));
         status.setGravity(Gravity.CENTER);
@@ -447,7 +468,8 @@ public class GameActivity extends BaseActivity {
         TextView t = Ui.text(this, emoji, 22, Ui.INK);
         t.setGravity(Gravity.CENTER);
         t.setContentDescription(label);
-        t.setBackground(Ui.roundStroke(0xcc1a1f4f, Ui.dp(this, 999), Ui.dp(this, 1), Ui.STROKE));
+        int depth = Fx.bevel(t, Fx.PURPLE, 29, 4, true);
+        t.setPadding(0, 0, 0, depth);
         t.setOnClickListener(onClick);
         return t;
     }
@@ -495,7 +517,7 @@ public class GameActivity extends BaseActivity {
             LinearLayout card = Ui.hbox(this);
             card.setTag("chip:" + p.color);
             card.setPadding(Ui.dp(this, 8), Ui.dp(this, compact ? 4 : 7), Ui.dp(this, 10), Ui.dp(this, compact ? 4 : 7));
-            GradientDrawable bg = Ui.roundStroke(current ? (col & 0x00ffffff) | 0x33000000 : 0xb3121640, Ui.dp(this, 14),
+            GradientDrawable bg = Ui.roundStroke(current ? (col & 0x00ffffff) | 0x33000000 : 0xb32e1065, Ui.dp(this, 14),
                     Ui.dp(this, current ? 2 : 1), current ? col : Ui.STROKE);
             card.setBackground(bg);
 
@@ -514,7 +536,7 @@ public class GameActivity extends BaseActivity {
             GradientDrawable dg = new GradientDrawable();
             dg.setShape(GradientDrawable.OVAL);
             dg.setColor(online ? Ui.SUCCESS : 0xff8a8fb0);
-            dg.setStroke(Ui.dp(this, 2), 0xff121640);
+            dg.setStroke(Ui.dp(this, 2), 0xff2e1065);
             dot.setBackground(dg);
             av.addView(dot, new FrameLayout.LayoutParams(Ui.dp(this, 12), Ui.dp(this, 12), Gravity.BOTTOM | Gravity.END));
             card.addView(av, new LinearLayout.LayoutParams(Ui.dp(this, avSize() + 6), Ui.dp(this, avSize() + 6)));
@@ -526,7 +548,7 @@ public class GameActivity extends BaseActivity {
             name.setEllipsize(TextUtils.TruncateAt.END);
             text.addView(name);
             String sub = p.color.equals(me) ? "You" : bot ? "Bot" : online ? "Online" : "Offline";
-            TextView subView = Ui.text(this, sub, compact ? 11 : 12, current ? col : Ui.MUTED);
+            TextView subView = Ui.text(this, sub, compact ? 11 : 12, current ? 0xffffd23f : Ui.MUTED);
             subView.setSingleLine(true);
             text.addView(subView);
             if (current) {
@@ -608,6 +630,7 @@ public class GameActivity extends BaseActivity {
     private void showResult(boolean force) {
         if (state == null || !"over".equals(state.phase) || isFinishing()) return;
         if (resultShownFor == state.seq && !force) return;
+        boolean firstTime = resultShownFor != state.seq;
         resultShownFor = state.seq;
         dismissResult();
         LinearLayout box = Ui.vbox(this);
@@ -616,41 +639,39 @@ public class GameActivity extends BaseActivity {
         int winnerIdx = state.ranking.isEmpty() ? -1 : state.ranking.get(0);
         GameState.Player winner = winnerIdx >= 0 ? state.players.get(winnerIdx) : null;
         boolean iWon = winner != null && winner.color.equals(me);
-        TextView big = Ui.text(this, iWon ? "🏆" : "🎲", 56, Ui.INK);
+        if (firstTime) Sfx.get().play(iWon ? Sfx.S.VICTORY : Sfx.S.DEFEAT);
+        TextView big = Ui.text(this, iWon ? "🏆" : "🎲", 60, Ui.INK);
         big.setGravity(Gravity.CENTER);
         box.addView(big);
-        TextView t = Ui.title(this, iWon ? "You won!" : winner != null ? winner.name + " wins" : "Match over");
-        t.setGravity(Gravity.CENTER);
-        box.addView(t);
         JSONObject s = app.socket.settlement;
         if (s != null && s.optLong("entryFee") > 0) {
-            TextView pay = Ui.bold(Ui.text(this, iWon ? "+" + Ui.coins(s.optLong("payout")) : "Winner received " + Ui.coins(s.optLong("payout")), 18, Ui.GOLD));
+            Fx.GoldText pay = new Fx.GoldText(this, iWon ? "+🪙 " + Ui.fmt(s.optLong("payout")) : "Winner got 🪙 " + Ui.fmt(s.optLong("payout")), iWon ? 26 : 18);
             pay.setGravity(Gravity.CENTER);
-            pay.setPadding(0, Ui.dp(this, 8), 0, 0);
-            box.addView(pay);
+            box.addView(pay, Ui.lpMatchWrap());
         }
+        // Finishing order on 3D ribbons in each player's colour.
         for (int r = 0; r < state.ranking.size(); r++) {
             GameState.Player p = state.players.get(state.ranking.get(r));
-            TextView line = Ui.text(this, "#" + (r + 1) + "  " + p.name, 14, p.color.equals(me) ? Ui.GOLD : Ui.MUTED);
-            line.setGravity(Gravity.CENTER);
-            box.addView(line);
+            int col = Board.colorArgb(p.color);
+            LinearLayout ribbon = Ui.hbox(this);
+            int depth = Fx.bevel(ribbon, new int[]{Fx.blend(col, Color.WHITE, 0.25f), col, Fx.blend(col, Color.BLACK, 0.45f)}, 12, 3, false);
+            ribbon.setPadding(Ui.dp(this, 12), Ui.dp(this, 6), Ui.dp(this, 12), Ui.dp(this, 6) + depth);
+            ribbon.addView(Fx.GoldText.label(this, (r == 0 ? "🥇" : r == 1 ? "🥈" : r == 2 ? "🥉" : "#" + (r + 1)) + "  " + p.name
+                    + (p.color.equals(me) ? " (you)" : ""), 15, 0x99000000));
+            LinearLayout.LayoutParams lp = Ui.lpMatchWrap();
+            lp.topMargin = Ui.dp(this, 8);
+            box.addView(ribbon, lp);
         }
-        FrameLayout wrap = new FrameLayout(this);
-        wrap.setPadding(Ui.dp(this, 20), Ui.dp(this, 16), Ui.dp(this, 20), 0);
-        wrap.addView(box);
-        resultDialog = new AlertDialog.Builder(this)
-                .setView(wrap)
-                .setCancelable(false)
-                .setPositiveButton("Rematch", (d, w) -> app.socket.emit("game:rematch", new JSONObject(), res -> {
+        resultDialog = Popup.showModal(this, iWon ? "You won!" : winner != null ? winner.name + " wins" : "Match over", box,
+                Popup.ok("Rematch", () -> app.socket.emit("game:rematch", new JSONObject(), res -> {
                     if (!res.optBoolean("ok")) {
                         LudoApp.toast(res.optString("error", "Rematch failed"));
                         resultShownFor = -1;
                         showResult(true);
                     }
-                }))
-                .setNegativeButton("Leave", (d, w) -> app.socket.leave(res -> finish()))
-                .setNeutralButton("View board", null)
-                .show();
+                })),
+                Popup.plain("View board", null),
+                Popup.danger("Leave", () -> app.socket.leave(res -> finish())));
     }
 
     private void dismissResult() {
@@ -664,19 +685,17 @@ public class GameActivity extends BaseActivity {
             return;
         }
         long fee = app.socket.room != null ? app.socket.room.optLong("entryFee") : 0;
-        new AlertDialog.Builder(this)
-                .setTitle("Leave the match?")
-                .setMessage(fee > 0 ? "The match has started, so your entry fee is not refunded. A bot will play your seat." : "A bot will play your seat.")
-                .setPositiveButton("Leave", (d, w) -> app.socket.leave(res -> finish()))
-                .setNegativeButton("Stay", null)
-                .show();
+        Popup.message(this, "Leave the match?",
+                fee > 0 ? "The match has started, so your entry fee is not refunded. A bot will play your seat." : "A bot will play your seat.",
+                Popup.ok("Stay", null),
+                Popup.danger("Leave", () -> app.socket.leave(res -> finish())));
     }
 
     // ================================================================= chat & emotes
 
     private void buildChatPanel() {
         chatPanel = Ui.vbox(this);
-        chatPanel.setBackground(Ui.roundStroke(0xff121640, Ui.dp(this, 20), Ui.dp(this, 1), Ui.STROKE));
+        chatPanel.setBackground(Ui.roundStroke(0xff2e1065, Ui.dp(this, 20), Ui.dp(this, 1), Ui.STROKE));
         int p = Ui.dp(this, 12);
         chatPanel.setPadding(p, p, p, p);
         chatPanel.setClickable(true);
@@ -726,7 +745,7 @@ public class GameActivity extends BaseActivity {
 
     private void buildEmotePanel() {
         emotePanel = Ui.vbox(this);
-        emotePanel.setBackground(Ui.roundStroke(0xff121640, Ui.dp(this, 20), Ui.dp(this, 1), Ui.STROKE));
+        emotePanel.setBackground(Ui.roundStroke(0xff2e1065, Ui.dp(this, 20), Ui.dp(this, 1), Ui.STROKE));
         int p = Ui.dp(this, 12);
         emotePanel.setPadding(p, p, p, p);
         emotePanel.setClickable(true);
@@ -763,6 +782,7 @@ public class GameActivity extends BaseActivity {
     }
 
     private void openChat() {
+        Sfx.get().play(Sfx.S.CLICK);
         emotePanel.setVisibility(View.GONE);
         chatPanel.setVisibility(View.VISIBLE);
         app.socket.chatOpen = true;
@@ -772,6 +792,7 @@ public class GameActivity extends BaseActivity {
     }
 
     private void openEmotes() {
+        Sfx.get().play(Sfx.S.CLICK);
         chatPanel.setVisibility(View.GONE);
         app.socket.chatOpen = false;
         emotePanel.setVisibility(View.VISIBLE);
@@ -829,6 +850,7 @@ public class GameActivity extends BaseActivity {
     /** A big emoji rising from the sender's player chip. */
     private void showEmote(String id, String color) {
         View chip = panels.findViewWithTag("chip:" + color);
+        Sfx.get().play(Sfx.forEmoteEffect(Social.effect(id)));
         TextView t = Ui.text(this, Social.emoji(id), 46, Ui.INK);
         t.measure(0, 0);
         float x, y;

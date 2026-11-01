@@ -10,6 +10,7 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 
 import com.ludo3d.game.LudoApp;
+import com.ludo3d.game.audio.Sfx;
 import com.ludo3d.game.net.Api;
 
 import org.json.JSONObject;
@@ -100,6 +101,21 @@ final class ProfileTab {
         Ui.margins(save, a, 0, 12, 0, 0);
         edit.addView(save);
         col.addView(edit);
+
+        col.addView(Ui.heading(a, "Settings"));
+        LinearLayout prefsCard = Ui.card(a);
+        android.widget.Switch sound = new android.widget.Switch(a);
+        sound.setText("🔊  Sound effects");
+        sound.setTextColor(Ui.INK);
+        sound.setTextSize(15);
+        sound.setChecked(Sfx.get().isEnabled());
+        sound.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 8));
+        sound.setOnCheckedChangeListener((b, on) -> {
+            Sfx.get().setEnabled(on);
+            Sfx.get().play(Sfx.S.CLICK);
+        });
+        prefsCard.addView(sound);
+        col.addView(prefsCard);
 
         col.addView(Ui.heading(a, "Security"));
         LinearLayout sec = Ui.card(a);

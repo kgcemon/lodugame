@@ -5,6 +5,7 @@ import android.opengl.GLSurfaceView;
 import android.opengl.Matrix;
 import android.os.SystemClock;
 
+import com.ludo3d.game.audio.Sfx;
 import com.ludo3d.game.game.Board;
 import com.ludo3d.game.game.GameState;
 
@@ -67,6 +68,13 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     private float rollT = -1;
     private final Random rng = new Random();
 
+    /** Callbacks to the screen (called on the GL thread). */
+    public interface Listener {
+        void onMyTokenCaptured();
+    }
+
+    public volatile Listener listener;
+
     /** Camera yaw added by dragging (degrees). Written by the UI thread; eases back to 0 on release. */
     public volatile float yawOffset;
     /** True while a finger is turning the board. */
@@ -101,10 +109,14 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             queue.clear();
             cur = null;
             animPlayer = -1;
+            // An interrupted roll must not leave the die hanging in the air.
+            rollT = -1;
+            diceOwner = -1;
             snap();
             if (next.dice > 0) diceValue = next.dice;
             return;
         }
+        int me = next.indexOfColor(myColor);
         for (int i = 0; i < events.length(); i++) {
             JSONObject e = events.optJSONObject(i);
             if (e == null) continue;
@@ -116,7 +128,16 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
                     queue.add(new MoveAnim(e.optInt("player"), e.optInt("token"), e.optInt("from"), e.optInt("to")));
                     break;
                 case "captured":
-                    queue.add(new CaptureAnim(e.optInt("player"), e.optInt("token"), e.optInt("from")));
+                    queue.add(new CaptureAnim(e.optInt("player"), e.optInt("token"), e.optInt("from"), e.optInt("player") == me));
+                    break;
+                case "tokenHome":
+                    queue.add(new Cue(Sfx.S.HOME));
+                    break;
+                case "extraTurn":
+                    if (e.optInt("player") == me) queue.add(new Cue(Sfx.S.EXTRA));
+                    break;
+                case "turn":
+                    if (e.optInt("player") == me) queue.add(new Cue(Sfx.S.TURN));
                     break;
                 case "noMoves":
                 case "forfeitSixes":
@@ -185,6 +206,28 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         void frame(float t) {}
     }
 
+    /** A sound at this point in the animation sequence (takes no time). */
+    private static final class Cue extends Anim {
+        final Sfx.S sound;
+
+        Cue(Sfx.S sound) {
+            this.sound = sound;
+        }
+
+        @Override
+        void begin() {
+            sfx(sound, 1f, 1f);
+        }
+
+        @Override
+        void frame(float t) {}
+    }
+
+    private static void sfx(Sfx.S s, float volume, float rate) {
+        Sfx x = Sfx.get();
+        if (x != null) x.play(s, volume, rate);
+    }
+
     private final class RollAnim extends Anim {
         final int player, value;
 
@@ -199,6 +242,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             diceOwner = player;
             diceValue = value;
             diceYaw = rng.nextFloat() * 360f;
+            sfx(Sfx.S.DICE_SHAKE, 0.9f, 0.95f + rng.nextFloat() * 0.1f);
         }
 
         @Override
@@ -209,12 +253,15 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         @Override
         void end() {
             rollT = -1;
+            sfx(Sfx.S.DICE_LAND, 1f, 0.95f + rng.nextFloat() * 0.1f);
         }
     }
 
     private final class MoveAnim extends Anim {
         final int player, token;
         final int[] path;
+        /** Hops already heard (one tap per square landed on). */
+        int landed;
 
         MoveAnim(int player, int token, int from, int to) {
             this.player = player;
@@ -247,10 +294,19 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             animPos[0] = a[0] + (b[0] - a[0]) * k;
             animPos[2] = a[2] + (b[2] - a[2]) * k;
             animPos[1] = (float) Math.sin(Math.PI * k) * 0.45f;
+            int done = (int) f;
+            while (landed < Math.min(done, steps)) hop();
+        }
+
+        private void hop() {
+            landed++;
+            // Slight pitch rise along the way so long moves feel alive.
+            sfx(Sfx.S.STEP, 0.8f, 0.92f + 0.03f * Math.min(landed, 6) + rng.nextFloat() * 0.04f);
         }
 
         @Override
         void end() {
+            while (landed < path.length - 1) hop();
             if (player < 4) shown[player][token] = path[path.length - 1];
             animPlayer = -1;
         }
@@ -258,18 +314,25 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
 
     private final class CaptureAnim extends Anim {
         final int player, token, from;
+        final boolean mine;
 
-        CaptureAnim(int player, int token, int from) {
+        CaptureAnim(int player, int token, int from, boolean mine) {
             this.player = player;
             this.token = token;
             this.from = from;
-            dur = 480;
+            this.mine = mine;
+            dur = 520;
         }
 
         @Override
         void begin() {
             animPlayer = player;
             animToken = token;
+            sfx(Sfx.S.CAPTURE, 1f, 1f);
+            if (mine && listener != null) listener.onMyTokenCaptured();
+            if (com.ludo3d.game.BuildConfig.DEBUG) {
+                android.util.Log.d("LudoAnim", "capture player=" + player + " token=" + token + " from=" + from + " shownBefore=" + shown[player][token]);
+            }
         }
 
         @Override
@@ -307,10 +370,31 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             if (t >= 1f) {
                 cur.end();
                 cur = null;
-                if (queue.isEmpty()) snap();
+                if (queue.isEmpty()) {
+                    if (com.ludo3d.game.BuildConfig.DEBUG) checkAgainstServer();
+                    snap();
+                }
             }
         }
         idle = cur == null && queue.isEmpty();
+    }
+
+    /**
+     * Debug builds: after the animations of an update have played, every token should be
+     * exactly where the server says. A mismatch means an animation (e.g. a capture) went wrong.
+     */
+    private void checkAgainstServer() {
+        int checked = 0;
+        for (int p = 0; p < state.players.size(); p++) {
+            for (int t = 0; t < 4; t++) {
+                checked++;
+                int want = state.players.get(p).tokens[t];
+                if (shown[p][t] != want) {
+                    android.util.Log.e("LudoAnim", "MISMATCH seq=" + state.seq + " player=" + p + " token=" + t + " shown=" + shown[p][t] + " server=" + want);
+                }
+            }
+        }
+        android.util.Log.d("LudoAnim", "checked seq=" + state.seq + " tokens=" + checked);
     }
 
     /** Rest positions, with co-located tokens fanned out and shrunk a little. */
@@ -353,7 +437,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
 
     @Override
     public void onSurfaceCreated(GL10 unused, EGLConfig config) {
-        GLES20.glClearColor(0x0b / 255f, 0x0e / 255f, 0x2a / 255f, 1f);
+        GLES20.glClearColor(0x43 / 255f, 0x16 / 255f, 0xa0 / 255f, 1f); // matches the purple app background
         GLES20.glEnable(GLES20.GL_DEPTH_TEST);
         GLES20.glDisable(GLES20.GL_CULL_FACE);
         shader = new Shader();

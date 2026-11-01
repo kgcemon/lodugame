@@ -6,6 +6,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.widget.Toast;
 
+import com.ludo3d.game.audio.Sfx;
 import com.ludo3d.game.net.Api;
 import com.ludo3d.game.net.CookieStore;
 import com.ludo3d.game.net.GameSocket;
@@ -45,6 +46,7 @@ public class LudoApp extends Application {
         instance = this;
         prefs = getSharedPreferences("ludo", MODE_PRIVATE);
         cookies = new CookieStore(prefs);
+        Sfx.init(this, prefs);
         api = new Api(this);
         socket = new GameSocket(this);
     }
