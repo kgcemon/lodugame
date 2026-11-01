@@ -193,7 +193,9 @@ create table match_disputes (
 
 -- At most one open request between two people, in either direction: pending_pair is only
 -- set while the request is pending, and NULLs never collide in a unique key. It is VIRTUAL
--- because MySQL rejects ON DELETE CASCADE foreign keys on the base columns of a STORED one.
+-- because MySQL rejects ON DELETE CASCADE foreign keys on the base columns of a STORED one,
+-- and the CHAR(36) ids go through RTRIM() because MariaDB 10.5+ refuses generated columns whose
+-- value would depend on how CHAR padding is read (sql_mode PAD_CHAR_TO_FULL_LENGTH).
 create table friend_requests (
   id            char(36) not null default (uuid()) primary key,
   from_user     char(36) not null,
@@ -201,7 +203,7 @@ create table friend_requests (
   status        varchar(20) not null default 'pending',
   created_at    datetime(6) not null default current_timestamp(6),
   responded_at  datetime(6),
-  pending_pair  varchar(73) as (case when status = 'pending' then concat(least(from_user, to_user), ':', greatest(from_user, to_user)) end) virtual,
+  pending_pair  varchar(73) as (case when status = 'pending' then concat(least(rtrim(from_user), rtrim(to_user)), ':', greatest(rtrim(from_user), rtrim(to_user))) end) virtual,
   unique key friend_requests_one_pending (pending_pair),
   key friend_requests_to (to_user, status),
   key friend_requests_from (from_user, status),
