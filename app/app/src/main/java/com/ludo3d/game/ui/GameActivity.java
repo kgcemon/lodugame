@@ -60,6 +60,8 @@ public class GameActivity extends BaseActivity {
     /** Gems for the next re-roll of my last roll (0 = no offer) and when the offer ends (0 = until I move). */
     private int rerollCost;
     private long rerollUntil;
+    /** Last whole second of my turn timer that beeped, so each of the final 3 seconds beeps once. */
+    private long warnedAt = -1;
 
     /** Player card slots at the board's corners, in screen order: bottom-left, top-left, top-right, bottom-right. */
     private final FrameLayout[] corners = new FrameLayout[4];
@@ -771,6 +773,16 @@ public class GameActivity extends BaseActivity {
             }
         }
         if (left >= 0) text += "  ⏱ " + left + "s";
+        // Warning beep in the last 3 seconds of my own turn.
+        if (online && isMyTurn(state) && left >= 1 && left <= 3) {
+            if (left != warnedAt) {
+                warnedAt = left;
+                Sfx.get().play(Sfx.S.WARNING);
+                gl.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            }
+        } else {
+            warnedAt = -1;
+        }
         status.setText(text);
         float frac = deadline > 0 && deadlineTotal > 0 ? Math.max(0f, Math.min(1f, (deadline - System.currentTimeMillis()) / (float) deadlineTotal)) : 0f;
         timerBar.setScaleX(frac);

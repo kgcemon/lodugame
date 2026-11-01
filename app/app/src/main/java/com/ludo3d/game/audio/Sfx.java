@@ -20,7 +20,7 @@ public final class Sfx {
     public enum S {
         CLICK, DICE_SHAKE, DICE_LAND, STEP, CAPTURE, HOME, TURN, EXTRA, VICTORY, DEFEAT, ERROR, MESSAGE,
         E_LAUGH, E_LOVE, E_FIRE, E_CLAP, E_WOW, E_CRY, E_PARTY, E_COOL, E_POP,
-        SEARCH, TICK, MATCH_FOUND
+        SEARCH, TICK, MATCH_FOUND, WARNING
     }
 
     /** Bump when a sound's design changes so cached files are regenerated. */
@@ -250,6 +250,12 @@ public final class Sfx {
                         .tone(0, 0.03, 2600, 2200, Synth.SINE, 0.6, 0.0005, 3)
                         .noise(0, 0.01, 0.4, 0.9, 0.8, 0.0003, 2)
                         .render(0.4);
+            case WARNING:
+                // Turn almost over: two sharp, urgent beeps.
+                return new Synth(0.32)
+                        .tone(0, 0.11, 1175, 1175, Synth.SQUARE, 0.35, 0.002, 2)
+                        .tone(0.16, 0.11, 1175, 1175, Synth.SQUARE, 0.35, 0.002, 2)
+                        .render(0.5);
             case MATCH_FOUND: {
                 // Upward sweep into a bright chord with sparkles.
                 x = new Synth(1.3);

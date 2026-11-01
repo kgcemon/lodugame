@@ -50,7 +50,7 @@ export interface Timings {
 }
 
 export const DEFAULT_TIMINGS: Timings = {
-  turnMs: 25_000,
+  turnMs: 8_000,
   disconnectedTurnMs: 6_000,
   botThinkMs: 650,
   lobbyGraceMs: 30_000,
