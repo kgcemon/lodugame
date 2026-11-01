@@ -28,13 +28,12 @@ Requirements: Android Studio with JDK 17+, Android SDK 36. The app runs on Andro
 The default is in `app/build.gradle`:
 
 ```
-buildConfigField 'String', 'DEFAULT_SERVER_URL', '"http://10.0.2.2:3001"'
+buildConfigField 'String', 'DEFAULT_SERVER_URL', '"https://freefirediamondtopup.com"'
 ```
 
-* Emulator + `npm run dev` on this PC: `http://10.0.2.2:3001` (the default).
-* Real phone on the same Wi-Fi: `http://<your PC's IP>:3001`.
-* Release: your HTTPS site, e.g. `https://ludo.your-domain.example`. Change the default
-  before building the release.
+* Live site (the default): `https://freefirediamondtopup.com`.
+* Emulator + `npm run dev` on this PC: `http://10.0.2.2:3001`.
+* Real phone on the same Wi-Fi + `npm run dev`: `http://<your PC's IP>:3001`.
 
 Players can also change it on the sign-in screen (**⚙ Server**). The app needs no CORS
 settings on the server.

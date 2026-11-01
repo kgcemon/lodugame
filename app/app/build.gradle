@@ -13,10 +13,9 @@ android {
         versionCode 1
         versionName '1.0.0'
 
-        // Default game server. Players can change it on the sign-in screen (Server settings).
-        // Emulator -> `npm run dev` on this PC: http://10.0.2.2:3001
-        // Production: your HTTPS site, e.g. https://ludo.your-domain.example
-        buildConfigField 'String', 'DEFAULT_SERVER_URL', '"http://10.0.2.2:3001"'
+        // Default game server: the live site. Players can change it on the sign-in screen (Server settings).
+        // For local testing (emulator -> `npm run dev` on this PC) use http://10.0.2.2:3001
+        buildConfigField 'String', 'DEFAULT_SERVER_URL', '"https://freefirediamondtopup.com"'
     }
 
     buildTypes {

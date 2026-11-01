@@ -27,7 +27,8 @@ import javax.microedition.khronos.opengles.GL10;
  * the server state. All scene methods run on the GL thread (call them via queueEvent).
  */
 public final class GameRenderer implements GLSurfaceView.Renderer {
-    private static final float DICE_HALF = 0.42f;
+    /** Half size of the die: big enough to read, small enough to sit between the yard's token wells. */
+    private static final float DICE_HALF = 0.36f;
     private static final float[][] RGB = new float[4][];
 
     static {
@@ -38,7 +39,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     }
 
     private Shader shader;
-    private Mesh boardTop, boardBase, pawn, dice, flat;
+    private Mesh boardTop, boardBase, pawn, dice, flat, unitBox;
     private int texBoard, texDice, texShadow, texRing;
 
     private final float[] proj = new float[16], view = new float[16], vp = new float[16], model = new float[16], mvp = new float[16];
@@ -66,8 +67,12 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     private float rollT = -1;
     private final Random rng = new Random();
 
-    /** Camera yaw added by dragging (degrees). Written by the UI thread. */
+    /** Camera yaw added by dragging (degrees). Written by the UI thread; eases back to 0 on release. */
     public volatile float yawOffset;
+    /** True while a finger is turning the board. */
+    public volatile boolean dragging;
+    /** Token the player just tapped (shown with a bright ring until the server answers). */
+    private int selPlayer = -1, selToken = -1;
 
     // ---------------------------------------------------------------- outputs for the UI thread
     private final float[] screen = new float[4 * 4 * 2];
@@ -91,6 +96,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     public void applyUpdate(GameState next, JSONArray events, boolean contiguous) {
         boolean first = state == null;
         state = next;
+        selPlayer = selToken = -1;
         if (first || !contiguous || events == null) {
             queue.clear();
             cur = null;
@@ -125,6 +131,12 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
 
     public void setHighlight(boolean on) {
         highlight = on;
+    }
+
+    /** Mark the token the player tapped; -1 clears it. */
+    public void setSelected(int player, int token) {
+        selPlayer = player;
+        selToken = token;
     }
 
     private void snap() {
@@ -350,6 +362,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         pawn = Mesh.pawn();
         dice = Mesh.box(DICE_HALF, DICE_HALF, DICE_HALF, true);
         flat = Mesh.plane(0.5f);
+        unitBox = Mesh.box(0.5f, 0.5f, 0.5f, false);
         texBoard = Textures.upload(Textures.board(), true);
         texDice = Textures.upload(Textures.dice(), false);
         texShadow = Textures.upload(Textures.shadow(), false);
@@ -375,20 +388,46 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
 
     private void camera() {
         float aspect = width / (float) height;
-        float fovy = 50f;
-        Matrix.perspectiveM(proj, 0, fovy, aspect, 0.5f, 300f);
-        double halfH = Math.toRadians(fovy / 2);
-        double tanW = Math.tan(halfH) * aspect;
-        // Far enough that the board's width fits, with a margin for the near corners.
-        float dist = (float) (9.6 / Math.min(tanW, Math.tan(halfH)));
+        float fovy = 40f;
+        // Phones (portrait): higher camera so the board reads clearly; wider screens: more cinematic.
+        // In a tall area a steeper view lets the (width-limited) board also fill more height.
+        double pitch = Math.toRadians(aspect < 0.7f ? 70 : aspect < 0.85f ? 64 : aspect < 1.2f ? 56 : 50);
         double yaw = Math.toRadians(baseYaw(myColor) + yawOffset);
-        double pitch = Math.toRadians(58);
+        // Closest distance at which every corner of the board (frame included) stays on screen.
+        float lo = 5f, hi = 200f;
+        for (int i = 0; i < 24; i++) {
+            float mid = (lo + hi) / 2;
+            placeCamera(mid, fovy, aspect, pitch, yaw);
+            if (boardFits()) hi = mid;
+            else lo = mid;
+        }
+        placeCamera(hi, fovy, aspect, pitch, yaw);
+    }
+
+    private void placeCamera(float dist, float fovy, float aspect, double pitch, double yaw) {
+        // Tight near/far planes keep depth precise even with a 16-bit depth buffer.
+        Matrix.perspectiveM(proj, 0, fovy, aspect, Math.max(0.5f, dist - 16f), dist + 16f);
         eye[0] = (float) (Math.sin(yaw) * Math.cos(pitch) * dist);
         eye[1] = (float) (Math.sin(pitch) * dist);
         eye[2] = (float) (Math.cos(yaw) * Math.cos(pitch) * dist);
-        // Look slightly past the centre so the near edge is not clipped by the bottom controls.
-        Matrix.setLookAtM(view, 0, eye[0], eye[1], eye[2], -eye[0] * 0.03f, 0f, -eye[2] * 0.03f, 0f, 1f, 0f);
+        Matrix.setLookAtM(view, 0, eye[0], eye[1], eye[2], 0f, -0.2f, 0f, 0f, 1f, 0f);
         Matrix.multiplyMM(vp, 0, proj, 0, view, 0);
+    }
+
+    private static final float EDGE = 7.95f;
+
+    private boolean boardFits() {
+        for (int k = 0; k < 8; k++) {
+            tmpIn[0] = (k & 1) == 0 ? -EDGE : EDGE;
+            tmpIn[2] = (k & 2) == 0 ? -EDGE : EDGE;
+            tmpIn[1] = (k & 4) == 0 ? 0.15f : -0.7f;
+            tmpIn[3] = 1;
+            Matrix.multiplyMV(tmpOut, 0, vp, 0, tmpIn, 0);
+            if (tmpOut[3] <= 0) return false;
+            float x = tmpOut[0] / tmpOut[3], y = tmpOut[1] / tmpOut[3];
+            if (Math.abs(x) > 0.97f || Math.abs(y) > 0.95f) return false;
+        }
+        return true;
     }
 
     private void use(int tex, float r, float g, float b, float a, boolean unlit, float spec) {
@@ -415,6 +454,11 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         long now = SystemClock.uptimeMillis();
         step(now);
         layout();
+        // After a drag the board eases back to the player's own view.
+        if (!dragging) {
+            yawOffset *= 0.86f;
+            if (Math.abs(yawOffset) < 0.05f) yawOffset = 0f;
+        }
         camera();
 
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
@@ -422,13 +466,14 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         GLES20.glUniform3f(shader.uLight, 0.35f, 1f, 0.45f);
         GLES20.glUniform3f(shader.uEye, eye[0], eye[1], eye[2]);
 
-        // Board: wooden base and the painted top.
+        // Board: wooden base (its top 4 cm below the painted face, so the two never z-fight),
+        // a raised wooden frame, then the painted top at y = 0.
         Matrix.setIdentityM(model, 0);
-        Matrix.translateM(model, 0, 0, -0.3f, 0);
-        use(0, 0.42f, 0.28f, 0.16f, 1, false, 0.08f);
+        Matrix.translateM(model, 0, 0, -0.34f, 0);
+        use(0, 0.40f, 0.26f, 0.15f, 1, false, 0.08f);
         draw(boardBase);
+        drawFrame();
         Matrix.setIdentityM(model, 0);
-        Matrix.translateM(model, 0, 0, 0.002f, 0);
         use(texBoard, 1, 1, 1, 1, false, 0.05f);
         draw(boardTop);
 
@@ -436,39 +481,41 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         List<Integer> movable = highlight && idle && state != null ? state.movableTokens() : new ArrayList<>();
         int curPlayer = state != null ? state.current : -1;
 
-        // Soft shadows and the "pick me" rings (blended, no depth writes).
+        // Decals lying on the board (soft shadows, "pick me" rings): drawn without depth testing,
+        // so they can't flicker against the board surface on low-precision depth buffers.
         GLES20.glEnable(GLES20.GL_BLEND);
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA);
-        GLES20.glDepthMask(false);
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST);
         if (state != null) {
             for (int p = 0; p < state.players.size(); p++) {
                 for (int t = 0; t < 4; t++) {
                     float[] q = pos[p][t];
                     float s = 0.8f * scale[p][t] / (1f + q[1] * 0.6f);
                     Matrix.setIdentityM(model, 0);
-                    Matrix.translateM(model, 0, q[0], 0.012f, q[2]);
+                    Matrix.translateM(model, 0, q[0], 0.01f, q[2]);
                     Matrix.scaleM(model, 0, s, 1, s);
                     use(texShadow, 0, 0, 0, 0.42f, true, 0);
                     draw(flat);
-                    if (p == curPlayer && movable.contains(t)) {
-                        float rs = 1.05f + 0.12f * pulse;
+                    boolean selected = p == selPlayer && t == selToken;
+                    if (selected || (p == curPlayer && movable.contains(t))) {
+                        float rs = selected ? 1.35f : 1.05f + 0.12f * pulse;
                         Matrix.setIdentityM(model, 0);
-                        Matrix.translateM(model, 0, q[0], 0.02f, q[2]);
+                        Matrix.translateM(model, 0, q[0], 0.01f, q[2]);
                         Matrix.scaleM(model, 0, rs, 1, rs);
-                        use(texRing, 1f, 0.84f, 0.3f, 0.95f, true, 0);
+                        use(texRing, 1f, selected ? 1f : 0.84f, selected ? 0.75f : 0.3f, 1f, true, 0);
                         draw(flat);
                     }
                 }
             }
         }
         float diceLift = rollT >= 0 ? (float) Math.sin(Math.PI * rollT) * 1.4f : 0f;
-        float ds = 1.1f / (1f + diceLift * 0.5f);
+        float ds = 1.3f / (1f + diceLift * 0.5f);
         Matrix.setIdentityM(model, 0);
-        Matrix.translateM(model, 0, dicePos[0], 0.012f, dicePos[2]);
+        Matrix.translateM(model, 0, dicePos[0], 0.01f, dicePos[2]);
         Matrix.scaleM(model, 0, ds, 1, ds);
         use(texShadow, 0, 0, 0, 0.4f, true, 0);
         draw(flat);
-        GLES20.glDepthMask(true);
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST);
         GLES20.glDisable(GLES20.GL_BLEND);
 
         // Tokens.
@@ -509,6 +556,22 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         draw(dice);
 
         publishScreen();
+    }
+
+    /** A raised wooden rim around the playing surface (four bars of the unit box). */
+    private void drawFrame() {
+        float h = 0.16f, y = 0.1f - h / 2; // top edge 10 cm above the board face
+        float[][] bars = {
+                {0, 7.7f, 15.8f, 0.4f}, {0, -7.7f, 15.8f, 0.4f},
+                {7.7f, 0, 0.4f, 15.0f}, {-7.7f, 0, 0.4f, 15.0f},
+        };
+        use(0, 0.33f, 0.21f, 0.12f, 1, false, 0.18f);
+        for (float[] b : bars) {
+            Matrix.setIdentityM(model, 0);
+            Matrix.translateM(model, 0, b[0], y, b[1]);
+            Matrix.scaleM(model, 0, b[2], h, b[3]);
+            draw(unitBox);
+        }
     }
 
     /** Rotate the die so `value` faces up (faces: +X=3, -X=4, +Y=1, -Y=6, +Z=2, -Z=5). */

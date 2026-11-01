@@ -5,7 +5,9 @@ import android.animation.ObjectAnimator;
 import androidx.appcompat.app.AlertDialog;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
+import android.graphics.drawable.GradientDrawable;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
@@ -20,11 +22,15 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import com.ludo3d.game.LudoApp;
 import com.ludo3d.game.game.Board;
 import com.ludo3d.game.game.GameState;
 import com.ludo3d.game.game.Social;
+import com.ludo3d.game.gl.ConfigChooser;
 import com.ludo3d.game.gl.GameRenderer;
 
 import org.json.JSONArray;
@@ -48,8 +54,17 @@ public class GameActivity extends BaseActivity {
     private int resultShownFor = -1;
     private long lastEmoteAt;
 
-    private LinearLayout chips;
-    private TextView status, rollBtn, chatBtn;
+    /** Length of the current turn timer, for the countdown bar. */
+    private long deadlineTotal;
+
+    private LinearLayout panels;
+    private TextView status, rollBtn, chatBtn, titleView, feeView, connView;
+    private TextView timerView;
+    private String timerBase = "";
+    private View timerBar;
+    private android.animation.ValueAnimator pulse;
+    /** Short screens (e.g. 320x568 dp): smaller panels and controls, so the board keeps its room. */
+    private boolean compact;
     private FrameLayout effects;
     private LinearLayout chatPanel, emotePanel, chatList;
     private ScrollView chatScroll;
@@ -69,12 +84,22 @@ public class GameActivity extends BaseActivity {
         renderer = new GameRenderer();
         gl = new GLSurfaceView(this);
         gl.setEGLContextClientVersion(2);
-        gl.setEGLConfigChooser(8, 8, 8, 8, 16, 0);
+        gl.setEGLConfigChooser(new ConfigChooser());
         gl.setRenderer(renderer);
         gl.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
-        root.addView(gl, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        compact = getResources().getConfiguration().screenHeightDp < 700;
         setupTouch();
         buildHud();
+        // The board keeps its size when the keyboard opens: only the chat panel moves up.
+        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            float lift = -Math.max(0, ime.bottom - bars.bottom);
+            chatPanel.setTranslationY(lift);
+            emotePanel.setTranslationY(lift);
+            return WindowInsetsCompat.CONSUMED;
+        });
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
@@ -105,6 +130,12 @@ public class GameActivity extends BaseActivity {
         super.onPause();
         gl.onPause();
         LudoApp.MAIN.removeCallbacks(ticker);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (pulse != null) pulse.cancel();
     }
 
     // ================================================================= socket
@@ -164,7 +195,10 @@ public class GameActivity extends BaseActivity {
         boolean wasMine = state != null && isMyTurn(state);
         lastSeq = next.seq;
         state = next;
-        deadline = u.isNull("deadline") ? 0 : u.optLong("deadline") - u.optLong("serverTime") + System.currentTimeMillis();
+        long nextDeadline = u.isNull("deadline") ? 0 : u.optLong("deadline") - u.optLong("serverTime") + System.currentTimeMillis();
+        // A new deadline (not just the same turn re-sent) restarts the countdown bar.
+        if (Math.abs(nextDeadline - deadline) > 1500) deadlineTotal = Math.max(1, nextDeadline - System.currentTimeMillis());
+        deadline = nextDeadline;
         boolean highlight = isMyTurn(next) && "move".equals(next.phase);
         gl.queueEvent(() -> {
             renderer.applyUpdate(next, events, contiguous);
@@ -187,36 +221,46 @@ public class GameActivity extends BaseActivity {
 
     // ================================================================= input
 
+    /**
+     * Touch on the board: a short tap rolls (on the die) or moves (on a glowing token); a
+     * clear sideways drag turns the board, which eases back when released. A drag never
+     * counts as a tap, and a second finger cancels the gesture.
+     */
     private void setupTouch() {
-        final float[] down = new float[2];
+        final float[] down = new float[3];
         final boolean[] dragging = {false};
-        final long[] lastTap = {0};
+        final boolean[] cancelled = {false};
+        final float slop = Ui.dp(this, 16);
         gl.setOnTouchListener((v, ev) -> {
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     down[0] = ev.getX();
                     down[1] = ev.getY();
+                    down[2] = ev.getX();
                     dragging[0] = false;
+                    cancelled[0] = false;
+                    return true;
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    cancelled[0] = true;
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    float dx = ev.getX() - down[0];
-                    if (!dragging[0] && Math.abs(dx) > Ui.dp(this, 12)) dragging[0] = true;
+                    float dx = ev.getX() - down[0], dy = ev.getY() - down[1];
+                    if (!dragging[0] && Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy)) {
+                        dragging[0] = true;
+                        renderer.dragging = true;
+                    }
+                    if (!dragging[0] && Math.hypot(dx, dy) > slop) cancelled[0] = true;
                     if (dragging[0]) {
-                        renderer.yawOffset += dx * 0.25f;
-                        down[0] = ev.getX();
+                        renderer.yawOffset = Math.max(-75f, Math.min(75f, renderer.yawOffset + (ev.getX() - down[2]) * 0.25f));
+                        down[2] = ev.getX();
                     }
                     return true;
                 case MotionEvent.ACTION_UP:
-                    if (!dragging[0]) {
-                        long now = System.currentTimeMillis();
-                        if (now - lastTap[0] < 300) {
-                            renderer.yawOffset = 0;
-                            lastTap[0] = 0;
-                        } else {
-                            lastTap[0] = now;
-                            tap(ev.getX(), ev.getY());
-                        }
-                    }
+                    renderer.dragging = false;
+                    if (!dragging[0] && !cancelled[0]) tap(ev.getX(), ev.getY());
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    renderer.dragging = false;
                     return true;
                 default:
                     return true;
@@ -234,7 +278,7 @@ public class GameActivity extends BaseActivity {
         if (!"move".equals(state.phase) || !renderer.isIdle()) return;
         List<Integer> movable = state.movableTokens();
         int best = -1;
-        float bestD = Ui.dp(this, 56);
+        float bestD = Ui.dp(this, 52);
         for (int t : movable) {
             float dd = dist(renderer.tokenScreen(state.current, t), x, y);
             if (dd < bestD) {
@@ -242,7 +286,11 @@ public class GameActivity extends BaseActivity {
                 best = t;
             }
         }
-        if (best >= 0) move(best);
+        if (best < 0) return;
+        int player = state.current, token = best;
+        gl.queueEvent(() -> renderer.setSelected(player, token));
+        gl.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+        move(token);
     }
 
     private static float dist(float[] p, float x, float y) {
@@ -265,111 +313,246 @@ public class GameActivity extends BaseActivity {
         busy = true;
         app.socket.emit("game:move", PlayFlow.obj("token", token), res -> {
             busy = false;
-            if (!res.optBoolean("ok")) LudoApp.toast(res.optString("error", "Can't move that token"));
+            if (!res.optBoolean("ok")) {
+                gl.queueEvent(() -> renderer.setSelected(-1, -1));
+                LudoApp.toast(res.optString("error", "Can't move that token"));
+            }
             renderStatus();
         });
     }
 
     // ================================================================= HUD
 
+    /**
+     * Portrait layout: top bar + player panels, the board in the middle (it gets all the
+     * remaining height and never moves), bottom status + controls. Chat, emotes and emote
+     * effects float above the board.
+     */
     private void buildHud() {
+        int pad = Ui.dp(this, 12);
+        LinearLayout column = Ui.vbox(this);
+
+        // ---- top: leave, match info, connection
         LinearLayout top = Ui.vbox(this);
-        top.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), 0);
+        top.setPadding(pad, Ui.dp(this, 8), pad, Ui.dp(this, 4));
         LinearLayout bar = Ui.hbox(this);
-        TextView leave = Ui.smallButton(this, "✕ Leave", "glass", v -> confirmLeave());
-        bar.addView(leave);
-        TextView title = Ui.text(this, "", 13, Ui.MUTED);
-        title.setGravity(Gravity.END);
-        title.setTag("title");
-        bar.addView(title, Ui.weight(1));
+        TextView leave = Ui.text(this, "✕", 18, Ui.INK);
+        leave.setGravity(Gravity.CENTER);
+        leave.setBackground(Ui.roundStroke(0x991a1f4f, Ui.dp(this, 999), Ui.dp(this, 1), Ui.STROKE));
+        leave.setContentDescription("Leave match");
+        leave.setOnClickListener(v -> confirmLeave());
+        bar.addView(leave, new LinearLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40)));
+        LinearLayout info = Ui.vbox(this);
+        info.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 8), 0);
+        titleView = Ui.bold(Ui.text(this, "", 15, Ui.INK));
+        titleView.setSingleLine(true);
+        titleView.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(titleView);
+        feeView = Ui.text(this, "", 12, Ui.GOLD);
+        feeView.setSingleLine(true);
+        info.addView(feeView);
+        bar.addView(info, Ui.weight(1));
+        connView = Ui.text(this, "", 12, Ui.MUTED);
+        connView.setPadding(Ui.dp(this, 10), Ui.dp(this, 5), Ui.dp(this, 10), Ui.dp(this, 5));
+        connView.setBackground(Ui.round(0x661a1f4f, Ui.dp(this, 999)));
+        bar.addView(connView);
         top.addView(bar);
-        chips = Ui.hbox(this);
-        Ui.margins(chips, this, 0, 8, 0, 0);
-        top.addView(chips);
-        root.addView(top, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
+        panels = Ui.vbox(this);
+        Ui.margins(panels, this, 0, 10, 0, 0);
+        top.addView(panels);
+        column.addView(top, Ui.lpMatchWrap());
+
+        // ---- middle: the 3D board
+        FrameLayout boardArea = new FrameLayout(this);
+        boardArea.addView(gl, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        column.addView(boardArea, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+        // ---- bottom: status + timer, quick reactions, chat / roll / emotes
+        LinearLayout bottom = Ui.vbox(this);
+        bottom.setPadding(pad, Ui.dp(this, 4), pad, Ui.dp(this, 10));
+        LinearLayout statusBox = Ui.vbox(this);
+        statusBox.setBackground(Ui.round(0xcc121640, Ui.dp(this, 16)));
+        statusBox.setPadding(Ui.dp(this, 14), Ui.dp(this, compact ? 5 : 8), Ui.dp(this, 14), Ui.dp(this, compact ? 5 : 8));
+        status = Ui.bold(Ui.text(this, "", 15, Ui.INK));
+        status.setGravity(Gravity.CENTER);
+        status.setSingleLine(true);
+        status.setEllipsize(TextUtils.TruncateAt.END);
+        statusBox.addView(status, Ui.lpMatchWrap());
+        FrameLayout track = new FrameLayout(this);
+        track.setBackground(Ui.round(0x22ffffff, Ui.dp(this, 2)));
+        timerBar = new View(this);
+        timerBar.setBackground(Ui.round(Ui.GOLD, Ui.dp(this, 2)));
+        track.addView(timerBar, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        timerBar.setPivotX(0);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 4));
+        tlp.topMargin = Ui.dp(this, 6);
+        statusBox.addView(track, tlp);
+        // After "View board", tapping the status brings the result card back (rematch / leave).
+        statusBox.setOnClickListener(v -> {
+            if (state != null && "over".equals(state.phase)) showResult(true);
+        });
+        bottom.addView(statusBox, Ui.lpMatchWrap());
+
+        LinearLayout reactions = Ui.hbox(this);
+        reactions.setGravity(Gravity.CENTER);
+        for (String id : Social.INSTANT_REACTIONS) {
+            TextView r = Ui.text(this, Social.emoji(id), 22, Ui.INK);
+            r.setGravity(Gravity.CENTER);
+            r.setContentDescription("Send " + id);
+            r.setOnClickListener(v -> {
+                pressPop(v);
+                sendEmote(id);
+            });
+            reactions.addView(r, new LinearLayout.LayoutParams(0, Ui.dp(this, compact ? 36 : 44), 1));
+        }
+        Ui.margins(reactions, this, 0, 4, 0, 4);
+        bottom.addView(reactions);
+
+        LinearLayout controls = Ui.hbox(this);
+        chatBtn = roundIcon("💬", "Chat", v -> openChat());
+        controls.addView(chatBtn, new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl())));
+        rollBtn = Ui.button(this, "🎲  ROLL", "primary", v -> {
+            pressPop(v);
+            roll();
+        });
+        rollBtn.setTextSize(20);
+        rollBtn.setPadding(0, 0, 0, 0);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(0, Ui.dp(this, ctl()), 1);
+        rlp.leftMargin = Ui.dp(this, 12);
+        rlp.rightMargin = Ui.dp(this, 12);
+        controls.addView(rollBtn, rlp);
+        controls.addView(roundIcon("😀", "Emotes", v -> openEmotes()), new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl())));
+        bottom.addView(controls, Ui.lpMatchWrap());
+        column.addView(bottom, Ui.lpMatchWrap());
+
+        root.addView(column, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         effects = new FrameLayout(this);
         effects.setClickable(false);
         root.addView(effects, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        LinearLayout bottom = Ui.vbox(this);
-        bottom.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 12), Ui.dp(this, 14));
-        bottom.setGravity(Gravity.CENTER_HORIZONTAL);
-        status = Ui.bold(Ui.text(this, "", 15, Ui.INK));
-        status.setGravity(Gravity.CENTER);
-        status.setPadding(Ui.dp(this, 14), Ui.dp(this, 6), Ui.dp(this, 14), Ui.dp(this, 6));
-        status.setBackground(Ui.round(0x99101438, Ui.dp(this, 999)));
-        // After "View board", tapping the status brings the result card back (rematch / leave).
-        status.setOnClickListener(v -> {
-            if (state != null && "over".equals(state.phase)) showResult(true);
-        });
-        bottom.addView(status);
-
-        HorizontalScrollView hs = new HorizontalScrollView(this);
-        hs.setHorizontalScrollBarEnabled(false);
-        LinearLayout reactions = Ui.hbox(this);
-        for (String id : Social.INSTANT_REACTIONS) {
-            TextView r = Ui.text(this, Social.emoji(id), 24, Ui.INK);
-            r.setPadding(Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 8), Ui.dp(this, 4));
-            r.setOnClickListener(v -> sendEmote(id));
-            reactions.addView(r);
-        }
-        hs.addView(reactions);
-        Ui.margins(hs, this, 0, 8, 0, 4);
-        LinearLayout.LayoutParams hlp = (LinearLayout.LayoutParams) hs.getLayoutParams();
-        hlp.width = ViewGroup.LayoutParams.WRAP_CONTENT;
-        bottom.addView(hs);
-
-        LinearLayout controls = Ui.hbox(this);
-        chatBtn = Ui.button(this, "💬", "glass", v -> openChat());
-        controls.addView(chatBtn);
-        controls.addView(Ui.gap(this, 10));
-        rollBtn = Ui.button(this, "🎲  ROLL", "primary", v -> roll());
-        rollBtn.setTextSize(18);
-        controls.addView(rollBtn, Ui.weight(1));
-        controls.addView(Ui.gap(this, 10));
-        controls.addView(Ui.button(this, "😀", "glass", v -> openEmotes()));
-        bottom.addView(controls, Ui.lpMatchWrap());
-        root.addView(bottom, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
-
         buildChatPanel();
         buildEmotePanel();
     }
 
+    private int ctl() {
+        return compact ? 50 : 58;
+    }
+
+    private int avSize() {
+        return compact ? 28 : 34;
+    }
+
+    private TextView roundIcon(String emoji, String label, View.OnClickListener onClick) {
+        TextView t = Ui.text(this, emoji, 22, Ui.INK);
+        t.setGravity(Gravity.CENTER);
+        t.setContentDescription(label);
+        t.setBackground(Ui.roundStroke(0xcc1a1f4f, Ui.dp(this, 999), Ui.dp(this, 1), Ui.STROKE));
+        t.setOnClickListener(onClick);
+        return t;
+    }
+
+    /** Small press feedback for buttons. */
+    private static void pressPop(View v) {
+        v.animate().cancel();
+        v.setScaleX(0.92f);
+        v.setScaleY(0.92f);
+        v.animate().scaleX(1f).scaleY(1f).setDuration(160).start();
+    }
+
+    /** Player panels: one row for two players, a 2x2 grid for three or four. */
     private void renderChips() {
         JSONObject room = app.socket.room;
-        TextView title = root.findViewWithTag("title");
-        if (room != null && title != null) {
+        if (room != null) {
             JSONObject mode = room.optJSONObject("mode");
             long fee = room.optLong("entryFee");
-            title.setText((mode != null ? mode.optString("name") : "") + (fee > 0 ? " · entry " + Ui.coins(fee) : " · free"));
+            titleView.setText(mode != null ? mode.optString("name") : "Ludo");
+            feeView.setText(fee > 0 ? "Entry " + Ui.coins(fee) + "  ·  Winner " + Ui.coins(Math.round(fee * room.optDouble("payoutMultiplier", 2)))
+                    : "Free room — no coins at stake");
         }
-        chips.removeAllViews();
+        if (pulse != null) pulse.cancel();
+        panels.removeAllViews();
+        timerView = null;
         if (state == null) return;
         JSONArray seats = room != null ? room.optJSONArray("seats") : null;
-        for (int i = 0; i < state.players.size(); i++) {
+        String me = app.socket.myColor();
+        int n = state.players.size();
+        LinearLayout row = null;
+        for (int i = 0; i < n; i++) {
+            if (n <= 2 ? i == 0 : i % 2 == 0) {
+                row = Ui.hbox(this);
+                LinearLayout.LayoutParams rp = Ui.lpMatchWrap();
+                if (i > 0) rp.topMargin = Ui.dp(this, 6);
+                panels.addView(row, rp);
+            }
             GameState.Player p = state.players.get(i);
             JSONObject seat = seatFor(seats, p.color);
             boolean current = i == state.current && !"over".equals(state.phase);
-            LinearLayout chip = Ui.hbox(this);
-            chip.setTag("chip:" + p.color);
-            chip.setPadding(Ui.dp(this, 6), Ui.dp(this, 5), Ui.dp(this, 8), Ui.dp(this, 5));
-            int col = Board.colorArgb(p.color);
-            chip.setBackground(Ui.roundStroke(current ? (col & 0x00ffffff) | 0x55000000 : 0x99101438, Ui.dp(this, 999),
-                    Ui.dp(this, current ? 2 : 1), current ? col : Ui.STROKE));
             boolean bot = "ai".equals(p.kind);
-            chip.addView(Ui.avatarColor(this, bot ? "🤖" : p.name, col, 24));
-            String name = p.name.length() > 9 ? p.name.substring(0, 8) + "…" : p.name;
-            if (p.rank > 0) name = (p.rank == 1 ? "🏆 " : "#" + p.rank + " ") + name;
-            if (seat != null && !seat.optBoolean("connected", true) && !bot) name += " ⚠";
-            TextView n = Ui.text(this, name, 12, Ui.INK);
-            n.setPadding(Ui.dp(this, 5), 0, 0, 0);
-            n.setSingleLine(true);
-            chip.addView(n);
-            LinearLayout.LayoutParams lp = Ui.weight(1);
-            lp.rightMargin = Ui.dp(this, 4);
-            chips.addView(chip, lp);
+            boolean online = bot || seat == null || seat.optBoolean("connected", true);
+            int col = Board.colorArgb(p.color);
+
+            LinearLayout card = Ui.hbox(this);
+            card.setTag("chip:" + p.color);
+            card.setPadding(Ui.dp(this, 8), Ui.dp(this, compact ? 4 : 7), Ui.dp(this, 10), Ui.dp(this, compact ? 4 : 7));
+            GradientDrawable bg = Ui.roundStroke(current ? (col & 0x00ffffff) | 0x33000000 : 0xb3121640, Ui.dp(this, 14),
+                    Ui.dp(this, current ? 2 : 1), current ? col : Ui.STROKE);
+            card.setBackground(bg);
+
+            FrameLayout av = new FrameLayout(this);
+            TextView a = bot ? Ui.avatarColor(this, "🤖", col, avSize())
+                    : seat != null ? Ui.avatar(this, p.name, seat.optInt("avatarHue", 210), avSize()) : Ui.avatarColor(this, p.name, col, avSize());
+            GradientDrawable ring = new GradientDrawable();
+            ring.setShape(GradientDrawable.OVAL);
+            ring.setColor(0);
+            ring.setStroke(Ui.dp(this, 2), col);
+            View ringView = new View(this);
+            ringView.setBackground(ring);
+            av.addView(a, new FrameLayout.LayoutParams(Ui.dp(this, avSize()), Ui.dp(this, avSize()), Gravity.CENTER));
+            av.addView(ringView, new FrameLayout.LayoutParams(Ui.dp(this, avSize() + 6), Ui.dp(this, avSize() + 6), Gravity.CENTER));
+            View dot = new View(this);
+            GradientDrawable dg = new GradientDrawable();
+            dg.setShape(GradientDrawable.OVAL);
+            dg.setColor(online ? Ui.SUCCESS : 0xff8a8fb0);
+            dg.setStroke(Ui.dp(this, 2), 0xff121640);
+            dot.setBackground(dg);
+            av.addView(dot, new FrameLayout.LayoutParams(Ui.dp(this, 12), Ui.dp(this, 12), Gravity.BOTTOM | Gravity.END));
+            card.addView(av, new LinearLayout.LayoutParams(Ui.dp(this, avSize() + 6), Ui.dp(this, avSize() + 6)));
+
+            LinearLayout text = Ui.vbox(this);
+            text.setPadding(Ui.dp(this, 8), 0, 0, 0);
+            TextView name = Ui.bold(Ui.text(this, (p.rank == 1 ? "🏆 " : p.rank > 1 ? "#" + p.rank + " " : "") + p.name, compact ? 13 : 14, Ui.INK));
+            name.setSingleLine(true);
+            name.setEllipsize(TextUtils.TruncateAt.END);
+            text.addView(name);
+            String sub = p.color.equals(me) ? "You" : bot ? "Bot" : online ? "Online" : "Offline";
+            TextView subView = Ui.text(this, sub, compact ? 11 : 12, current ? col : Ui.MUTED);
+            subView.setSingleLine(true);
+            text.addView(subView);
+            if (current) {
+                timerView = subView;
+                timerBase = sub;
+            }
+            card.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            // Long names are shortened on the card; tap it to read the whole name.
+            card.setOnClickListener(v -> LudoApp.toast(p.name + (bot ? " (bot)" : "")));
+
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+            if (row.getChildCount() > 0) lp.leftMargin = Ui.dp(this, 8);
+            row.addView(card, lp);
+
+            if (current) {
+                // Gentle breathing highlight on the active player's panel.
+                pulse = android.animation.ValueAnimator.ofInt(0x33, 0x66);
+                pulse.setDuration(900);
+                pulse.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+                pulse.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+                pulse.addUpdateListener(va -> bg.setColor((col & 0x00ffffff) | ((int) va.getAnimatedValue() << 24)));
+                pulse.start();
+            }
         }
+        // Three players: keep the last card half width like the others.
+        if (n == 3 && row != null) row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
     }
 
     private static JSONObject seatFor(JSONArray seats, String color) {
@@ -384,31 +567,40 @@ public class GameActivity extends BaseActivity {
         if (status == null) return;
         String text;
         boolean canRoll = false;
-        if (!"online".equals(app.socket.connection)) {
+        boolean online = "online".equals(app.socket.connection);
+        connView.setText(online ? "● Online" : "● Reconnecting");
+        connView.setTextColor(online ? Ui.SUCCESS : Ui.GOLD);
+        long left = -1;
+        if (!online) {
             text = "Reconnecting…";
         } else if (state == null) {
             text = "Waiting for the match…";
         } else if ("over".equals(state.phase)) {
-            text = "Match over";
+            text = "Match over — tap for the result";
         } else {
             GameState.Player cur = state.currentPlayer();
-            long left = deadline > 0 ? Math.max(0, (deadline - System.currentTimeMillis() + 999) / 1000) : -1;
-            String timer = left >= 0 ? "  ⏱ " + left + "s" : "";
+            left = deadline > 0 ? Math.max(0, (deadline - System.currentTimeMillis() + 999) / 1000) : -1;
             if (isMyTurn(state)) {
                 if ("roll".equals(state.phase)) {
-                    text = "Your turn — roll the dice!" + timer;
+                    text = "Your turn — roll the dice!";
                     canRoll = !busy;
                 } else {
-                    text = "You rolled " + state.dice + " — tap a glowing token" + timer;
+                    text = "You rolled " + state.dice + " — tap a glowing token";
                 }
             } else {
-                text = cur.name + ("roll".equals(state.phase) ? " is rolling…" : " rolled " + state.dice) + timer;
+                text = cur.name + ("roll".equals(state.phase) ? " is rolling…" : " rolled " + state.dice);
             }
         }
         status.setText(text);
+        if (timerView != null) timerView.setText(left >= 0 ? timerBase + " · ⏱ " + left + "s" : timerBase);
+        float frac = deadline > 0 && deadlineTotal > 0 ? Math.max(0f, Math.min(1f, (deadline - System.currentTimeMillis()) / (float) deadlineTotal)) : 0f;
+        timerBar.setScaleX(frac);
+        timerBar.setBackground(Ui.round(frac < 0.25f ? Ui.DANGER : Ui.GOLD, Ui.dp(this, 2)));
         Ui.setEnabled(rollBtn, canRoll);
+        rollBtn.setText(canRoll ? "🎲  ROLL" : busy ? "Rolling…" : isMyTurn(state) ? "Pick a token" : "Waiting…");
         int unread = app.socket.unreadChat;
-        chatBtn.setText(unread > 0 ? "💬 " + Math.min(unread, 99) : "💬");
+        chatBtn.setText(unread > 0 ? "💬" + Math.min(unread, 99) : "💬");
+        chatBtn.setTextSize(unread > 0 ? 16 : 22);
     }
 
     // ================================================================= result
@@ -636,7 +828,7 @@ public class GameActivity extends BaseActivity {
 
     /** A big emoji rising from the sender's player chip. */
     private void showEmote(String id, String color) {
-        View chip = chips.findViewWithTag("chip:" + color);
+        View chip = panels.findViewWithTag("chip:" + color);
         TextView t = Ui.text(this, Social.emoji(id), 46, Ui.INK);
         t.measure(0, 0);
         float x, y;

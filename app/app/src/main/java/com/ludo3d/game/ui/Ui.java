@@ -181,10 +181,15 @@ public final class Ui {
         e.setHintTextColor(0x88a3a8cf);
         e.setTextColor(INK);
         e.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        // setSingleLine() replaces the text transformation, so it must come before setInputType(),
+        // otherwise password fields would show the typed password in plain text.
+        e.setSingleLine(inputType != (InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE));
         e.setInputType(inputType);
+        if ((inputType & InputType.TYPE_MASK_VARIATION) == InputType.TYPE_TEXT_VARIATION_PASSWORD) {
+            e.setTransformationMethod(android.text.method.PasswordTransformationMethod.getInstance());
+        }
         // Password inputs default to a monospace font; keep the app font.
         e.setTypeface(Typeface.DEFAULT);
-        e.setSingleLine(inputType != (InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE));
         e.setBackground(roundStroke(0xff10143a, dp(c, 12), dp(c, 1), STROKE));
         e.setPadding(dp(c, 14), dp(c, 12), dp(c, 14), dp(c, 12));
         LinearLayout.LayoutParams lp = lpMatchWrap();

@@ -13,6 +13,7 @@ import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.ludo3d.game.LudoApp;
@@ -35,7 +36,9 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
         app = LudoApp.get();
         root = new FrameLayout(this);
         root.setBackgroundColor(Ui.BG);
-        // Android 15+ draws apps edge to edge: keep content clear of the status/navigation bars and keyboard.
+        // Draw edge to edge on every Android version (15+ always does) and pad the content clear of
+        // the status/navigation bars, display cutout and keyboard ourselves.
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout() | WindowInsetsCompat.Type.ime());
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
