@@ -20,6 +20,11 @@ export interface RuleConfig {
   safeCells: boolean;
   /** 'first' ends the match when one player finishes; 'all' ranks everyone. */
   playUntil: 'first' | 'all';
+  /**
+   * 2 vs 2: red + yellow play against green + blue (partners sit across the board).
+   * Partners never capture each other, and a team wins once both partners are home.
+   */
+  teams: boolean;
 }
 
 export interface PlayerState {

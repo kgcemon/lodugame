@@ -424,3 +424,32 @@
     animation: none;
   }
 }
+
+/* 2 vs 2: team-only chat and team tags */
+.chat-channels {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px 0;
+}
+.chat-channels .chip {
+  flex: 1;
+}
+.chat-channels .chip.team.on {
+  background: rgba(34, 180, 107, 0.35);
+  border-color: rgba(34, 180, 107, 0.8);
+}
+.msg.team .msg-body {
+  background: rgba(34, 180, 107, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(34, 180, 107, 0.45);
+}
+.team-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #7ee2a8;
+}
+.team-tag.team-0 {
+  background: rgba(229, 57, 69, 0.25);
+}
+.team-tag.team-1 {
+  background: rgba(47, 124, 240, 0.25);
+}

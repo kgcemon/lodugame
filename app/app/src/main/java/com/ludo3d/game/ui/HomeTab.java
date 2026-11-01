@@ -337,6 +337,8 @@ final class HomeTab {
         box.addView(Ui.label(a, "Match type"));
         final JSONObject[] chosen = {null};
         final int[] players = {2};
+        // 2 vs 2: only for four players.
+        final boolean[] teams = {false};
         LinearLayout modeList = Ui.vbox(a);
         LinearLayout countRow = Ui.hbox(a);
         TextView[] counts = new TextView[3];
@@ -373,6 +375,29 @@ final class HomeTab {
             countRow.addView(b, lp);
         }
         box.addView(countRow);
+        TextView teamsLabel = Ui.label(a, "Play as");
+        box.addView(teamsLabel);
+        LinearLayout teamRow = Ui.hbox(a);
+        TextView solo = Ui.text(a, "Everyone for themselves", 13, Ui.INK);
+        TextView duo = Ui.text(a, "🤝 2 vs 2 teams", 13, Ui.INK);
+        TextView[] teamOpts = {solo, duo};
+        for (int i = 0; i < 2; i++) {
+            final boolean t = i == 1;
+            TextView o = teamOpts[i];
+            o.setGravity(Gravity.CENTER);
+            o.setPadding(Ui.dp(a, 6), Ui.dp(a, 8), Ui.dp(a, 6), Ui.dp(a, 12));
+            o.setOnClickListener(v -> {
+                teams[0] = t;
+                refresh[0].run();
+            });
+            LinearLayout.LayoutParams lp = Ui.weight(1);
+            lp.rightMargin = Ui.dp(a, 6);
+            teamRow.addView(o, lp);
+        }
+        box.addView(teamRow);
+        TextView teamsHint = Ui.muted(a, "Seats 1 + 3 play against 2 + 4. Partners can't capture each other and get a private team chat.");
+        teamsHint.setTextSize(12);
+        box.addView(teamsHint);
         refresh[0] = () -> {
             int max = chosen[0] != null ? chosen[0].optInt("maxPlayers", 4) : 4;
             if (players[0] > max) players[0] = max;
@@ -390,10 +415,21 @@ final class HomeTab {
                 Fx.bevel(counts[i], sel ? Fx.YELLOW : Fx.PURPLE_DARK, 14, 4, true);
                 counts[i].setTextColor(sel ? 0xff4a2600 : Ui.INK);
             }
+            boolean four = players[0] == 4;
+            if (!four) teams[0] = false;
+            int vis = four ? View.VISIBLE : View.GONE;
+            teamsLabel.setVisibility(vis);
+            teamRow.setVisibility(vis);
+            teamsHint.setVisibility(four && teams[0] ? View.VISIBLE : View.GONE);
+            for (int i = 0; i < 2; i++) {
+                boolean sel = (i == 1) == teams[0];
+                Fx.bevel(teamOpts[i], sel ? Fx.YELLOW : Fx.PURPLE_DARK, 14, 4, true);
+                teamOpts[i].setTextColor(sel ? 0xff4a2600 : Ui.INK);
+            }
         };
         refresh[0].run();
         a.dialog("Create a room", box, "Continue", () -> {
-            if (chosen[0] != null) a.play.create(chosen[0], players[0]);
+            if (chosen[0] != null) a.play.create(chosen[0], players[0], teams[0]);
         });
     }
 

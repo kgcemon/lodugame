@@ -36,9 +36,9 @@ const statsCte = (season: string) => `
   stats as (
     select mp.user_id,
            count(*)::int as matches,
-           sum(case when m.winner_user_id = mp.user_id then 1 else 0 end)::int as wins,
+           sum(case when mp.won then 1 else 0 end)::int as wins,
            sum(case when m.ended_at >= ${season} then 1 else 0 end)::int as season_matches,
-           sum(case when m.winner_user_id = mp.user_id and m.ended_at >= ${season} then 1 else 0 end)::int as season_wins
+           sum(case when mp.won and m.ended_at >= ${season} then 1 else 0 end)::int as season_wins
     from match_players mp join matches m on m.id = mp.match_id
     where m.status = 'completed' and mp.status in ('finished', 'forfeited')
     group by mp.user_id
@@ -278,7 +278,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const w = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
       const recent = (
         await db.query<{ won: boolean }>(
-          `select (m.winner_user_id = mp.user_id) as won from match_players mp join matches m on m.id = mp.match_id
+          `select mp.won from match_players mp join matches m on m.id = mp.match_id
            where mp.user_id = $1 and m.status = 'completed' and mp.status in ('finished', 'forfeited')
            order by m.ended_at desc limit 10`,
           [req.user!.id],
@@ -297,11 +297,11 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const rows = (
         await db.query<{
           id: string; mode: string; entry_fee: number; status: string; created_at: string; ended_at: string | null;
-          winner_user_id: string | null; mp_status: string; rank: number | null; entry_paid: number; payout: number; refunded: number;
+          won: boolean; mp_status: string; rank: number | null; entry_paid: number; payout: number; refunded: number;
           players: number; disputed: boolean; end_reason: string | null;
         }>(
-          `select m.id, m.mode, m.entry_fee, m.status, m.created_at, m.ended_at, m.winner_user_id, m.end_reason,
-                  mp.status as mp_status, mp."rank", mp.entry_paid, mp.payout, mp.refunded,
+          `select m.id, m.mode, m.entry_fee, m.status, m.created_at, m.ended_at, m.end_reason,
+                  mp.won, mp.status as mp_status, mp."rank", mp.entry_paid, mp.payout, mp.refunded,
                   (select count(*)::int from match_players x where x.match_id = m.id and x.status <> 'refunded') as players,
                   exists (select 1 from match_disputes d where d.match_id = m.id and d.user_id = mp.user_id) as disputed
            from match_players mp join matches m on m.id = mp.match_id
@@ -319,7 +319,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
           const result =
             m.mp_status === 'forfeited' && m.status !== 'completed' ? 'forfeited'
             : m.status === 'completed'
-              ? m.winner_user_id === me ? 'won' : m.mp_status === 'forfeited' ? 'forfeited' : 'lost'
+              ? m.won ? 'won' : m.mp_status === 'forfeited' ? 'forfeited' : 'lost'
               : m.status === 'cancelled' || m.mp_status === 'refunded' ? 'refunded'
               : m.status === 'abandoned' ? 'abandoned'
               : 'in_progress';

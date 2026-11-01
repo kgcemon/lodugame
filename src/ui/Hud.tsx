@@ -172,7 +172,10 @@ function Victory({ view }: { view: GameState }) {
   const room = useGame((s) => s.room);
   const ranked = [...view.players].sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9));
   const winner = ranked[0];
-  const youWon = matchKind !== 'local' && localColors.includes(winner.color);
+  // 2 vs 2: both partners (ranked 1st and 2nd) win.
+  const partner = view.config.teams ? ranked[1] : undefined;
+  const youWon = matchKind !== 'local' && (localColors.includes(winner.color) || (!!partner && localColors.includes(partner.color)));
+  const winnerName = partner ? `${winner.name} & ${partner.name}` : winner.name;
   const youLost = matchKind !== 'local' && localColors.length > 0 && !youWon;
   const isHost = room ? !!room.seats[room.you]?.isHost : false;
   const settlement = useGame((s) => s.settlement);
@@ -187,8 +190,12 @@ function Victory({ view }: { view: GameState }) {
         transition={{ delay: 1.1, type: 'spring', stiffness: 200, damping: 18 }}
       >
         <IconCrown size={44} className="victory-crown" />
-        <h2>{youWon ? 'Victory!' : youLost ? 'Defeat' : `${winner.name} wins!`}</h2>
-        <p className="hint">{youWon ? 'All four tokens made it home first.' : `${winner.name} brought every token home first.`}</p>
+        <h2>{youWon ? (partner ? 'Your team won!' : 'Victory!') : youLost ? 'Defeat' : `${winnerName} ${partner ? 'win' : 'wins'}!`}</h2>
+        <p className="hint">
+          {partner
+            ? youWon ? 'You and your partner got all eight tokens home first.' : `${winnerName} got all eight tokens home first.`
+            : youWon ? 'All four tokens made it home first.' : `${winner.name} brought every token home first.`}
+        </p>
         {matchKind === 'online' && fee > 0 && (
           <div className={`payout ${youWon ? 'won' : ''}`}>
             {settlement ? (

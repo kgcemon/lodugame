@@ -209,6 +209,63 @@ describe('paid matches', () => {
     expect(stats.body.stats).toMatchObject({ matches: 1, wins: 1, winRate: 100 });
   });
 
+  it('2 vs 2: team chat stays in the team, and both winning partners are paid', async () => {
+    const users = [await registerUser(t, 'Team Red'), await registerUser(t, 'Rival Green'), await registerUser(t, 'Team Yellow'), await registerUser(t, 'Rival Blue')];
+    const socks = [];
+    for (const u of users) socks.push(await socketFor(t, u.cookie));
+    const [a, b, c, d] = socks;
+    expect((await emit(a, 'room:create', { modeId: 'classic', maxPlayers: 2, teams: true })).ok).toBe(false);
+    const made = await emit<{ room: RoomView }>(a, 'room:create', { modeId: 'classic', maxPlayers: 4, teams: true });
+    const code = made.ok ? made.room.code : '';
+    expect(made.ok && made.room.teams).toBe(true);
+    for (const s of [b, c]) await emit(s, 'room:join', { code });
+    for (const s of [b, c]) await emit(s, 'room:ready', { ready: true });
+    expect(await emit(a, 'room:start')).toEqual({ ok: false, error: '2 vs 2 needs 4 players — invite friends' });
+    await emit(d, 'room:join', { code });
+    await emit(d, 'room:ready', { ready: true });
+
+    // Seats 1 + 3 are one team, 2 + 4 the other; a team message reaches only the partner.
+    const got = socks.map((s) => {
+      const list: { text: string; team: number | null }[] = [];
+      s.on('chat:message', (m) => list.push(m));
+      return list;
+    });
+    expect((await emit(a, 'chat:send', { text: 'go top', team: true })).ok).toBe(true);
+    expect((await emit(b, 'chat:send', { text: 'hi all' })).ok).toBe(true);
+    await tick(100);
+    expect(got.map((l) => l.map((m) => m.text))).toEqual([['go top', 'hi all'], ['hi all'], ['go top', 'hi all'], ['hi all']]);
+    expect(got[2][0].team).toBe(0);
+
+    const started = nextUpdate(a);
+    expect((await emit(a, 'room:start')).ok).toBe(true);
+    const first = await started;
+    expect(first.state.config.teams).toBe(true);
+    expect(first.state.players.map((p) => p.color)).toEqual(['red', 'green', 'yellow', 'blue']);
+
+    // Red is already home; yellow brings the last token in and the red + yellow team wins.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const room = (t.server.rooms as any).rooms.get(code) as { game: GameState };
+    room.game.players[0].tokens = [56, 56, 56, 56];
+    room.game.players[0].rank = 1;
+    room.game.ranking = [0];
+    room.game.players[2].tokens = [56, 56, 56, 55];
+    room.game.current = 2;
+    room.game.phase = 'roll';
+    rolls.push(1);
+    const settled = next<MatchSettled>(b, 'match:settled');
+    await emit(c, 'game:roll');
+    await emit(c, 'game:move', { token: 3 });
+    const s = await settled;
+    expect(s).toMatchObject({ payout: 100, entryFee: 50, winnerColors: ['red', 'yellow'], winnerName: `${users[0].username} & ${users[2].username}` });
+    await tick(100);
+    expect(await Promise.all(users.map(balance))).toEqual([1050, 950, 1050, 950]);
+    const matchId = (await t.server.db.query<{ id: string }>('select id from matches where room_code = $1 order by created_at desc limit 1', [code])).rows[0].id;
+    const st = (await t.server.db.query<{ total_pot: number; payout: number; house_amount: number }>('select total_pot, payout, house_amount from match_settlements where match_id = $1', [matchId])).rows[0];
+    expect(st).toEqual({ total_pot: 200, payout: 200, house_amount: 0 });
+    const hist = await users[2].call<{ items: { result: string; net: number }[] }>('GET', '/matches/history');
+    expect(hist.body.items[0]).toMatchObject({ result: 'won', net: 50 });
+  });
+
   it('refunds players who leave before the start and when a room is cancelled', async () => {
     const host = await registerUser(t, 'Host Hana');
     const guest = await registerUser(t, 'Guest Gil');

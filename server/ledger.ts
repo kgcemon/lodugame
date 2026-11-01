@@ -177,9 +177,10 @@ export class MatchLedger {
 
   /**
    * Settle a finished match exactly once. `ranking` lists finishing positions
-   * as user ids (null = a bot seat). The winner gets multiplier × entry fee.
+   * as user ids (null = a bot seat). The first `winners` places win (2 for both
+   * partners in 2 vs 2), and each human winner gets multiplier × entry fee.
    */
-  async settle(matchId: string, ranking: (string | null)[], winnerColor: string): Promise<SettleResult | null> {
+  async settle(matchId: string, ranking: (string | null)[], winnerColor: string, winners = 1): Promise<SettleResult | null> {
     const res = await this.ctx.db.tx(async (q) => {
       const m = await lockMatch(q, matchId);
       if (m.status !== 'in_progress') return null;
@@ -188,41 +189,48 @@ export class MatchLedger {
         [matchId],
       )).rows;
       const pot = players.reduce((a, p) => a + (p.entry_paid - p.refunded), 0);
-      const winner = ranking[0] ?? null;
-      const winnerRow = winner ? players.find((p) => p.user_id === winner && p.status === 'playing') : undefined;
-      const payout = winnerRow ? Math.round(m.entry_fee * m.payout_multiplier) : 0;
-      const policy = `winner_total_payout = ${m.payout_multiplier} x entry_fee; unpaid remainder retained by house`;
+      // Winners who forfeited (left mid-match) get nothing; a bot seat is null.
+      const paid = ranking
+        .slice(0, winners)
+        .filter((uid): uid is string => !!uid && players.some((p) => p.user_id === uid && p.status === 'playing'));
+      const winner = paid[0] ?? null;
+      const payout = paid.length ? Math.round(m.entry_fee * m.payout_multiplier) : 0;
+      const totalPayout = payout * paid.length;
+      const policy = `winner_total_payout = ${m.payout_multiplier} x entry_fee${winners > 1 ? ' per winning partner' : ''}; unpaid remainder retained by house`;
 
       const ins = await q.query(
         `insert into match_settlements (match_id, winner_user_id, total_pot, payout, house_amount, policy)
          values ($1, $2, $3, $4, $5, $6) on conflict (match_id) do nothing`,
-        [matchId, winnerRow ? winner : null, pot, payout, pot - payout, policy],
+        [matchId, winner, pot, totalPayout, pot - totalPayout, policy],
       );
       if (!ins.rowCount) return null; // already settled
 
       if (payout > 0) {
-        await applyWalletTx(q, { userId: winner!, type: 'match_reward', amount: payout, key: `reward:${matchId}`, matchId, note: 'Match win payout' });
+        for (const uid of paid) {
+          const key = uid === winner ? `reward:${matchId}` : `reward:${matchId}:${uid}`;
+          await applyWalletTx(q, { userId: uid, type: 'match_reward', amount: payout, key, matchId, note: 'Match win payout' });
+        }
       }
       for (let i = 0; i < ranking.length; i++) {
         const uid = ranking[i];
         if (!uid) continue;
         await q.query(
-          `update match_players set "rank" = $3, payout = case when $4 then $5::bigint else 0 end,
+          `update match_players set "rank" = $3, won = $4, payout = case when $4 then $5::bigint else 0 end,
                   status = case when status = 'playing' then 'finished' else status end
            where match_id = $1 and user_id = $2`,
-          [matchId, uid, i + 1, uid === winner && !!winnerRow, payout],
+          [matchId, uid, i + 1, paid.includes(uid), payout],
         );
       }
       await q.query(
         `update matches set status = 'completed', ended_at = now(), winner_user_id = $2, winner_color = $3, end_reason = 'finished' where id = $1`,
-        [matchId, winnerRow ? winner : null, winnerColor],
+        [matchId, winner, winnerColor],
       );
-      return { winnerUserId: winnerRow ? winner : null, payout, pot, house: pot - payout, players: players.map((p) => p.user_id) };
+      return { winnerUserId: winner, winnerUserIds: paid, payout, pot, house: pot - totalPayout, players: players.map((p) => p.user_id) };
     });
     if (!res) return null;
     await this.pushWallet(res.players);
     for (const uid of res.players) {
-      const won = uid === res.winnerUserId;
+      const won = res.winnerUserIds.includes(uid);
       await notify(this.ctx.db, this.ctx.presence, uid, 'match_result', {
         matchId,
         won,

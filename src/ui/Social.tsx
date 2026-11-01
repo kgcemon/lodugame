@@ -178,7 +178,7 @@ function Message({ m, mine, selected, onSelect }: { m: ChatMessage; mine: boolea
   const mute = () => set({ muted: [...useGame.getState().muted, m.seatId] });
   return (
     <motion.li
-      className={`msg ${mine ? 'mine' : ''} ${m.quick ? 'quick' : ''}`}
+      className={`msg ${mine ? 'mine' : ''} ${m.quick ? 'quick' : ''} ${m.team !== null && m.team !== undefined ? 'team' : ''}`}
       style={{ ['--pc' as string]: PLAYER_HEX[m.color] }}
       initial={reduceMotion ? false : { opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
@@ -188,6 +188,7 @@ function Message({ m, mine, selected, onSelect }: { m: ChatMessage; mine: boolea
       <div className="msg-body">
         <div className="msg-meta">
           <b>{mine ? 'You' : m.name}</b>
+          {m.team !== null && m.team !== undefined && <span className="team-badge">🤝 Team</span>}
           <time dateTime={new Date(m.at).toISOString()}>{time(m.at)}</time>
           {!mine && (
             <button className="msg-more" aria-label={`Message options for ${m.name}`} aria-expanded={selected} onClick={onSelect}>
@@ -226,6 +227,9 @@ export function ChatPanel() {
   const [showEmoji, setShowEmoji] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [sending, setSending] = useState(false);
+  // 2 vs 2: messages go to my partner only while this is on.
+  const [teamOnly, setTeamOnly] = useState(false);
+  const teams = !!room?.teams;
   const list = useRef<HTMLUListElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const stick = useRef(true);
@@ -252,7 +256,7 @@ export function ChatPanel() {
     if (!msg || sending) return;
     if (charCount(msg) > CHAT_MAX_CHARS) return;
     setSending(true);
-    const ok = await net.chat(msg, quick);
+    const ok = await net.chat(msg, quick, teams && teamOnly);
     setSending(false);
     if (ok) {
       if (!quick) setText('');
@@ -281,7 +285,7 @@ export function ChatPanel() {
         <motion.section className="social-pop chat-pop glass" role="dialog" aria-label="Match chat" {...popIn}>
           <header className="chat-head">
             <IconChat size={18} />
-            <h3>Match chat</h3>
+            <h3>{teams && teamOnly ? 'Team chat' : 'Match chat'}</h3>
             {muted.length > 0 && (
               <button className="chip" onClick={() => set({ muted: [] })}>
                 Unmute all ({muted.length})
@@ -301,11 +305,22 @@ export function ChatPanel() {
               stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
             }}
           >
-            {visible.length === 0 && <li className="chat-empty">No messages yet — say hi! 👋</li>}
+            {visible.length === 0 && <li className="chat-empty">{teams ? 'No messages yet — plan with your partner! 🤝' : 'No messages yet — say hi! 👋'}</li>}
             {visible.map((m) => (
               <Message key={m.id} m={m} mine={m.seatId === me} selected={selected === m.id} onSelect={() => setSelected(selected === m.id ? null : m.id)} />
             ))}
           </ul>
+
+          {teams && (
+            <div className="chat-channels" role="radiogroup" aria-label="Send to">
+              <button role="radio" aria-checked={!teamOnly} className={`chip ${!teamOnly ? 'on' : ''}`} onClick={() => setTeamOnly(false)}>
+                💬 Everyone
+              </button>
+              <button role="radio" aria-checked={teamOnly} className={`chip team ${teamOnly ? 'on' : ''}`} onClick={() => setTeamOnly(true)}>
+                🤝 Team only
+              </button>
+            </div>
+          )}
 
           <AnimatePresence initial={false}>
             {showQuick && (
@@ -357,7 +372,7 @@ export function ChatPanel() {
               ref={input}
               className="input"
               value={text}
-              placeholder="Type a message…"
+              placeholder={teams && teamOnly ? 'Message your partner…' : 'Type a message…'}
               aria-label="Chat message"
               maxLength={CHAT_MAX_CHARS * 4}
               enterKeyHint="send"

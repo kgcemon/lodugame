@@ -10,7 +10,6 @@ import { useGame } from './store/game';
 import { useSettings } from './store/settings';
 import { Hud } from './ui/Hud';
 import { Modals } from './ui/Modals';
-import { AdminPage } from './ui/platform/AdminPage';
 import { ForgotPasswordPage, LoginPage, RegisterPage, ResetPasswordPage, safeNext, VerifyEmailPage } from './ui/platform/AuthPages';
 import { Spinner } from './ui/platform/kit';
 import { Dashboard, FriendsPage, HistoryPage, LeaderboardPage, PlayerPage, ProfilePage, SettingsPage, WalletPage } from './ui/platform/Pages';
@@ -21,6 +20,8 @@ import { Setup } from './ui/Setup';
 
 // The 3D engine is the heaviest part of the app: load it after the first paint.
 const Scene = lazy(() => import('./three/Scene').then((m) => ({ default: m.Scene })));
+// Only admins open the admin console: keep it out of everyone's first download.
+const AdminPage = lazy(() => import('./ui/platform/AdminPage').then((m) => ({ default: m.AdminPage })));
 
 function webglAvailable(): boolean {
   try {
@@ -259,7 +260,7 @@ export default function App() {
               <Route path="/history" element={<HistoryPage />} />
               <Route path="/profile" element={<ProfilePage />} />
               <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/admin" element={<RequireAdmin><AdminPage /></RequireAdmin>} />
+              <Route path="/admin" element={<RequireAdmin><Suspense fallback={<Spinner />}><AdminPage /></Suspense></RequireAdmin>} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

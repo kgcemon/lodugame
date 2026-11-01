@@ -157,7 +157,8 @@ export function RoomPage() {
         }
       />
       <div className="room-grid">
-        <Card title={`Players ${room.seats.length}/${room.maxPlayers}`}>
+        <Card title={`Players ${room.seats.length}/${room.maxPlayers}${room.teams ? ' · 2 vs 2' : ''}`}>
+          {room.teams && <p className="hint">Team A (seats 1 + 3) plays Team B (seats 2 + 4). Partners share a private team chat in the match.</p>}
           <ul className="seat-list">
             {Array.from({ length: room.maxPlayers }, (_, i) => {
               const s = room.seats[i];
@@ -181,6 +182,12 @@ export function RoomPage() {
                     {s.name}
                     {i === room.you && <em> (you)</em>}
                   </span>
+                  {s.team !== null && (
+                    <span className={`tag team-tag team-${s.team}`}>
+                      Team {s.team === 0 ? 'A' : 'B'}
+                      {i !== room.you && s.team === room.seats[room.you]?.team ? ' · partner' : ''}
+                    </span>
+                  )}
                   {s.isHost && (
                     <span className="tag tag-gold" title="Host">
                       <IconCrown size={14} />
@@ -202,11 +209,13 @@ export function RoomPage() {
             <p className="hint">The match starts automatically when the room is full (or after a short wait with at least 2 players).</p>
           ) : isHost ? (
             <>
-              <Button variant="primary" size="lg" icon={<IconPlay />} disabled={room.seats.length < 2 || !everyoneReady} onClick={() => net.start()}>
+              <Button variant="primary" size="lg" icon={<IconPlay />} disabled={room.seats.length < (room.teams ? 4 : 2) || !everyoneReady} onClick={() => net.start()}>
                 Start Match
               </Button>
               <p className="hint">
-                {room.seats.length < 2 ? 'Invite a friend to begin.' : everyoneReady ? 'Everyone is ready!' : 'Waiting for players to get ready…'}
+                {room.seats.length < (room.teams ? 4 : 2)
+                  ? room.teams ? '2 vs 2 needs 4 players — invite friends.' : 'Invite a friend to begin.'
+                  : everyoneReady ? 'Everyone is ready!' : 'Waiting for players to get ready…'}
               </p>
             </>
           ) : (

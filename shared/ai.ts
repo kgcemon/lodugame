@@ -1,5 +1,5 @@
 import { FINISH, HOME_START, TRACK_LEN, absIndex, isSafeIndex } from './board';
-import { captureVictims, targetOf, validMoves } from './engine';
+import { areTeammates, captureVictims, targetOf, validMoves } from './engine';
 import type { AiLevel, GameState } from './types';
 
 /**
@@ -15,7 +15,7 @@ export function threatAt(state: GameState, playerIdx: number, at: number): numbe
   if (state.config.safeCells && isSafeIndex(at)) return 0;
   let threat = 0;
   state.players.forEach((op, oi) => {
-    if (oi === playerIdx || op.rank !== null) return;
+    if (oi === playerIdx || op.rank !== null || areTeammates(state, playerIdx, oi)) return;
     for (const prog of op.tokens) {
       const pos = absIndex(op.color, prog);
       if (pos === null) continue;

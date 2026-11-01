@@ -16,12 +16,16 @@ export interface SeatView {
   ready: boolean;
   connected: boolean;
   isHost: boolean;
+  /** 2 vs 2 team (0 = red + yellow, 1 = green + blue); null outside team rooms. */
+  team: 0 | 1 | null;
 }
 
 export interface RoomView {
   code: string;
   isPublic: boolean;
   maxPlayers: number;
+  /** 2 vs 2: seats 1 + 3 play against seats 2 + 4. */
+  teams: boolean;
   status: RoomStatus;
   seats: SeatView[];
   /** Index of the receiving client's seat (-1 when not seated). */
@@ -49,9 +53,12 @@ export interface RoomPreview {
 }
 
 export interface MatchSettled {
+  /** The winner, or both partners ("A & B") in 2 vs 2. */
   winnerName: string;
   winnerColor: Color;
-  /** Coins credited to the winner (0 for free rooms or a bot winner). */
+  /** Every winning colour (two in 2 vs 2). */
+  winnerColors: Color[];
+  /** Coins credited to each human winner (0 for free rooms or a bot winner). */
   payout: number;
   entryFee: number;
 }
@@ -79,6 +86,8 @@ export interface ChatMessage {
   text: string;
   at: number;
   quick: boolean;
+  /** Team-only message for this 2 vs 2 team (only partners receive it); null = everyone. */
+  team: 0 | 1 | null;
 }
 
 export interface EmoteMessage {
@@ -94,7 +103,7 @@ export type AckFn<T extends object = object> = (res: Ack<T>) => void;
 
 export interface ClientToServerEvents {
   'session:hello': (p: Record<string, never>, ack: AckFn<{ room: RoomView | null }>) => void;
-  'room:create': (p: { modeId: string; maxPlayers: number }, ack: AckFn<{ room: RoomView }>) => void;
+  'room:create': (p: { modeId: string; maxPlayers: number; teams?: boolean }, ack: AckFn<{ room: RoomView }>) => void;
   'room:join': (p: { code: string }, ack: AckFn<{ room: RoomView }>) => void;
   'room:quick': (p: { modeId: string }, ack: AckFn<{ room: RoomView }>) => void;
   'room:ready': (p: { ready: boolean }, ack: AckFn) => void;
@@ -107,7 +116,8 @@ export interface ClientToServerEvents {
   'game:reroll': (p: Record<string, never>, ack: AckFn<{ cost: number; gems: number }>) => void;
   'game:move': (p: { token: number }, ack: AckFn) => void;
   'game:rematch': (p: Record<string, never>, ack: AckFn) => void;
-  'chat:send': (p: { text: string; quick?: boolean }, ack: AckFn) => void;
+  /** `team: true` sends to your 2 vs 2 partner only. */
+  'chat:send': (p: { text: string; quick?: boolean; team?: boolean }, ack: AckFn) => void;
   'emote:send': (p: { id: string }, ack: AckFn) => void;
 }
 

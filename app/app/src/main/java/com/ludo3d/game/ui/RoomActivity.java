@@ -120,7 +120,10 @@ public class RoomActivity extends BaseActivity {
         }
 
         int maxPlayers = room.optInt("maxPlayers", 4);
-        col.addView(Ui.heading(this, "Players " + seats.length() + "/" + maxPlayers));
+        boolean teams = room.optBoolean("teams");
+        int myTeam = me != null ? me.optInt("team", -1) : -1;
+        col.addView(Ui.heading(this, "Players " + seats.length() + "/" + maxPlayers + (teams ? "  ·  🤝 2 vs 2" : "")));
+        if (teams) col.addView(Ui.muted(this, "Team A (seats 1 + 3) plays Team B (seats 2 + 4). Partners share a private team chat in the match."));
         LinearLayout list = Ui.card(this);
         boolean everyoneReady = true;
         for (int i = 0; i < maxPlayers; i++) {
@@ -146,6 +149,11 @@ public class RoomActivity extends BaseActivity {
             t.addView(Ui.bold(Ui.text(this, s.optString("name") + (i == you ? " (you)" : ""), 15, Ui.INK)));
             LinearLayout tags = Ui.hbox(this);
             tags.addView(colorDot(s.optString("color")));
+            if (teams && !s.isNull("team")) {
+                int team = s.optInt("team");
+                String label = (team == 0 ? "TEAM A" : "TEAM B") + (i != you && team == myTeam ? " · PARTNER" : "");
+                tags.addView(tagGap(Ui.tag(this, label, team == 0 ? 0xffff8a80 : 0xff80d8ff)));
+            }
             if (s.optBoolean("isHost")) tags.addView(tagGap(Ui.tag(this, "👑 HOST", Ui.GOLD)));
             if (bot) tags.addView(tagGap(Ui.tag(this, "BOT", Ui.MUTED)));
             if (!s.optBoolean("connected")) tags.addView(tagGap(Ui.tag(this, s.optBoolean("ready") ? "OFFLINE" : "JOINING", Ui.DANGER)));
@@ -169,9 +177,11 @@ public class RoomActivity extends BaseActivity {
             col.addView(Ui.muted(this, "The match starts automatically when the room is full (or after a short wait with at least 2 players)."));
         } else if (isHost) {
             TextView start = Ui.button(this, "▶ Start match", "primary", v -> app.socket.emit("room:start", new JSONObject(), PlayFlow.toastOnError()));
-            Ui.setEnabled(start, seats.length() >= 2 && everyoneReady);
+            int need = teams ? 4 : 2;
+            Ui.setEnabled(start, seats.length() >= need && everyoneReady);
             col.addView(start);
-            TextView hint = Ui.muted(this, seats.length() < 2 ? "Invite a friend to begin." : everyoneReady ? "Everyone is ready!" : "Waiting for players to get ready…");
+            TextView hint = Ui.muted(this, seats.length() < need ? (teams ? "2 vs 2 needs 4 players — invite friends." : "Invite a friend to begin.")
+                    : everyoneReady ? "Everyone is ready!" : "Waiting for players to get ready…");
             hint.setGravity(Gravity.CENTER);
             hint.setPadding(0, Ui.dp(this, 8), 0, 0);
             col.addView(hint);

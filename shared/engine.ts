@@ -25,6 +25,7 @@ export const DEFAULT_RULES: RuleConfig = {
   extraTurnOnHome: true,
   safeCells: true,
   playUntil: 'first',
+  teams: false,
 };
 
 export class RuleError extends Error {
@@ -32,6 +33,21 @@ export class RuleError extends Error {
     super(message);
     this.name = 'RuleError';
   }
+}
+
+/** Team of a colour in 2 vs 2: 0 = red + yellow, 1 = green + blue. */
+export function teamOf(color: Color): 0 | 1 {
+  return (COLORS.indexOf(color) % 2) as 0 | 1;
+}
+
+/** True when two players are partners in a team match (never for the same player). */
+export function areTeammates(state: GameState, a: number, b: number): boolean {
+  return a !== b && state.config.teams && teamOf(state.players[a].color) === teamOf(state.players[b].color);
+}
+
+/** Player indices that won a finished match: the winner, or both partners in 2 vs 2. */
+export function winnersOf(state: GameState): number[] {
+  return state.ranking.slice(0, state.config.teams ? 2 : 1);
 }
 
 /** Seat colours by player count, keeping opponents across from each other. */
@@ -46,6 +62,7 @@ export function createGame(seats: SeatSetup[], rules: Partial<RuleConfig> = {}):
   if (seats.length < 2 || seats.length > 4) throw new RuleError('Ludo needs 2 to 4 players');
   const colors = new Set(seats.map((s) => s.color));
   if (colors.size !== seats.length) throw new RuleError('Each player needs a distinct colour');
+  if (rules.teams && seats.length !== 4) throw new RuleError('2 vs 2 needs exactly 4 players');
   // Seat order always follows the clockwise colour order.
   const ordered = [...seats].sort((a, b) => COLORS.indexOf(a.color) - COLORS.indexOf(b.color));
   const players: PlayerState[] = ordered.map((s) => ({
@@ -103,7 +120,7 @@ export function captureVictims(
   if (state.config.safeCells && isSafeIndex(at)) return [];
   const victims: { player: number; token: number }[] = [];
   state.players.forEach((op, oi) => {
-    if (oi === playerIdx) return;
+    if (oi === playerIdx || areTeammates(state, playerIdx, oi)) return;
     op.tokens.forEach((prog, ti) => {
       if (absIndex(op.color, prog) === at) victims.push({ player: oi, token: ti });
     });
@@ -139,7 +156,8 @@ function passTurn(state: GameState, events: GameEvent[]): void {
   events.push({ type: 'turn', player: next });
 }
 
-function finishGame(state: GameState, events: GameEvent[]): void {
+/** `lastHome` is the player whose finish ended a team match (their team wins). */
+function finishGame(state: GameState, events: GameEvent[], lastHome?: number): void {
   // Rank anyone still playing by how far their tokens have travelled.
   const remaining = state.players
     .map((p, i) => ({ i, score: p.tokens.reduce((a, t) => a + Math.max(t, 0) + (t >= 0 ? 1 : 0), 0) }))
@@ -148,6 +166,12 @@ function finishGame(state: GameState, events: GameEvent[]): void {
   for (const { i } of remaining) {
     state.ranking.push(i);
     state.players[i].rank = state.ranking.length;
+  }
+  if (state.config.teams && lastHome !== undefined) {
+    // The team that got both partners home takes 1st and 2nd, even if a rival finished earlier.
+    const team = teamOf(state.players[lastHome].color);
+    state.ranking.sort((a, b) => Number(teamOf(state.players[a].color) !== team) - Number(teamOf(state.players[b].color) !== team));
+    state.ranking.forEach((pi, k) => (state.players[pi].rank = k + 1));
   }
   state.phase = 'over';
   state.dice = null;
@@ -214,8 +238,10 @@ export function applyAction(prev: GameState, action: GameAction): { state: GameS
       state.ranking.push(pi);
       player.rank = state.ranking.length;
       events.push({ type: 'playerFinished', player: pi, rank: player.rank });
-      if (state.config.playUntil === 'first' || activeCount(state) <= 1) {
-        finishGame(state, events);
+      // 2 vs 2: the team wins when the second partner gets home.
+      const teamDone = state.config.teams && state.players.some((p, i) => areTeammates(state, pi, i) && p.rank !== null);
+      if (state.config.teams ? teamDone : state.config.playUntil === 'first' || activeCount(state) <= 1) {
+        finishGame(state, events, pi);
         state.seq += 1;
         return { state, events };
       }

@@ -29,14 +29,16 @@ final class PlayFlow {
                 "join", () -> emitRoom("room:quick", obj("modeId", mode.optString("id"))));
     }
 
-    void create(JSONObject mode, int maxPlayers) {
+    /** Create a private room; `teams` makes it a 2 vs 2 room (4 players). */
+    void create(JSONObject mode, int maxPlayers, boolean teams) {
         JSONObject p = obj("modeId", mode.optString("id"));
         try {
             p.put("maxPlayers", maxPlayers);
+            p.put("teams", teams);
         } catch (Exception ignored) {
             // not reachable
         }
-        confirm("Create " + roomName(mode.optString("name")), mode.optLong("entryFee"), null, "create", () -> emitRoom("room:create", p));
+        confirm("Create " + (teams ? "2 vs 2 " : "") + roomName(mode.optString("name")), mode.optLong("entryFee"), null, "create", () -> emitRoom("room:create", p));
     }
 
     /** Look up a room code, show what it costs, then join. */

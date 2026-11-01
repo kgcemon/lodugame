@@ -209,7 +209,7 @@ export const net = {
   disconnect,
   isConnected: () => !!socket?.connected,
   quick: (modeId: string) => roomCall('room:quick', { modeId }),
-  create: (modeId: string, maxPlayers: number) => roomCall('room:create', { modeId, maxPlayers }),
+  create: (modeId: string, maxPlayers: number, teams = false) => roomCall('room:create', { modeId, maxPlayers, teams }),
   join: (code: string) => roomCall('room:join', { code }),
   ready: (ready: boolean) => act('room:ready', { ready }),
   addBot: () => act('room:addBot'),
@@ -218,7 +218,8 @@ export const net = {
   rematch: () => act('game:rematch'),
   roll: () => act('game:roll'),
   move: (token: number) => act('game:move', { token }),
-  chat: async (text: string, quick = false) => act('chat:send', { text, quick }),
+  /** `team` sends to my 2 vs 2 partner only. */
+  chat: async (text: string, quick = false, team = false) => act('chat:send', { text, quick, team }),
   emote: async (id: string) => act('emote:send', { id }),
   leave: async () => {
     resetSocial();

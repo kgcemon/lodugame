@@ -1,7 +1,7 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import type { Server, Socket } from 'socket.io';
 import { chooseMove } from '../shared/ai';
-import { applyAction, colorsForCount, createGame, RuleError } from '../shared/engine';
+import { applyAction, colorsForCount, createGame, RuleError, teamOf } from '../shared/engine';
 import type {
   ClientToServerEvents,
   GameUpdate,
@@ -89,6 +89,8 @@ interface Room {
   entryFee: number;
   payoutMultiplier: number;
   maxPlayers: number;
+  /** 2 vs 2 (always 4 seats). */
+  teams: boolean;
   status: RoomStatus;
   seats: Seat[];
   game: GameState | null;
@@ -166,13 +168,14 @@ export class RoomManager {
       code: room.code,
       isPublic: room.isPublic,
       maxPlayers: room.maxPlayers,
+      teams: room.teams,
       status: room.status,
       mode: { id: room.mode.id, name: room.mode.name },
       entryFee: room.entryFee,
       payoutMultiplier: room.payoutMultiplier,
       you: pid ? room.seats.findIndex((s) => s.playerId === pid) : -1,
       waitMsLeft: room.waitUntil ? Math.max(0, room.waitUntil - Date.now()) : null,
-      seats: room.seats.map((s) => ({
+      seats: room.seats.map((s, i) => ({
         id: s.id,
         name: s.name,
         color: s.color,
@@ -182,6 +185,7 @@ export class RoomManager {
         ready: s.kind === 'ai' || ((s.ready || s.playerId === room.hostPid) && !s.pending),
         connected: s.kind === 'ai' || (s.connected && !s.pending),
         isHost: s.playerId !== null && s.playerId === room.hostPid,
+        team: room.teams ? this.teamOfSeat(room, s, i) : null,
       })),
     };
   }
@@ -203,6 +207,21 @@ export class RoomManager {
       hostName: host?.name ?? null,
       joinable: room.status === 'lobby' && room.seats.length < room.maxPlayers,
     };
+  }
+
+  /**
+   * A seat's 2 vs 2 team. In the lobby it follows the seat order (1 + 3 against 2 + 4),
+   * which is how colours are dealt at the start; in a match it follows the colour.
+   */
+  private teamOfSeat(room: Room, seat: Seat, index = room.seats.indexOf(seat)): 0 | 1 {
+    return room.status === 'lobby' ? ((index % 2) as 0 | 1) : teamOf(seat.color);
+  }
+
+  /** Chat this player may read: everything for the room plus their own team's messages. */
+  private chatFor(room: Room, seat: Seat): ChatMessage[] {
+    if (!room.teams) return room.chat;
+    const team = this.teamOfSeat(room, seat);
+    return room.chat.filter((m) => m.team === null || m.team === team);
   }
 
   private broadcastRoom(room: Room): void {
@@ -252,7 +271,7 @@ export class RoomManager {
       room.emptyTimer = null;
     }
     socket.join(room.code);
-    socket.emit('chat:history', room.chat);
+    socket.emit('chat:history', this.chatFor(room, seat));
     if (room.game) {
       if (this.isCurrent(room, seat)) this.reschedule(room, 0);
       socket.emit('game:update', this.update(room, []));
@@ -334,7 +353,7 @@ export class RoomManager {
   }
 
   /** Create a room backed by a new match row, seat the creator and charge their entry fee. */
-  private async openRoom(socket: ClientSocket, mode: MatchMode, maxPlayers: number, isPublic: boolean, quick: boolean): Promise<Room> {
+  private async openRoom(socket: ClientSocket, mode: MatchMode, maxPlayers: number, isPublic: boolean, quick: boolean, teams = false): Promise<Room> {
     const u = this.user(socket);
     if (this.rooms.size >= MAX_ROOMS) throw new RuleError('Server is full, try again shortly');
     await this.ledger.assertCanPlay(u.id, mode.entryFee);
@@ -351,6 +370,7 @@ export class RoomManager {
       entryFee: info.entryFee,
       payoutMultiplier: info.payoutMultiplier,
       maxPlayers,
+      teams,
       status: 'lobby',
       seats: [],
       game: null,
@@ -386,12 +406,14 @@ export class RoomManager {
     return room;
   }
 
-  async create(socket: ClientSocket, modeId: unknown, maxPlayers: unknown): Promise<RoomView> {
+  async create(socket: ClientSocket, modeId: unknown, maxPlayers: unknown, teams: unknown = false): Promise<RoomView> {
     const u = this.user(socket);
     const mode = this.settings.mode(modeId);
     const n = Number(maxPlayers);
     if (!Number.isInteger(n) || n < 2 || n > 4) throw new RuleError('Rooms hold 2 to 4 players');
-    const room = await this.openRoom(socket, mode, n, false, false);
+    if (teams === true && n !== 4) throw new RuleError('2 vs 2 rooms hold exactly 4 players');
+    if (teams === true && mode.maxPlayers < 4) throw new RuleError(`${mode.name} is a 2-player mode`);
+    const room = await this.openRoom(socket, mode, n, false, false, teams === true);
     return this.view(room, u.id);
   }
 
@@ -428,7 +450,7 @@ export class RoomManager {
     }
     seat.pending = false;
     socket.join(room.code);
-    socket.emit('chat:history', room.chat);
+    socket.emit('chat:history', this.chatFor(room, seat));
     this.broadcastRoom(room);
     if (room.quick) this.checkQuickStart(room);
     return this.view(room, u.id);
@@ -549,6 +571,9 @@ export class RoomManager {
     if (room.seats.length < 2) {
       throw new RuleError(room.entryFee > 0 ? 'Need at least 2 players — invite a friend' : 'Need at least 2 players — invite a friend or add a bot');
     }
+    if (room.teams && room.seats.length !== 4) {
+      throw new RuleError(room.entryFee > 0 ? '2 vs 2 needs 4 players — invite friends' : '2 vs 2 needs 4 players — invite friends or add bots');
+    }
     const notReady = room.seats.filter((s) => s.kind === 'human' && s.playerId !== room.hostPid && !s.ready);
     if (notReady.length) throw new RuleError(`Waiting for ${notReady.map((s) => s.name).join(', ')} to be ready`);
     await this.startGame(room);
@@ -614,7 +639,7 @@ export class RoomManager {
       room.starting = false;
     }
     if (!this.rooms.has(room.code)) return;
-    room.game = createGame(room.seats.map((s) => ({ color: s.color, name: s.name, kind: s.kind, aiLevel: s.aiLevel })));
+    room.game = createGame(room.seats.map((s) => ({ color: s.color, name: s.name, kind: s.kind, aiLevel: s.aiLevel })), { teams: room.teams });
     room.status = 'playing';
     room.lastEvents = [];
     room.rerollable = null;
@@ -695,12 +720,17 @@ export class RoomManager {
     return l;
   }
 
-  /** Room chat. The sender is whoever owns this socket's seat — clients cannot name a sender. */
-  chat(socket: ClientSocket, raw: unknown, quick: unknown): void {
+  /**
+   * Room chat. The sender is whoever owns this socket's seat — clients cannot name a sender.
+   * In 2 vs 2 a team message reaches only the sender's own team.
+   */
+  chat(socket: ClientSocket, raw: unknown, quick: unknown, team: unknown = false): void {
     const { room, seat } = this.mySeat(socket);
     const text = normalizeChat(raw);
     if (!text) throw new RuleError('Message is empty or too long');
+    if (team === true && !room.teams) throw new RuleError('Team chat is for 2 vs 2 rooms');
     if (!this.limiter(room, seat.playerId!).chat.take()) throw new RuleError('You are sending messages too fast');
+    const myTeam = team === true ? this.teamOfSeat(room, seat) : null;
     const msg: ChatMessage = {
       id: ++room.chatSeq,
       seatId: seat.id,
@@ -709,10 +739,17 @@ export class RoomManager {
       text,
       at: Date.now(),
       quick: quick === true,
+      team: myTeam,
     };
     room.chat.push(msg);
     if (room.chat.length > CHAT_HISTORY) room.chat.splice(0, room.chat.length - CHAT_HISTORY);
-    this.io.to(room.code).emit('chat:message', msg);
+    if (myTeam === null) {
+      this.io.to(room.code).emit('chat:message', msg);
+      return;
+    }
+    for (const s of room.seats) {
+      if (s.socketId && s.playerId && this.teamOfSeat(room, s) === myTeam) this.io.to(s.socketId).emit('chat:message', msg);
+    }
   }
 
   emote(socket: ClientSocket, id: unknown): void {
@@ -859,13 +896,16 @@ export class RoomManager {
       return seat && seat.kind === 'human' && seat.playerId ? seat.playerId : null;
     });
     const winnerColor = state.players[state.ranking[0]].color;
+    // 2 vs 2: both partners win (they are ranked 1st and 2nd).
+    const winners = state.config.teams ? 2 : 1;
+    const winnerColors = state.ranking.slice(0, winners).map((pi) => state.players[pi].color);
     try {
-      const res = await this.ledger.settle(room.matchId, ranking, winnerColor);
+      const res = await this.ledger.settle(room.matchId, ranking, winnerColor, winners);
       if (res) {
-        const winnerSeat = room.seats.find((s) => s.color === winnerColor);
         this.io.to(room.code).emit('match:settled', {
-          winnerName: winnerSeat?.name ?? 'Unknown',
+          winnerName: winnerColors.map((c) => room.seats.find((s) => s.color === c)?.name ?? 'Unknown').join(' & '),
           winnerColor,
+          winnerColors,
           payout: res.payout,
           entryFee: room.entryFee,
         });

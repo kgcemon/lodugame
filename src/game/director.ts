@@ -1,4 +1,5 @@
 import { FINISH } from '../../shared/board';
+import { winnersOf } from '../../shared/engine';
 import type { GameEvent, GameState } from '../../shared/types';
 import { botReaction } from '../../shared/social';
 import { sfx } from '../audio/audio';
@@ -100,11 +101,10 @@ function recordIfOver(state: GameState): void {
   const s = useGame.getState();
   if (state.phase !== 'over' || recordedMatch === matchId || !s.matchKind) return;
   recordedMatch = matchId;
-  const winner = state.players[state.ranking[0]];
   useSettings.getState().addRecord({
     at: Date.now(),
     mode: s.matchKind,
-    won: s.localColors.includes(winner.color),
+    won: winnersOf(state).some((pi) => s.localColors.includes(state.players[pi].color)),
     players: state.players.map((p) => ({ name: p.name, color: p.color, rank: p.rank, you: s.localColors.includes(p.color) })),
   });
 }
@@ -204,7 +204,7 @@ async function play(e: GameEvent): Promise<void> {
       cameraFocus.celebrate = true;
       const s = useGame.getState();
       const winner = view.players[e.ranking[0]];
-      const won = s.localColors.includes(winner.color);
+      const won = e.ranking.slice(0, view.config.teams ? 2 : 1).some((pi) => s.localColors.includes(view.players[pi].color));
       sfx(won || s.matchKind === 'local' ? 'victory' : 'defeat');
       const [wx, , wz] = pointFor(winner.color, FINISH, 0);
       for (let i = 0; i < 4; i++) {

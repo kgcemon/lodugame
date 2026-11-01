@@ -94,6 +94,9 @@ public class GameActivity extends BaseActivity {
     private LocalGame local;
     private JSONObject localUpdate;
     private long localActedAt;
+    /** 2 vs 2: chat goes to my partner only while this is on. */
+    private boolean teamChat;
+    private TextView chatAllBtn, chatTeamBtn, chatTitle;
 
     private final Runnable ticker = new Runnable() {
         @Override
@@ -120,7 +123,9 @@ public class GameActivity extends BaseActivity {
         gl.setEGLContextClientVersion(2);
         gl.setEGLConfigChooser(new ConfigChooser());
         gl.setRenderer(renderer);
-        gl.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
+        // Frames are drawn on demand: the renderer asks for the next one only while animating.
+        gl.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+        renderer.requestRender = gl::requestRender;
         compact = getResources().getConfiguration().screenHeightDp < 700;
         setupTouch();
         buildHud();
@@ -152,7 +157,7 @@ public class GameActivity extends BaseActivity {
             return;
         }
         String color = myColor();
-        gl.queueEvent(() -> renderer.setMyColor(color));
+        onGl(() -> renderer.setMyColor(color));
         JSONObject last = local != null ? localUpdate : app.socket.lastUpdate;
         if (last != null) onUpdate(last, true);
         renderChips();
@@ -252,7 +257,7 @@ public class GameActivity extends BaseActivity {
             rerollUntil = 0;
         }
         boolean highlight = isMyTurn(next) && "move".equals(next.phase);
-        gl.queueEvent(() -> {
+        onGl(() -> {
             renderer.applyUpdate(next, events, contiguous);
             renderer.setHighlight(highlight);
         });
@@ -265,6 +270,22 @@ public class GameActivity extends BaseActivity {
         } else {
             dismissResult();
         }
+    }
+
+    /** An online 2 vs 2 match. */
+    private boolean teams() {
+        return local == null && app.socket.room != null && app.socket.room.optBoolean("teams");
+    }
+
+    /** 2 vs 2 team of a colour: 0 = red + yellow, 1 = green + blue (engine.teamOf). */
+    private static int teamOf(String color) {
+        return Board.colorIndex(color) % 2;
+    }
+
+    /** Run on the GL thread, then draw a frame (the view only renders on demand). */
+    private void onGl(Runnable r) {
+        gl.queueEvent(r);
+        gl.requestRender();
     }
 
     private boolean isMyTurn(GameState s) {
@@ -335,6 +356,7 @@ public class GameActivity extends BaseActivity {
                     }
                     if (!dragging[0] && Math.hypot(dx, dy) > slop) cancelled[0] = true;
                     if (dragging[0]) {
+                        gl.requestRender();
                         renderer.yawOffset = Math.max(-75f, Math.min(75f, renderer.yawOffset + (ev.getX() - down[2]) * 0.25f));
                         down[2] = ev.getX();
                     }
@@ -374,7 +396,7 @@ public class GameActivity extends BaseActivity {
         }
         if (best < 0) return;
         int player = state.current, token = best;
-        gl.queueEvent(() -> renderer.setSelected(player, token));
+        onGl(() -> renderer.setSelected(player, token));
         gl.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
         move(token);
     }
@@ -447,7 +469,7 @@ public class GameActivity extends BaseActivity {
         app.socket.emit("game:move", PlayFlow.obj("token", token), res -> {
             busy = false;
             if (!res.optBoolean("ok")) {
-                gl.queueEvent(() -> renderer.setSelected(-1, -1));
+                onGl(() -> renderer.setSelected(-1, -1));
                 Sfx.get().play(Sfx.S.ERROR);
                 LudoApp.toast(res.optString("error", "Can't move that token"));
             }
@@ -666,7 +688,7 @@ public class GameActivity extends BaseActivity {
         } else if (room != null) {
             JSONObject mode = room.optJSONObject("mode");
             long fee = room.optLong("entryFee");
-            titleView.setText(mode != null ? mode.optString("name") : "Ludo");
+            titleView.setText((mode != null ? mode.optString("name") : "Ludo") + (room.optBoolean("teams") ? " · 2 vs 2" : ""));
             feeView.setText(fee > 0 ? "Entry " + Ui.coins(fee) + "  ·  Winner " + Ui.coins(Math.round(fee * room.optDouble("payoutMultiplier", 2)))
                     : "Free room — no coins at stake");
         }
@@ -708,7 +730,8 @@ public class GameActivity extends BaseActivity {
         wrap.setGravity(right ? Gravity.END : Gravity.START);
         wrap.setTag("chip:" + p.color);
 
-        TextView name = Ui.bold(Ui.text(this, (p.rank == 1 ? "🏆 " : p.rank > 1 ? "#" + p.rank + " " : "") + p.name, compact ? 11 : 12, Ui.INK));
+        boolean partner = teams() && !p.color.equals(app.socket.myColor()) && teamOf(p.color) == teamOf(app.socket.myColor());
+        TextView name = Ui.bold(Ui.text(this, (p.rank == 1 ? "🏆 " : p.rank > 1 ? "#" + p.rank + " " : "") + (partner ? "🤝 " : "") + p.name, compact ? 11 : 12, Ui.INK));
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.END);
         name.setMaxWidth(Ui.dp(this, size * 2.6f));
@@ -900,10 +923,15 @@ public class GameActivity extends BaseActivity {
         } else {
             warnedAt = -1;
         }
-        status.setText(text);
+        if (!text.contentEquals(status.getText())) status.setText(text);
         float frac = deadline > 0 && deadlineTotal > 0 ? Math.max(0f, Math.min(1f, (deadline - System.currentTimeMillis()) / (float) deadlineTotal)) : 0f;
         timerBar.setScaleX(frac);
-        timerBar.setBackground(Ui.round(frac < 0.25f ? Ui.DANGER : Ui.GOLD, Ui.dp(this, 2)));
+        // Runs 4x a second: only build a new drawable when the bar changes colour.
+        int barColor = frac < 0.25f ? Ui.DANGER : Ui.GOLD;
+        if (!Integer.valueOf(barColor).equals(timerBar.getTag())) {
+            timerBar.setTag(barColor);
+            timerBar.setBackground(Ui.round(barColor, Ui.dp(this, 2)));
+        }
         if (timerPie != null) timerPie.setFraction(frac, frac < 0.25f ? 0x99e53945 : 0x9922c55e);
         // Every time it's my turn to roll, my die glows and the arrow points at it.
         View myDice = root.findViewWithTag("dice:" + (local != null && state != null ? state.currentPlayer().color : app.socket.myColor()));
@@ -914,11 +942,14 @@ public class GameActivity extends BaseActivity {
         boolean retry = online && state != null && !"over".equals(state.phase) && canReroll() && !busy;
         if (retryBtn != null) {
             if (retry) {
-                GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xffffe27a, 0xfff5b400});
-                g.setShape(GradientDrawable.OVAL);
-                g.setStroke(Ui.dp(this, 1), 0xffa66f00);
-                retryBtn.setBackground(g);
-                retryBtn.setTextColor(0xff3b1d00);
+                if (!Boolean.TRUE.equals(retryBtn.getTag())) {
+                    retryBtn.setTag(Boolean.TRUE);
+                    GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xffffe27a, 0xfff5b400});
+                    g.setShape(GradientDrawable.OVAL);
+                    g.setStroke(Ui.dp(this, 1), 0xffa66f00);
+                    retryBtn.setBackground(g);
+                    retryBtn.setTextColor(0xff3b1d00);
+                }
                 retryCostView.setText("💎" + rerollCost);
                 float rf = rerollUntil > 0 && rerollTotal > 0 ? (rerollUntil - System.currentTimeMillis()) / (float) rerollTotal : 1f;
                 retryRing.setFraction(rf, Ui.GOLD);
@@ -939,11 +970,14 @@ public class GameActivity extends BaseActivity {
                     status.setText("Not lucky? Tap ↻ to roll again for 💎" + rerollCost + "  (" + secs + "s)");
                 }
             } else {
-                GradientDrawable g = new GradientDrawable();
-                g.setShape(GradientDrawable.OVAL);
-                g.setColor(0x33ffffff);
-                retryBtn.setBackground(g);
-                retryBtn.setTextColor(0x88ffffff);
+                if (!Boolean.FALSE.equals(retryBtn.getTag())) {
+                    retryBtn.setTag(Boolean.FALSE);
+                    GradientDrawable g = new GradientDrawable();
+                    g.setShape(GradientDrawable.OVAL);
+                    g.setColor(0x33ffffff);
+                    retryBtn.setBackground(g);
+                    retryBtn.setTextColor(0x88ffffff);
+                }
                 retryCostView.setText("");
                 retryRing.setFraction(0f, Ui.GOLD);
                 View rb = (View) retryBtn.getParent();
@@ -956,8 +990,11 @@ public class GameActivity extends BaseActivity {
             }
         }
         int unread = local != null ? 0 : app.socket.unreadChat;
-        chatBtn.setText(unread > 0 ? "💬" + Math.min(unread, 99) : "💬");
-        chatBtn.setTextSize(unread > 0 ? 16 : 22);
+        String chatLabel = unread > 0 ? "💬" + Math.min(unread, 99) : "💬";
+        if (!chatLabel.contentEquals(chatBtn.getText())) {
+            chatBtn.setText(chatLabel);
+            chatBtn.setTextSize(unread > 0 ? 16 : 22);
+        }
     }
 
     // ================================================================= result
@@ -973,14 +1010,17 @@ public class GameActivity extends BaseActivity {
         String me = local != null ? "" : app.socket.myColor();
         int winnerIdx = state.ranking.isEmpty() ? -1 : state.ranking.get(0);
         GameState.Player winner = winnerIdx >= 0 ? state.players.get(winnerIdx) : null;
-        boolean iWon = winner != null && winner.color.equals(me);
+        boolean teamMatch = teams();
+        // 2 vs 2: both partners win (ranked 1st and 2nd).
+        boolean iWon = winner != null && (winner.color.equals(me) || (teamMatch && teamOf(winner.color) == teamOf(me)));
         if (firstTime) Sfx.get().play(iWon || local != null ? Sfx.S.VICTORY : Sfx.S.DEFEAT);
         TextView big = Ui.text(this, iWon ? "🏆" : "🎲", 60, Ui.INK);
         big.setGravity(Gravity.CENTER);
         box.addView(big);
         JSONObject s = local != null ? null : app.socket.settlement;
         if (s != null && s.optLong("entryFee") > 0) {
-            Fx.GoldText pay = new Fx.GoldText(this, iWon ? "+🪙 " + Ui.fmt(s.optLong("payout")) : "Winner got 🪙 " + Ui.fmt(s.optLong("payout")), iWon ? 26 : 18);
+            Fx.GoldText pay = new Fx.GoldText(this, iWon ? "+🪙 " + Ui.fmt(s.optLong("payout"))
+                    : (teamMatch ? "Each winner got 🪙 " : "Winner got 🪙 ") + Ui.fmt(s.optLong("payout")), iWon ? 26 : 18);
             pay.setGravity(Gravity.CENTER);
             box.addView(pay, Ui.lpMatchWrap());
         }
@@ -1004,7 +1044,14 @@ public class GameActivity extends BaseActivity {
                     Popup.danger("Leave", this::finish));
             return;
         }
-        resultDialog = Popup.showModal(this, iWon ? "You won!" : winner != null ? winner.name + " wins" : "Match over", box,
+        String title;
+        if (teamMatch && winner != null) {
+            GameState.Player mate = state.ranking.size() > 1 ? state.players.get(state.ranking.get(1)) : null;
+            title = iWon ? "Your team won!" : winner.name + (mate != null ? " & " + mate.name : "") + " win";
+        } else {
+            title = iWon ? "You won!" : winner != null ? winner.name + " wins" : "Match over";
+        }
+        resultDialog = Popup.showModal(this, title, box,
                 Popup.ok("Rematch", () -> app.socket.emit("game:rematch", new JSONObject(), res -> {
                     if (!res.optBoolean("ok")) {
                         LudoApp.toast(res.optString("error", "Rematch failed"));
@@ -1047,9 +1094,20 @@ public class GameActivity extends BaseActivity {
         chatPanel.setPadding(p, p, p, p);
         chatPanel.setClickable(true);
         LinearLayout head = Ui.hbox(this);
-        head.addView(Ui.bold(Ui.text(this, "Room chat", 16, Ui.INK)), Ui.weight(1));
+        chatTitle = Ui.bold(Ui.text(this, "Room chat", 16, Ui.INK));
+        head.addView(chatTitle, Ui.weight(1));
         head.addView(Ui.smallButton(this, "Close", "glass", v -> closePanels()));
         chatPanel.addView(head);
+        // 2 vs 2: talk to everyone, or privately to my partner.
+        LinearLayout channels = Ui.hbox(this);
+        channels.setTag("chat:channels");
+        chatAllBtn = Ui.smallButton(this, "💬 Everyone", "glass", v -> setTeamChat(false));
+        chatTeamBtn = Ui.smallButton(this, "🤝 Team only", "glass", v -> setTeamChat(true));
+        channels.addView(chatAllBtn, Ui.weight(1));
+        channels.addView(Ui.gap(this, 8));
+        channels.addView(chatTeamBtn, Ui.weight(1));
+        Ui.margins(channels, this, 0, 8, 0, 0);
+        chatPanel.addView(channels);
         chatScroll = new ScrollView(this);
         chatList = Ui.vbox(this);
         chatScroll.addView(chatList);
@@ -1138,6 +1196,12 @@ public class GameActivity extends BaseActivity {
         renderStatus();
     }
 
+    /** Pick who my next chat messages go to (2 vs 2 only). */
+    private void setTeamChat(boolean team) {
+        teamChat = team;
+        renderChat();
+    }
+
     private void openEmotes() {
         Sfx.get().play(Sfx.S.CLICK);
         chatPanel.setVisibility(View.GONE);
@@ -1157,15 +1221,27 @@ public class GameActivity extends BaseActivity {
 
     private void renderChat() {
         if (chatList == null) return;
+        boolean teams = teams();
+        if (!teams) teamChat = false;
+        View channels = chatPanel.findViewWithTag("chat:channels");
+        if (channels != null) channels.setVisibility(teams ? View.VISIBLE : View.GONE);
+        if (teams) {
+            Fx.bevel(chatAllBtn, teamChat ? Fx.PURPLE_DARK : Fx.YELLOW, 12, 3, true);
+            chatAllBtn.setTextColor(teamChat ? Ui.INK : 0xff4a2600);
+            Fx.bevel(chatTeamBtn, teamChat ? Fx.GREEN : Fx.PURPLE_DARK, 12, 3, true);
+            chatTitle.setText(teamChat ? "Team chat 🤝" : "Room chat");
+        }
         chatList.removeAllViews();
         String mine = app.socket.mySeatId();
-        if (app.socket.chat.isEmpty()) chatList.addView(Ui.muted(this, "No messages yet. Say hi! 👋"));
+        if (app.socket.chat.isEmpty()) chatList.addView(Ui.muted(this, teams ? "No messages yet. Plan with your partner! 🤝" : "No messages yet. Say hi! 👋"));
         for (JSONObject m : app.socket.chat) {
             boolean me = mine.equals(m.optString("seatId"));
+            boolean team = !m.isNull("team") && m.has("team");
             LinearLayout line = Ui.vbox(this);
             line.setPadding(Ui.dp(this, 10), Ui.dp(this, 6), Ui.dp(this, 10), Ui.dp(this, 6));
-            line.setBackground(Ui.round(me ? 0x332f7cf0 : 0x14ffffff, Ui.dp(this, 12)));
-            line.addView(Ui.bold(Ui.text(this, m.optString("name") + (me ? " (you)" : ""), 12, Board.colorArgb(m.optString("color")))));
+            line.setBackground(team ? Ui.roundStroke(0x3322b46b, Ui.dp(this, 12), Ui.dp(this, 1), 0x8822b46b)
+                    : Ui.round(me ? 0x332f7cf0 : 0x14ffffff, Ui.dp(this, 12)));
+            line.addView(Ui.bold(Ui.text(this, (team ? "🤝 TEAM · " : "") + m.optString("name") + (me ? " (you)" : ""), 12, Board.colorArgb(m.optString("color")))));
             line.addView(Ui.text(this, m.optString("text"), 15, Ui.INK));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.gravity = me ? Gravity.END : Gravity.START;
@@ -1181,6 +1257,7 @@ public class GameActivity extends BaseActivity {
         JSONObject p = PlayFlow.obj("text", text);
         try {
             p.put("quick", quick);
+            p.put("team", teamChat && teams());
         } catch (Exception ignored) {
             // not reachable
         }

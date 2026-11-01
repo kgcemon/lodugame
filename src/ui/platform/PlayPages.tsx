@@ -27,7 +27,7 @@ export function useModes(includePrivate = false): MatchMode[] {
 
 type EntryRequest =
   | { kind: 'quick'; mode: MatchMode }
-  | { kind: 'create'; mode: MatchMode; maxPlayers: number }
+  | { kind: 'create'; mode: MatchMode; maxPlayers: number; teams: boolean }
   | { kind: 'join'; preview: RoomPreview };
 
 /** Confirm the fee, call the server, handle "insufficient coins", go to the room. */
@@ -49,7 +49,7 @@ export function useEntryFlow() {
     setError(null);
     let res: RoomResult;
     if (req.kind === 'quick') res = await net.quick(req.mode.id);
-    else if (req.kind === 'create') res = await net.create(req.mode.id, req.maxPlayers);
+    else if (req.kind === 'create') res = await net.create(req.mode.id, req.maxPlayers, req.teams);
     else res = await net.join(req.preview.code);
     setBusy(false);
     if (res.ok) {
@@ -255,6 +255,7 @@ export function CreateRoomPage() {
   const modes = useModes(true);
   const [modeId, setModeId] = useState(params.get('mode') ?? 'friendly');
   const [players, setPlayers] = useState(4);
+  const [teams, setTeams] = useState(false);
   const flow = useEntryFlow();
   const mode = modes.find((m) => m.id === modeId) ?? modes[0];
   if (!mode) return <Spinner />;
@@ -279,7 +280,21 @@ export function CreateRoomPage() {
             <span className="label">Players</span>
             <Segmented value={players} options={[2, 3, 4].map((n) => ({ value: n, label: `${n} players` }))} onChange={setPlayers} />
           </div>
-          <Button variant="primary" size="lg" icon={<IconPlus />} onClick={() => flow.start({ kind: 'create', mode, maxPlayers: players })}>
+          {players === 4 && (
+            <div className="field">
+              <span className="label">Play as</span>
+              <Segmented
+                value={teams ? 'teams' : 'solo'}
+                options={[
+                  { value: 'solo', label: 'Everyone for themselves' },
+                  { value: 'teams', label: '🤝 2 vs 2 teams' },
+                ]}
+                onChange={(v) => setTeams(v === 'teams')}
+              />
+              {teams && <p className="hint">Seats 1 + 3 play against 2 + 4. Partners can't capture each other and get a private team chat.</p>}
+            </div>
+          )}
+          <Button variant="primary" size="lg" icon={<IconPlus />} onClick={() => flow.start({ kind: 'create', mode, maxPlayers: players, teams: players === 4 && teams })}>
             Create room
           </Button>
         </div>

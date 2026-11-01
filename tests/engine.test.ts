@@ -230,3 +230,39 @@ describe('AI and full games', () => {
     }
   });
 });
+
+describe('2 vs 2 teams', () => {
+  it('needs exactly four players', () => {
+    expect(() => game(2, { teams: true })).toThrow(RuleError);
+  });
+
+  it('never captures a partner, but still captures rivals', () => {
+    // Red lands on absolute square 31, where yellow (partner) sits at progress 5.
+    let s = withTokens(withTokens(game(4, { teams: true }), 0, [28, -1, -1, -1]), 2, [5, -1, -1, -1]);
+    let r = applyAction(roll(s, 3).state, { type: 'move', token: 0 });
+    expect(r.events.some((e) => e.type === 'captured')).toBe(false);
+    expect(r.state.players[2].tokens[0]).toBe(5);
+    // Green (rival) on the same square is sent home.
+    s = withTokens(withTokens(game(4, { teams: true }), 0, [28, -1, -1, -1]), 1, [18, -1, -1, -1]);
+    r = applyAction(roll(s, 3).state, { type: 'move', token: 0 });
+    expect(r.state.players[1].tokens[0]).toBe(-1);
+  });
+
+  it('plays on when one partner finishes and ranks the winning team first', () => {
+    let s = withTokens(game(4, { teams: true }), 0, [FINISH, FINISH, FINISH, FINISH - 1]);
+    s = applyAction(roll(s, 1).state, { type: 'move', token: 3 }).state;
+    expect(s.phase).toBe('roll');
+    expect(s.players[0].rank).toBe(1);
+    // Green (other team) finishes next, then yellow brings red's team home.
+    s.current = 1;
+    s.players[1].tokens = [FINISH, FINISH, FINISH, FINISH - 2];
+    s = applyAction(roll(s, 2).state, { type: 'move', token: 3 }).state;
+    expect(s.phase).toBe('roll');
+    s.current = 2;
+    s.players[2].tokens = [FINISH, FINISH, FINISH, FINISH - 4];
+    const end = applyAction(roll(s, 4).state, { type: 'move', token: 3 });
+    expect(end.state.phase).toBe('over');
+    expect(end.state.ranking.slice(0, 2).sort()).toEqual([0, 2]);
+    expect(end.state.players[1].rank).toBe(3);
+  });
+});

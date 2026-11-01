@@ -92,6 +92,19 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     public volatile float yawOffset;
     /** True while a finger is turning the board. */
     public volatile boolean dragging;
+    /**
+     * Asks for another frame. The view renders on demand (saves battery): a frame that is
+     * still animating requests the next one, and a still board draws nothing.
+     */
+    public volatile Runnable requestRender;
+    /** Camera inputs of the last solved camera; it is only solved again when one changes. */
+    private int camW = -1, camH = -1;
+    private float camYaw = Float.NaN;
+    private boolean camClassic;
+    private String camColor;
+    /** Token rest positions need recomputing (state changed or a token is moving). */
+    private boolean layoutDirty = true;
+    private final List<Integer> noMoves = new ArrayList<>();
     /** Token the player just tapped (shown with a bright ring until the server answers). */
     private int selPlayer = -1, selToken = -1;
     /** When the selected token was tapped (for its pop and flash). */
@@ -177,6 +190,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     }
 
     private void snap() {
+        layoutDirty = true;
         if (state == null) return;
         for (int p = 0; p < state.players.size(); p++) System.arraycopy(state.players.get(p).tokens, 0, shown[p], 0, 4);
     }
@@ -378,6 +392,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     }
 
     private void step(long now) {
+        if (cur != null || !queue.isEmpty()) layoutDirty = true;
         if (cur == null && !queue.isEmpty()) {
             cur = queue.poll();
             curStart = now;
@@ -418,7 +433,8 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
 
     /** Rest positions, with co-located tokens fanned out and shrunk a little. */
     private void layout() {
-        if (state == null) return;
+        if (state == null || !layoutDirty) return;
+        layoutDirty = false;
         Map<String, List<int[]>> groups = new HashMap<>();
         for (int p = 0; p < state.players.size(); p++) {
             int ci = state.players.get(p).ci;
@@ -490,12 +506,19 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     }
 
     private void camera() {
+        float yawNow = yawOffset;
+        if (width == camW && height == camH && yawNow == camYaw && classic == camClassic && myColor.equals(camColor)) return;
+        camW = width;
+        camH = height;
+        camYaw = yawNow;
+        camClassic = classic;
+        camColor = myColor;
         float aspect = width / (float) height;
         float fovy = 40f;
         // Phones (portrait): higher camera so the board reads clearly; wider screens: more cinematic.
         // In a tall area a steeper view lets the (width-limited) board also fill more height.
         double pitch = Math.toRadians(classic ? 90 : aspect < 0.7f ? 70 : aspect < 0.85f ? 64 : aspect < 1.2f ? 56 : 50);
-        double yaw = Math.toRadians(baseYaw(myColor) + yawOffset);
+        double yaw = Math.toRadians(baseYaw(myColor) + yawNow);
         // Closest distance at which every corner of the board (frame included) stays on screen.
         float lo = 5f, hi = 200f;
         for (int i = 0; i < 24; i++) {
@@ -587,7 +610,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         draw(boardTop);
 
         float pulse = (float) Math.sin(now / 160.0);
-        List<Integer> movable = highlight && idle && state != null ? state.movableTokens() : new ArrayList<>();
+        List<Integer> movable = highlight && idle && state != null ? state.movableTokens() : noMoves;
         int curPlayer = state != null ? state.current : -1;
 
         // Decals lying on the board (soft shadows, "pick me" rings): drawn without depth testing,
@@ -675,8 +698,14 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             float[] o = Board.yardOrigin(state.players.get(owner).ci);
             float tx = o[0] + 2.5f - 7f, tz = o[1] + 2.5f - 7f;
             float k = 0.15f;
+            diceTarget[0] = tx;
+            diceTarget[1] = tz;
             dicePos[0] += (tx - dicePos[0]) * k;
             dicePos[2] += (tz - dicePos[2]) * k;
+            if (Math.abs(tx - dicePos[0]) < 0.002f && Math.abs(tz - dicePos[2]) < 0.002f) {
+                dicePos[0] = tx;
+                dicePos[2] = tz;
+            }
         }
         Matrix.setIdentityM(model, 0);
         Matrix.translateM(model, 0, dicePos[0], DICE_HALF + diceLift, dicePos[2]);
@@ -692,7 +721,18 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         }
 
         publishScreen();
+
+        // Keep drawing only while something on the board moves or glows.
+        boolean diceSettled = state == null
+                || (Math.abs(dicePos[0] - diceTarget[0]) < 0.002f && Math.abs(dicePos[2] - diceTarget[1]) < 0.002f);
+        boolean moving = !idle || cur != null || !queue.isEmpty() || rollT >= 0 || dragging || yawOffset != 0f
+                || !movable.isEmpty() || (selPlayer >= 0 && now - selAt < 500) || !diceSettled;
+        Runnable rr = requestRender;
+        if (moving && rr != null) rr.run();
     }
+
+    /** Where the die is gliding to (x, z). */
+    private final float[] diceTarget = new float[2];
 
     /** A flat ring decal around a token: radius scale, colour and alpha. */
     private void ring(float[] q, float rs, float r, float g, float b, float a) {

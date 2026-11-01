@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { createServer, type Server as HttpServer } from 'node:http';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
@@ -81,6 +81,37 @@ function handler<P>(socket: ClientSocket, fn: (p: P) => object | void | Promise<
   };
 }
 
+const ASSET_TYPES: Record<string, string> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+};
+
+/**
+ * Serve the build's precompressed copies (.br, else .gz, see vite.config.ts) to browsers
+ * that accept them; anything else falls through to express.static.
+ */
+function precompressed(dir: string): express.RequestHandler {
+  return (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    const type = ASSET_TYPES[extname(req.path)];
+    if (!type || req.path.includes('..')) return next();
+    const accept = String(req.headers['accept-encoding'] ?? '');
+    for (const [enc, ext] of [['br', '.br'], ['gzip', '.gz']] as const) {
+      if (!new RegExp(`\\b${enc}\\b`).test(accept)) continue;
+      const file = join(dir, req.path + ext);
+      if (!existsSync(file)) continue;
+      res.setHeader('Content-Encoding', enc);
+      res.setHeader('Content-Type', type);
+      res.setHeader('Vary', 'Accept-Encoding');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      return res.sendFile(file, { maxAge: '1y', immutable: true }, (err) => err && next(err));
+    }
+    res.setHeader('Vary', 'Accept-Encoding');
+    next();
+  };
+}
+
 export async function startServer(opts: StartOptions = {}): Promise<RunningServer> {
   const cfg: ServerConfig = { ...loadConfig(), ...opts.config };
   if (opts.port !== undefined) cfg.port = opts.port;
@@ -116,6 +147,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
 
   const staticDir = cfg.staticDir === null ? null : resolve(fileURLToPath(new URL('../dist', import.meta.url)));
   if (staticDir && existsSync(staticDir)) {
+    app.use('/assets', precompressed(join(staticDir, 'assets')));
     app.use('/assets', express.static(join(staticDir, 'assets'), { immutable: true, maxAge: '1y', index: false }));
     app.use(express.static(staticDir, { index: false, maxAge: 0 }));
     // Single-page app: any other GET renders index.html.
@@ -156,7 +188,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     socket.join(`user:${user.id}`);
     presence.connect(user.id, socket.id);
     socket.on('session:hello', handler(socket, () => ({ room: rooms.hello(socket) })));
-    socket.on('room:create', handler(socket, async (p: { modeId: unknown; maxPlayers: unknown }) => ({ room: await rooms.create(socket, p.modeId, p.maxPlayers) })));
+    socket.on('room:create', handler(socket, async (p: { modeId: unknown; maxPlayers: unknown; teams?: unknown }) => ({ room: await rooms.create(socket, p.modeId, p.maxPlayers, p.teams) })));
     socket.on('room:join', handler(socket, async (p: { code: unknown }) => ({ room: await rooms.join(socket, p.code) })));
     socket.on('room:quick', handler(socket, async (p: { modeId: unknown }) => ({ room: await rooms.quick(socket, p.modeId) })));
     socket.on('room:ready', handler(socket, (p: { ready: unknown }) => rooms.setReady(socket, p.ready === true)));
@@ -168,7 +200,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     socket.on('game:move', handler(socket, (p: { token: unknown }) => rooms.move(socket, p.token)));
     socket.on('game:rematch', handler(socket, () => rooms.rematch(socket)));
     socket.on('game:reroll', handler(socket, () => rooms.reroll(socket)));
-    socket.on('chat:send', handler(socket, (p: { text: unknown; quick?: unknown }) => rooms.chat(socket, p.text, p.quick)));
+    socket.on('chat:send', handler(socket, (p: { text: unknown; quick?: unknown; team?: unknown }) => rooms.chat(socket, p.text, p.quick, p.team)));
     socket.on('emote:send', handler(socket, (p: { id: unknown }) => rooms.emote(socket, p.id)));
     socket.on('disconnect', () => {
       presence.disconnect(user.id, socket.id);
