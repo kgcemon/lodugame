@@ -61,10 +61,12 @@ public class GameActivity extends BaseActivity {
     private int rerollCost;
     private long rerollUntil;
 
-    private LinearLayout panels;
-    private TextView status, rollBtn, chatBtn, titleView, feeView, connView;
-    private TextView timerView;
-    private String timerBase = "";
+    /** Player card slots at the board's corners, in screen order: bottom-left, top-left, top-right, bottom-right. */
+    private final FrameLayout[] corners = new FrameLayout[4];
+    private TextView status, chatBtn, titleView, feeView, connView;
+    private LinearLayout statusBox;
+    /** Turn-timer dots on the current player's card. */
+    private LinearLayout timerDots;
     private View timerBar;
     private android.animation.ValueAnimator pulse;
     /** Short screens (e.g. 320x568 dp): smaller panels and controls, so the board keeps its room. */
@@ -426,20 +428,19 @@ public class GameActivity extends BaseActivity {
         mlp.leftMargin = Ui.dp(this, 8);
         bar.addView(mute, mlp);
         top.addView(bar);
-        panels = Ui.vbox(this);
-        Ui.margins(panels, this, 0, 10, 0, 0);
-        top.addView(panels);
         column.addView(top, Ui.lpMatchWrap());
 
-        // ---- middle: the 3D board
+        // ---- middle: player cards at the four corners around the 3D board
+        column.addView(cornerRow(1, 2), Ui.lpMatchWrap());
         FrameLayout boardArea = new FrameLayout(this);
         boardArea.addView(gl, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         column.addView(boardArea, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        column.addView(cornerRow(0, 3), Ui.lpMatchWrap());
 
-        // ---- bottom: status + timer, quick reactions, chat / roll / emotes
+        // ---- bottom: status + timer (doubles as the gem re-roll button), chat / reactions / emotes
         LinearLayout bottom = Ui.vbox(this);
         bottom.setPadding(pad, Ui.dp(this, 4), pad, Ui.dp(this, 10));
-        LinearLayout statusBox = Ui.vbox(this);
+        statusBox = Ui.vbox(this);
         statusBox.setBackground(Ui.round(0xcc2e1065, Ui.dp(this, 16)));
         statusBox.setPadding(Ui.dp(this, 14), Ui.dp(this, compact ? 5 : 8), Ui.dp(this, 14), Ui.dp(this, compact ? 5 : 8));
         status = Ui.bold(Ui.text(this, "", 15, Ui.INK));
@@ -456,12 +457,22 @@ public class GameActivity extends BaseActivity {
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 4));
         tlp.topMargin = Ui.dp(this, 6);
         statusBox.addView(track, tlp);
-        // After "View board", tapping the status brings the result card back (rematch / leave).
+        // Tapping the status re-rolls while a gem retry is offered; after "View board" it brings
+        // the result card back (rematch / leave).
         statusBox.setOnClickListener(v -> {
             if (state != null && "over".equals(state.phase)) showResult(true);
+            else if (canReroll() && !busy) {
+                pressPop(v);
+                reroll();
+            }
         });
+        Ui.margins(statusBox, this, 0, 4, 0, 6);
         bottom.addView(statusBox, Ui.lpMatchWrap());
 
+        LinearLayout controls = Ui.hbox(this);
+        controls.setGravity(Gravity.CENTER_VERTICAL);
+        chatBtn = roundIcon("💬", "Chat", v -> openChat());
+        controls.addView(chatBtn, new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl())));
         LinearLayout reactions = Ui.hbox(this);
         reactions.setGravity(Gravity.CENTER);
         for (String id : Social.INSTANT_REACTIONS) {
@@ -472,24 +483,9 @@ public class GameActivity extends BaseActivity {
                 pressPop(v);
                 sendEmote(id);
             });
-            reactions.addView(r, new LinearLayout.LayoutParams(0, Ui.dp(this, compact ? 36 : 44), 1));
+            reactions.addView(r, new LinearLayout.LayoutParams(0, Ui.dp(this, ctl()), 1));
         }
-        Ui.margins(reactions, this, 0, 4, 0, 4);
-        bottom.addView(reactions);
-
-        LinearLayout controls = Ui.hbox(this);
-        chatBtn = roundIcon("💬", "Chat", v -> openChat());
-        controls.addView(chatBtn, new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl())));
-        rollBtn = Ui.button(this, "🎲  ROLL", "primary", v -> {
-            pressPop(v);
-            roll();
-        });
-        rollBtn.setTextSize(20);
-        rollBtn.setPadding(0, 0, 0, 0);
-        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(0, Ui.dp(this, ctl()), 1);
-        rlp.leftMargin = Ui.dp(this, 12);
-        rlp.rightMargin = Ui.dp(this, 12);
-        controls.addView(rollBtn, rlp);
+        controls.addView(reactions, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         controls.addView(roundIcon("😀", "Emotes", v -> openEmotes()), new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl())));
         bottom.addView(controls, Ui.lpMatchWrap());
         column.addView(bottom, Ui.lpMatchWrap());
@@ -509,7 +505,27 @@ public class GameActivity extends BaseActivity {
     }
 
     private int avSize() {
-        return compact ? 28 : 34;
+        return compact ? 40 : 52;
+    }
+
+    /** A row holding two corner slots, one hugging each side of the screen. */
+    private LinearLayout cornerRow(int left, int right) {
+        LinearLayout row = Ui.hbox(this);
+        row.setPadding(Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 8), Ui.dp(this, 4));
+        corners[left] = new FrameLayout(this);
+        corners[right] = new FrameLayout(this);
+        row.addView(corners[left], new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        row.addView(corners[right], new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        return row;
+    }
+
+    /**
+     * Which screen corner a colour's yard sits in. The board is turned so my yard is bottom-left;
+     * the others follow clockwise (red, green, yellow, blue order on the board).
+     */
+    private int cornerOf(String color) {
+        int me = Board.colorIndex(app.socket.myColor());
+        return (Board.colorIndex(color) - me + 4) % 4;
     }
 
     private TextView roundIcon(String emoji, String label, View.OnClickListener onClick) {
@@ -530,7 +546,7 @@ public class GameActivity extends BaseActivity {
         v.animate().scaleX(1f).scaleY(1f).setDuration(160).start();
     }
 
-    /** Player panels: one row for two players, a 2x2 grid for three or four. */
+    /** Player cards, each in the screen corner next to that player's yard. */
     private void renderChips() {
         JSONObject room = app.socket.room;
         if (room != null) {
@@ -541,88 +557,183 @@ public class GameActivity extends BaseActivity {
                     : "Free room — no coins at stake");
         }
         if (pulse != null) pulse.cancel();
-        panels.removeAllViews();
-        timerView = null;
+        for (FrameLayout c : corners) c.removeAllViews();
+        timerDots = null;
         if (state == null) return;
         JSONArray seats = room != null ? room.optJSONArray("seats") : null;
-        String me = app.socket.myColor();
-        int n = state.players.size();
-        LinearLayout row = null;
-        for (int i = 0; i < n; i++) {
-            if (n <= 2 ? i == 0 : i % 2 == 0) {
-                row = Ui.hbox(this);
-                LinearLayout.LayoutParams rp = Ui.lpMatchWrap();
-                if (i > 0) rp.topMargin = Ui.dp(this, 6);
-                panels.addView(row, rp);
-            }
+        for (int i = 0; i < state.players.size(); i++) {
             GameState.Player p = state.players.get(i);
-            JSONObject seat = seatFor(seats, p.color);
-            boolean current = i == state.current && !"over".equals(state.phase);
-            boolean bot = "ai".equals(p.kind);
-            boolean online = bot || seat == null || seat.optBoolean("connected", true);
-            int col = Board.colorArgb(p.color);
-
-            LinearLayout card = Ui.hbox(this);
-            card.setTag("chip:" + p.color);
-            card.setPadding(Ui.dp(this, 8), Ui.dp(this, compact ? 4 : 7), Ui.dp(this, 10), Ui.dp(this, compact ? 4 : 7));
-            GradientDrawable bg = Ui.roundStroke(current ? (col & 0x00ffffff) | 0x33000000 : 0xb32e1065, Ui.dp(this, 14),
-                    Ui.dp(this, current ? 2 : 1), current ? col : Ui.STROKE);
-            card.setBackground(bg);
-
-            FrameLayout av = new FrameLayout(this);
-            TextView a = bot ? Ui.avatarColor(this, "🤖", col, avSize())
-                    : seat != null ? Ui.avatar(this, p.name, seat.optInt("avatarHue", 210), avSize()) : Ui.avatarColor(this, p.name, col, avSize());
-            GradientDrawable ring = new GradientDrawable();
-            ring.setShape(GradientDrawable.OVAL);
-            ring.setColor(0);
-            ring.setStroke(Ui.dp(this, 2), col);
-            View ringView = new View(this);
-            ringView.setBackground(ring);
-            av.addView(a, new FrameLayout.LayoutParams(Ui.dp(this, avSize()), Ui.dp(this, avSize()), Gravity.CENTER));
-            av.addView(ringView, new FrameLayout.LayoutParams(Ui.dp(this, avSize() + 6), Ui.dp(this, avSize() + 6), Gravity.CENTER));
-            View dot = new View(this);
-            GradientDrawable dg = new GradientDrawable();
-            dg.setShape(GradientDrawable.OVAL);
-            dg.setColor(online ? Ui.SUCCESS : 0xff8a8fb0);
-            dg.setStroke(Ui.dp(this, 2), 0xff2e1065);
-            dot.setBackground(dg);
-            av.addView(dot, new FrameLayout.LayoutParams(Ui.dp(this, 12), Ui.dp(this, 12), Gravity.BOTTOM | Gravity.END));
-            card.addView(av, new LinearLayout.LayoutParams(Ui.dp(this, avSize() + 6), Ui.dp(this, avSize() + 6)));
-
-            LinearLayout text = Ui.vbox(this);
-            text.setPadding(Ui.dp(this, 8), 0, 0, 0);
-            TextView name = Ui.bold(Ui.text(this, (p.rank == 1 ? "🏆 " : p.rank > 1 ? "#" + p.rank + " " : "") + p.name, compact ? 13 : 14, Ui.INK));
-            name.setSingleLine(true);
-            name.setEllipsize(TextUtils.TruncateAt.END);
-            text.addView(name);
-            String sub = p.color.equals(me) ? "You" : bot ? "Bot" : online ? "Online" : "Offline";
-            TextView subView = Ui.text(this, sub, compact ? 11 : 12, current ? 0xffffd23f : Ui.MUTED);
-            subView.setSingleLine(true);
-            text.addView(subView);
-            if (current) {
-                timerView = subView;
-                timerBase = sub;
-            }
-            card.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-            // Long names are shortened on the card; tap it to read the whole name.
-            card.setOnClickListener(v -> LudoApp.toast(p.name + (bot ? " (bot)" : "")));
-
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-            if (row.getChildCount() > 0) lp.leftMargin = Ui.dp(this, 8);
-            row.addView(card, lp);
-
-            if (current) {
-                // Gentle breathing highlight on the active player's panel.
-                pulse = android.animation.ValueAnimator.ofInt(0x33, 0x66);
-                pulse.setDuration(900);
-                pulse.setRepeatCount(android.animation.ValueAnimator.INFINITE);
-                pulse.setRepeatMode(android.animation.ValueAnimator.REVERSE);
-                pulse.addUpdateListener(va -> bg.setColor((col & 0x00ffffff) | ((int) va.getAnimatedValue() << 24)));
-                pulse.start();
-            }
+            int corner = cornerOf(p.color);
+            boolean right = corner >= 2;
+            View card = playerCard(p, i, seatFor(seats, p.color), right);
+            corners[corner].addView(card, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, right ? Gravity.END : Gravity.START));
         }
-        // Three players: keep the last card half width like the others.
-        if (n == 3 && row != null) row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        renderStatus();
+    }
+
+    /**
+     * One corner card: a framed panel with the avatar and a dice box side by side (mirrored on
+     * the right-hand side), the name under them and turn-timer dots under the dice; my own card
+     * also shows my coins and gems. Tap my dice box to roll.
+     */
+    private View playerCard(GameState.Player p, int idx, JSONObject seat, boolean right) {
+        boolean current = idx == state.current && !"over".equals(state.phase);
+        boolean bot = "ai".equals(p.kind);
+        boolean online = bot || seat == null || seat.optBoolean("connected", true);
+        boolean mine = p.color.equals(app.socket.myColor());
+        int col = Board.colorArgb(p.color);
+        int size = avSize();
+
+        LinearLayout wrap = Ui.vbox(this);
+        wrap.setGravity(right ? Gravity.END : Gravity.START);
+        wrap.setTag("chip:" + p.color);
+
+        LinearLayout panel = Ui.vbox(this);
+        panel.setGravity(Gravity.CENTER_HORIZONTAL);
+        int pp = Ui.dp(this, 6);
+        panel.setPadding(pp, pp, pp, Ui.dp(this, 4));
+        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xff5a32b8, 0xff2e1065});
+        bg.setCornerRadius(Ui.dp(this, 14));
+        bg.setStroke(Ui.dp(this, current ? 3 : 2), current ? Ui.GOLD : col);
+        panel.setBackground(bg);
+
+        LinearLayout row = Ui.hbox(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        // Avatar in a rounded frame of the player's colour, with an online dot.
+        FrameLayout av = new FrameLayout(this);
+        av.setBackground(Ui.round(col, Ui.dp(this, 10)));
+        TextView a = bot ? Ui.avatarColor(this, "🤖", Fx.blend(col, Color.BLACK, 0.25f), size - 6)
+                : seat != null ? Ui.avatar(this, p.name, seat.optInt("avatarHue", 210), size - 6) : Ui.avatarColor(this, p.name, col, size - 6);
+        av.addView(a, new FrameLayout.LayoutParams(Ui.dp(this, size - 6), Ui.dp(this, size - 6), Gravity.CENTER));
+        View dot = new View(this);
+        GradientDrawable dg = new GradientDrawable();
+        dg.setShape(GradientDrawable.OVAL);
+        dg.setColor(online ? Ui.SUCCESS : 0xff8a8fb0);
+        dg.setStroke(Ui.dp(this, 2), 0xff2e1065);
+        dot.setBackground(dg);
+        av.addView(dot, new FrameLayout.LayoutParams(Ui.dp(this, 12), Ui.dp(this, 12), Gravity.BOTTOM | (right ? Gravity.START : Gravity.END)));
+
+        // Dice box with the turn-timer dots under it.
+        LinearLayout diceCol = Ui.vbox(this);
+        diceCol.setGravity(Gravity.CENTER_HORIZONTAL);
+        DiceFace dice = new DiceFace(this);
+        dice.value = current && "move".equals(state.phase) ? state.dice : 0;
+        dice.face = current ? col : 0x40ffffff;
+        int dsz = Ui.dp(this, size * 0.78f);
+        diceCol.addView(dice, new LinearLayout.LayoutParams(dsz, dsz));
+        LinearLayout dots = Ui.hbox(this);
+        dots.setGravity(Gravity.CENTER);
+        for (int k = 0; k < 5; k++) {
+            View d = new View(this);
+            d.setBackground(Ui.round(current ? Ui.SUCCESS : 0x33ffffff, Ui.dp(this, 3)));
+            LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(Ui.dp(this, 5), Ui.dp(this, 5));
+            dlp.leftMargin = dlp.rightMargin = Ui.dp(this, 1);
+            dots.addView(d, dlp);
+        }
+        LinearLayout.LayoutParams dotsLp = Ui.lpMatchWrap();
+        dotsLp.topMargin = Ui.dp(this, 4);
+        diceCol.addView(dots, dotsLp);
+        if (current) timerDots = dots;
+        if (mine) {
+            dice.setContentDescription("Roll the dice");
+            dice.setOnClickListener(v -> {
+                if (isMyTurn(state) && "roll".equals(state.phase)) {
+                    pressPop(v);
+                    roll();
+                }
+            });
+        }
+
+        LinearLayout.LayoutParams avLp = new LinearLayout.LayoutParams(Ui.dp(this, size), Ui.dp(this, size));
+        LinearLayout.LayoutParams dcLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        if (right) {
+            dcLp.rightMargin = Ui.dp(this, 6);
+            row.addView(diceCol, dcLp);
+            row.addView(av, avLp);
+        } else {
+            dcLp.leftMargin = Ui.dp(this, 6);
+            row.addView(av, avLp);
+            row.addView(diceCol, dcLp);
+        }
+        panel.addView(row);
+
+        TextView name = Ui.bold(Ui.text(this, (p.rank == 1 ? "🏆 " : p.rank > 1 ? "#" + p.rank + " " : "") + p.name, compact ? 11 : 12, Ui.INK));
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        name.setGravity(Gravity.CENTER);
+        name.setMaxWidth(Ui.dp(this, size * 1.78f + 6));
+        name.setShadowLayer(3, 0, 1, 0xaa000000);
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        nlp.topMargin = Ui.dp(this, 3);
+        panel.addView(name, nlp);
+        // Long names are shortened on the card; tap it to read the whole name.
+        panel.setOnClickListener(v -> LudoApp.toast(p.name + (bot ? " (bot)" : "")));
+        wrap.addView(panel);
+
+        // Under the card: my coins and gems; for others, bot / offline.
+        String info = mine ? "🪙 " + Ui.fmt(app.balance()) + "   💎 " + Ui.fmt(app.wallet.optLong("gems"))
+                : bot ? "🤖 Bot" : online ? "" : "● Offline";
+        if (!info.isEmpty()) {
+            TextView t = Ui.bold(Ui.text(this, info, compact ? 11 : 12, mine ? Ui.GOLD : Ui.MUTED));
+            t.setShadowLayer(3, 0, 1, 0xaa000000);
+            t.setPadding(Ui.dp(this, 4), Ui.dp(this, 2), Ui.dp(this, 4), 0);
+            wrap.addView(t);
+        }
+
+        if (current) {
+            // Gentle breathing glow on the active player's frame and dice box.
+            pulse = android.animation.ValueAnimator.ofFloat(0f, 1f);
+            pulse.setDuration(700);
+            pulse.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            pulse.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+            pulse.addUpdateListener(va -> {
+                float f = (float) va.getAnimatedValue();
+                bg.setStroke(Ui.dp(this, 3), Fx.blend(Ui.GOLD, Color.WHITE, f * 0.6f));
+                float s = 1f + f * 0.07f;
+                dice.setScaleX(s);
+                dice.setScaleY(s);
+            });
+            pulse.start();
+        }
+        return wrap;
+    }
+
+    /** A die face for the player cards: rounded square, white pips (blank when value is 0). */
+    private static final class DiceFace extends View {
+        private static final float[] AT = {0.27f, 0.5f, 0.73f};
+        private static final int[][][] PIPS = {
+                {},
+                {{1, 1}},
+                {{0, 0}, {2, 2}},
+                {{0, 0}, {1, 1}, {2, 2}},
+                {{0, 0}, {2, 0}, {0, 2}, {2, 2}},
+                {{0, 0}, {2, 0}, {1, 1}, {0, 2}, {2, 2}},
+                {{0, 0}, {2, 0}, {0, 1}, {2, 1}, {0, 2}, {2, 2}},
+        };
+        private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        int value;
+        int face;
+
+        DiceFace(android.content.Context c) {
+            super(c);
+        }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas canvas) {
+            float w = getWidth(), h = getHeight(), r = w * 0.2f;
+            paint.setColor(Fx.blend(face, Color.BLACK, 0.35f));
+            canvas.drawRoundRect(0, h * 0.06f, w, h, r, r, paint);
+            paint.setColor(face);
+            canvas.drawRoundRect(0, 0, w, h * 0.94f, r, r, paint);
+            paint.setColor(0x33ffffff);
+            canvas.drawRoundRect(w * 0.08f, h * 0.05f, w * 0.92f, h * 0.4f, r * 0.7f, r * 0.7f, paint);
+            if (value < 1 || value > 6) return;
+            paint.setColor(Color.WHITE);
+            float pr = w * 0.09f;
+            for (int[] pip : PIPS[value]) canvas.drawCircle(w * AT[pip[0]], h * 0.94f * AT[pip[1]], pr, paint);
+        }
     }
 
     private static JSONObject seatFor(JSONArray seats, String color) {
@@ -636,7 +747,6 @@ public class GameActivity extends BaseActivity {
     private void renderStatus() {
         if (status == null) return;
         String text;
-        boolean canRoll = false;
         boolean online = "online".equals(app.socket.connection);
         connView.setText(online ? "● Online" : "● Reconnecting");
         connView.setTextColor(online ? Ui.SUCCESS : Ui.GOLD);
@@ -652,8 +762,7 @@ public class GameActivity extends BaseActivity {
             left = deadline > 0 ? Math.max(0, (deadline - System.currentTimeMillis() + 999) / 1000) : -1;
             if (isMyTurn(state)) {
                 if ("roll".equals(state.phase)) {
-                    text = "Your turn — roll the dice!";
-                    canRoll = !busy;
+                    text = busy ? "Rolling…" : "Your turn — tap your dice!";
                 } else {
                     text = "You rolled " + state.dice + " — tap a glowing token";
                 }
@@ -661,21 +770,25 @@ public class GameActivity extends BaseActivity {
                 text = cur.name + ("roll".equals(state.phase) ? " is rolling…" : " rolled " + state.dice);
             }
         }
+        if (left >= 0) text += "  ⏱ " + left + "s";
         status.setText(text);
-        if (timerView != null) timerView.setText(left >= 0 ? timerBase + " · ⏱ " + left + "s" : timerBase);
         float frac = deadline > 0 && deadlineTotal > 0 ? Math.max(0f, Math.min(1f, (deadline - System.currentTimeMillis()) / (float) deadlineTotal)) : 0f;
         timerBar.setScaleX(frac);
         timerBar.setBackground(Ui.round(frac < 0.25f ? Ui.DANGER : Ui.GOLD, Ui.dp(this, 2)));
-        // My last roll can be re-rolled with gems: the big button becomes "RETRY".
+        if (timerDots != null) {
+            int lit = (int) Math.ceil(frac * timerDots.getChildCount());
+            for (int k = 0; k < timerDots.getChildCount(); k++) {
+                timerDots.getChildAt(k).setBackground(Ui.round(k < lit ? (frac < 0.25f ? Ui.DANGER : Ui.SUCCESS) : 0x33ffffff, Ui.dp(this, 3)));
+            }
+        }
+        // My last roll can be re-rolled with gems: the status bar turns into a gold "RETRY" button.
         boolean retry = online && state != null && !"over".equals(state.phase) && canReroll() && !busy;
         if (retry) {
             long secs = rerollUntil > 0 ? Math.max(0, (rerollUntil - System.currentTimeMillis() + 999) / 1000) : -1;
-            rollBtn.setText("↻ RETRY  💎" + rerollCost + (secs >= 0 ? "  (" + secs + "s)" : ""));
-            if (rerollUntil > 0) status.setText("Not happy with your roll? Retry it with gems");
-            Ui.setEnabled(rollBtn, true);
+            status.setText("↻ RETRY ROLL  💎" + rerollCost + (secs >= 0 ? "  (" + secs + "s)" : ""));
+            statusBox.setBackground(Ui.roundStroke(0xffb7791f, Ui.dp(this, 16), Ui.dp(this, 2), Ui.GOLD));
         } else {
-            Ui.setEnabled(rollBtn, canRoll);
-            rollBtn.setText(canRoll ? "🎲  ROLL" : busy ? "Rolling…" : isMyTurn(state) ? "Pick a token" : "Waiting…");
+            statusBox.setBackground(Ui.round(0xcc2e1065, Ui.dp(this, 16)));
         }
         int unread = app.socket.unreadChat;
         chatBtn.setText(unread > 0 ? "💬" + Math.min(unread, 99) : "💬");
@@ -906,18 +1019,21 @@ public class GameActivity extends BaseActivity {
 
     /** A big emoji rising from the sender's player chip. */
     private void showEmote(String id, String color) {
-        View chip = panels.findViewWithTag("chip:" + color);
+        View chip = root.findViewWithTag("chip:" + color);
         Sfx.get().play(Sfx.forEmoteEffect(Social.effect(id)));
         TextView t = Ui.text(this, Social.emoji(id), 46, Ui.INK);
         t.measure(0, 0);
         float x, y;
+        // Emotes float from the card towards the board: down from the top cards, up from the bottom ones.
+        float drift = Ui.dp(this, 120);
         if (chip != null) {
             int[] loc = new int[2];
             int[] rootLoc = new int[2];
             chip.getLocationInWindow(loc);
             root.getLocationInWindow(rootLoc);
             x = loc[0] - rootLoc[0] + chip.getWidth() / 2f - t.getMeasuredWidth() / 2f;
-            y = loc[1] - rootLoc[1] + chip.getHeight();
+            y = loc[1] - rootLoc[1] + chip.getHeight() / 2f - t.getMeasuredHeight() / 2f;
+            if (y > root.getHeight() / 2f) drift = -drift;
         } else {
             x = root.getWidth() / 2f - t.getMeasuredWidth() / 2f;
             y = root.getHeight() / 3f;
@@ -931,7 +1047,7 @@ public class GameActivity extends BaseActivity {
         set.playTogether(
                 ObjectAnimator.ofFloat(t, "scaleX", 0.3f, 1.3f, 1f),
                 ObjectAnimator.ofFloat(t, "scaleY", 0.3f, 1.3f, 1f),
-                ObjectAnimator.ofFloat(t, "translationY", y, y + Ui.dp(this, 120)),
+                ObjectAnimator.ofFloat(t, "translationY", y, y + drift),
                 ObjectAnimator.ofFloat(t, "alpha", 1f, 1f, 0f));
         set.setDuration(1800);
         set.addListener(new android.animation.AnimatorListenerAdapter() {
