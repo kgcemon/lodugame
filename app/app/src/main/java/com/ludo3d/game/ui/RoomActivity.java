@@ -20,19 +20,48 @@ import org.json.JSONObject;
  */
 public class RoomActivity extends BaseActivity {
     private LinearLayout col;
+    /** Quick-play rooms show the full-screen "searching for players" screen instead. */
+    private Matchmaking matchmaking;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        JSONObject room = app.socket.room;
+        if (room != null && room.optBoolean("isPublic")) {
+            matchmaking = new Matchmaking(this);
+            matchmaking.build(room);
+            // Back while searching cancels the search (and refunds the fee).
+            getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+                @Override
+                public void handleOnBackPressed() {
+                    leave();
+                }
+            });
+            return;
+        }
         col = pageWithBack("Room");
         render();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (matchmaking != null) matchmaking.stop();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         if (app.socket.room == null) finish();
-        else render();
+        else refresh();
+    }
+
+    private void refresh() {
+        if (matchmaking != null) {
+            if (app.socket.room != null) matchmaking.update(app.socket.room);
+        } else {
+            render();
+        }
     }
 
     @Override
@@ -40,7 +69,7 @@ public class RoomActivity extends BaseActivity {
         super.onSocketEvent(event, data);
         switch (event) {
             case "room:state":
-                render();
+                refresh();
                 break;
             case "room:closed":
                 alertAndClose(String.valueOf(data));
@@ -235,7 +264,7 @@ public class RoomActivity extends BaseActivity {
     }
 
     // Back only closes this screen and keeps your seat; leaving (and any refund) is the Leave button.
-    private void leave() {
+    void leave() {
         app.socket.leave(res -> finish());
     }
 }
