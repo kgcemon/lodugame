@@ -75,12 +75,27 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
 
     public volatile Listener listener;
 
+    /** Told when a roll starts animating (GL thread), so the HUD die can tumble in step. */
+    public interface RollListener {
+        void onRoll(int player, int value, long durationMs);
+    }
+
+    public volatile RollListener rollListener;
+
+    /**
+     * Classic view: the board seen straight down, filling the view, with the die drawn on the
+     * player cards instead of on the board.
+     */
+    public volatile boolean classic = true;
+
     /** Camera yaw added by dragging (degrees). Written by the UI thread; eases back to 0 on release. */
     public volatile float yawOffset;
     /** True while a finger is turning the board. */
     public volatile boolean dragging;
     /** Token the player just tapped (shown with a bright ring until the server answers). */
     private int selPlayer = -1, selToken = -1;
+    /** When the selected token was tapped (for its pop and flash). */
+    private long selAt;
 
     // ---------------------------------------------------------------- outputs for the UI thread
     private final float[] screen = new float[4 * 4 * 2];
@@ -158,6 +173,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     public void setSelected(int player, int token) {
         selPlayer = player;
         selToken = token;
+        selAt = SystemClock.uptimeMillis();
     }
 
     private void snap() {
@@ -234,7 +250,8 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         RollAnim(int player, int value) {
             this.player = player;
             this.value = value;
-            dur = 700;
+            // The classic view's card die needs a little longer for its out-and-back throw.
+            dur = classic ? 950 : 700;
         }
 
         @Override
@@ -243,6 +260,8 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             diceValue = value;
             diceYaw = rng.nextFloat() * 360f;
             sfx(Sfx.S.DICE_SHAKE, 0.9f, 0.95f + rng.nextFloat() * 0.1f);
+            RollListener l = rollListener;
+            if (l != null) l.onRoll(player, value, (long) dur);
         }
 
         @Override
@@ -475,7 +494,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         float fovy = 40f;
         // Phones (portrait): higher camera so the board reads clearly; wider screens: more cinematic.
         // In a tall area a steeper view lets the (width-limited) board also fill more height.
-        double pitch = Math.toRadians(aspect < 0.7f ? 70 : aspect < 0.85f ? 64 : aspect < 1.2f ? 56 : 50);
+        double pitch = Math.toRadians(classic ? 90 : aspect < 0.7f ? 70 : aspect < 0.85f ? 64 : aspect < 1.2f ? 56 : 50);
         double yaw = Math.toRadians(baseYaw(myColor) + yawOffset);
         // Closest distance at which every corner of the board (frame included) stays on screen.
         float lo = 5f, hi = 200f;
@@ -494,7 +513,12 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         eye[0] = (float) (Math.sin(yaw) * Math.cos(pitch) * dist);
         eye[1] = (float) (Math.sin(pitch) * dist);
         eye[2] = (float) (Math.cos(yaw) * Math.cos(pitch) * dist);
-        Matrix.setLookAtM(view, 0, eye[0], eye[1], eye[2], 0f, -0.2f, 0f, 0f, 1f, 0f);
+        if (pitch > Math.toRadians(89)) {
+            // Straight down: "up" on screen is the far side of the board for this yaw.
+            Matrix.setLookAtM(view, 0, eye[0], eye[1], eye[2], 0f, 0f, 0f, (float) -Math.sin(yaw), 0f, (float) -Math.cos(yaw));
+        } else {
+            Matrix.setLookAtM(view, 0, eye[0], eye[1], eye[2], 0f, -0.2f, 0f, 0f, 1f, 0f);
+        }
         Matrix.multiplyMM(vp, 0, proj, 0, view, 0);
     }
 
@@ -509,7 +533,8 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             Matrix.multiplyMV(tmpOut, 0, vp, 0, tmpIn, 0);
             if (tmpOut[3] <= 0) return false;
             float x = tmpOut[0] / tmpOut[3], y = tmpOut[1] / tmpOut[3];
-            if (Math.abs(x) > 0.97f || Math.abs(y) > 0.95f) return false;
+            float lim = classic ? 0.995f : 0.97f;
+            if (Math.abs(x) > lim || Math.abs(y) > (classic ? lim : 0.95f)) return false;
         }
         return true;
     }
@@ -581,24 +606,40 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
                     use(texShadow, 0, 0, 0, 0.42f, true, 0);
                     draw(flat);
                     boolean selected = p == selPlayer && t == selToken;
-                    if (selected || (p == curPlayer && movable.contains(t))) {
-                        float rs = selected ? 1.35f : 1.05f + 0.12f * pulse;
+                    if (selected) {
+                        // Tapped: a bright white ring plus a quick flash spreading out.
+                        float age = Math.min(1f, (now - selAt) / 450f);
+                        ring(q, 1.45f, 1f, 1f, 0.85f, 1f);
+                        ring(q, 1.3f + 1.6f * age, 1f, 1f, 1f, 1f - age);
+                    } else if (p == curPlayer && movable.contains(t)) {
+                        // "Pick me": a glowing gold ring that breathes, and ripples rolling out of it.
+                        float breathe = 0.5f + 0.5f * pulse;
+                        // Soft gold halo under the token.
                         Matrix.setIdentityM(model, 0);
                         Matrix.translateM(model, 0, q[0], 0.01f, q[2]);
-                        Matrix.scaleM(model, 0, rs, 1, rs);
-                        use(texRing, 1f, selected ? 1f : 0.84f, selected ? 0.75f : 0.3f, 1f, true, 0);
+                        float hs = 1.5f + 0.25f * breathe;
+                        Matrix.scaleM(model, 0, hs, 1, hs);
+                        use(texShadow, 1f, 0.82f, 0.15f, 0.45f + 0.35f * breathe, true, 0);
                         draw(flat);
+                        ring(q, 1.25f + 0.22f * breathe, 1f, 0.86f, 0.25f, 0.75f + 0.25f * breathe);
+                        for (int k = 0; k < 2; k++) {
+                            float ph = ((now + k * 450L + t * 120L) % 900L) / 900f;
+                            ring(q, 1.2f + 1.3f * ph, 1f, 0.95f, 0.55f, 0.9f * (1f - ph));
+                        }
                     }
                 }
             }
         }
         float diceLift = rollT >= 0 ? (float) Math.sin(Math.PI * rollT) * 1.4f : 0f;
         float ds = 1.3f / (1f + diceLift * 0.5f);
-        Matrix.setIdentityM(model, 0);
-        Matrix.translateM(model, 0, dicePos[0], 0.01f, dicePos[2]);
-        Matrix.scaleM(model, 0, ds, 1, ds);
-        use(texShadow, 0, 0, 0, 0.4f, true, 0);
-        draw(flat);
+        boolean boardDice = !classic;
+        if (boardDice) {
+            Matrix.setIdentityM(model, 0);
+            Matrix.translateM(model, 0, dicePos[0], 0.01f, dicePos[2]);
+            Matrix.scaleM(model, 0, ds, 1, ds);
+            use(texShadow, 0, 0, 0, 0.4f, true, 0);
+            draw(flat);
+        }
         GLES20.glEnable(GLES20.GL_DEPTH_TEST);
         GLES20.glDisable(GLES20.GL_BLEND);
 
@@ -608,10 +649,19 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
                 float[] rgb = RGB[state.players.get(p).ci];
                 for (int t = 0; t < 4; t++) {
                     float[] q = pos[p][t];
-                    float bob = p == curPlayer && movable.contains(t) ? 0.08f + 0.08f * pulse : 0f;
+                    boolean pick = p == curPlayer && movable.contains(t);
+                    float bob = pick ? 0.08f + 0.08f * pulse : 0f;
+                    // Seen from above a hop barely shows, so movable tokens also swell and shrink,
+                    // and a tapped token pops.
+                    float grow = pick ? 1.08f + 0.1f * (0.5f + 0.5f * pulse) : 1f;
+                    if (p == selPlayer && t == selToken) {
+                        float age = Math.min(1f, (now - selAt) / 300f);
+                        grow = 1.15f + 0.3f * (1f - age) * (1f - age);
+                    }
                     Matrix.setIdentityM(model, 0);
                     Matrix.translateM(model, 0, q[0], q[1] + bob, q[2]);
-                    Matrix.scaleM(model, 0, scale[p][t], scale[p][t], scale[p][t]);
+                    float sc = scale[p][t] * grow;
+                    Matrix.scaleM(model, 0, sc, sc, sc);
                     use(0, rgb[0], rgb[1], rgb[2], 1, false, 0.55f);
                     draw(pawn);
                 }
@@ -636,10 +686,22 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             Matrix.rotateM(model, 0, spin, 1f, 0.7f, 0.35f);
         }
         faceUp(diceValue);
-        use(texDice, 1, 1, 1, 1, false, 0.35f);
-        draw(dice);
+        if (boardDice) {
+            use(texDice, 1, 1, 1, 1, false, 0.35f);
+            draw(dice);
+        }
 
         publishScreen();
+    }
+
+    /** A flat ring decal around a token: radius scale, colour and alpha. */
+    private void ring(float[] q, float rs, float r, float g, float b, float a) {
+        if (a <= 0.01f) return;
+        Matrix.setIdentityM(model, 0);
+        Matrix.translateM(model, 0, q[0], 0.01f, q[2]);
+        Matrix.scaleM(model, 0, rs, 1, rs);
+        use(texRing, r, g, b, a, true, 0);
+        draw(flat);
     }
 
     /** A raised wooden rim around the playing surface (four bars of the unit box). */
