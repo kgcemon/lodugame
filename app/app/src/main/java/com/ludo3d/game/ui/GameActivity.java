@@ -30,6 +30,7 @@ import com.ludo3d.game.LudoApp;
 import com.ludo3d.game.audio.Sfx;
 import com.ludo3d.game.game.Board;
 import com.ludo3d.game.game.GameState;
+import com.ludo3d.game.game.LocalGame;
 import com.ludo3d.game.game.Social;
 import com.ludo3d.game.gl.ConfigChooser;
 import com.ludo3d.game.gl.GameRenderer;
@@ -43,7 +44,8 @@ import java.util.Map;
 /**
  * An online match: the 3D board plus the HUD (players, turn timer, roll button, chat,
  * emotes, result). Tap the die to roll, tap a glowing token to move it, drag sideways
- * to turn the board (double-tap to reset).
+ * to turn the board (double-tap to reset). Started with {@link OfflineSetup#EXTRA_NAMES}
+ * it is instead an offline pass-and-play match run by {@link LocalGame} on this phone.
  */
 public class GameActivity extends BaseActivity {
     private GLSurfaceView gl;
@@ -88,6 +90,10 @@ public class GameActivity extends BaseActivity {
     private LinearLayout chatPanel, emotePanel, chatList;
     private ScrollView chatScroll;
     private Popup resultDialog;
+    /** The offline pass-and-play match, or null for an online one. */
+    private LocalGame local;
+    private JSONObject localUpdate;
+    private long localActedAt;
 
     private final Runnable ticker = new Runnable() {
         @Override
@@ -100,6 +106,11 @@ public class GameActivity extends BaseActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        String[] names = getIntent().getStringArrayExtra(OfflineSetup.EXTRA_NAMES);
+        if (names != null) {
+            local = new LocalGame(names);
+            localUpdate = local.snapshot();
+        }
         renderer = new GameRenderer();
         // Feel it when one of your tokens is sent home.
         renderer.listener = () -> runOnUiThread(() -> gl.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS));
@@ -136,13 +147,14 @@ public class GameActivity extends BaseActivity {
     protected void onResume() {
         super.onResume();
         gl.onResume();
-        if (app.socket.room == null) {
+        if (local == null && app.socket.room == null) {
             finish();
             return;
         }
-        String color = app.socket.myColor();
+        String color = myColor();
         gl.queueEvent(() -> renderer.setMyColor(color));
-        if (app.socket.lastUpdate != null) onUpdate(app.socket.lastUpdate, true);
+        JSONObject last = local != null ? localUpdate : app.socket.lastUpdate;
+        if (last != null) onUpdate(last, true);
         renderChips();
         renderChat();
         LudoApp.MAIN.post(ticker);
@@ -166,6 +178,8 @@ public class GameActivity extends BaseActivity {
     @Override
     public void onSocketEvent(String event, Object data) {
         super.onSocketEvent(event, data);
+        // An offline match ignores the server (online rooms carry on without it).
+        if (local != null) return;
         switch (event) {
             case "game:update":
                 onUpdate((JSONObject) data, false);
@@ -229,7 +243,7 @@ public class GameActivity extends BaseActivity {
         deadline = nextDeadline;
         // A re-roll offer for my own last roll (cost, and a deadline if the turn already passed).
         JSONObject rr = u.optJSONObject("reroll");
-        if (rr != null && app.socket.myColor().equals(rr.optString("color")) && !rr.isNull("nextCost")) {
+        if (rr != null && myColor().equals(rr.optString("color")) && !rr.isNull("nextCost")) {
             rerollCost = rr.optInt("nextCost");
             rerollUntil = rr.isNull("msLeft") ? 0 : System.currentTimeMillis() + rr.optLong("msLeft");
             rerollTotal = rr.isNull("msLeft") ? 0 : Math.max(1, rr.optLong("msLeft"));
@@ -254,7 +268,39 @@ public class GameActivity extends BaseActivity {
     }
 
     private boolean isMyTurn(GameState s) {
-        return s != null && !"over".equals(s.phase) && s.currentPlayer().color.equals(app.socket.myColor());
+        // Offline, every seat is played on this phone.
+        return s != null && !"over".equals(s.phase) && (local != null || s.currentPlayer().color.equals(myColor()));
+    }
+
+    /**
+     * The colour whose yard sits bottom-left. Online it is my seat; offline the board stays
+     * put with the first player's yard there.
+     */
+    private String myColor() {
+        return local != null ? LocalGame.colorsForCount(local.names().length)[0] : app.socket.myColor();
+    }
+
+    /** Whose card gets the roll controls: my seat online, the player whose turn it is offline. */
+    private boolean isMine(String color) {
+        if (local == null) return color.equals(app.socket.myColor());
+        return state != null && !"over".equals(state.phase) && state.currentPlayer().color.equals(color);
+    }
+
+    /** Apply an offline action's update as if the server had sent it. */
+    private void localUpdate(JSONObject u) {
+        if (u == null) return;
+        localUpdate = u;
+        localActedAt = android.os.SystemClock.uptimeMillis();
+        onUpdate(u, false);
+    }
+
+    /** A fresh offline match with the same players. */
+    private void localRematch() {
+        local = new LocalGame(local.names());
+        resultShownFor = -1;
+        lastRolls.clear();
+        lastSeq = -1;
+        localUpdate(local.snapshot());
     }
 
     // ================================================================= input
@@ -373,6 +419,13 @@ public class GameActivity extends BaseActivity {
     /** A normal roll (re-rolls with gems go through the ↻ button on my card). */
     private void roll() {
         if (busy) return;
+        if (local != null) {
+            // Let the last move finish before the next player rolls (the renderer only
+            // notices a new update on its next frame, hence the short grace period too).
+            if (!renderer.isIdle() || android.os.SystemClock.uptimeMillis() - localActedAt < 400) return;
+            localUpdate(local.roll());
+            return;
+        }
         busy = true;
         renderStatus();
         app.socket.emit("game:roll", new JSONObject(), res -> {
@@ -386,6 +439,10 @@ public class GameActivity extends BaseActivity {
     }
 
     private void move(int token) {
+        if (local != null) {
+            localUpdate(local.move(token));
+            return;
+        }
         busy = true;
         app.socket.emit("game:move", PlayFlow.obj("token", token), res -> {
             busy = false;
@@ -503,6 +560,7 @@ public class GameActivity extends BaseActivity {
         controls.setGravity(Gravity.CENTER_VERTICAL);
         chatBtn = roundIcon("💬", "Chat", v -> openChat());
         controls.addView(chatBtn, new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl())));
+        if (local != null) chatBtn.setVisibility(View.GONE);
         LinearLayout reactions = Ui.hbox(this);
         reactions.setGravity(Gravity.CENTER);
         for (String id : Social.INSTANT_REACTIONS) {
@@ -577,7 +635,7 @@ public class GameActivity extends BaseActivity {
      * the others follow clockwise (red, green, yellow, blue order on the board).
      */
     private int cornerOf(String color) {
-        int me = Board.colorIndex(app.socket.myColor());
+        int me = Board.colorIndex(myColor());
         return (Board.colorIndex(color) - me + 4) % 4;
     }
 
@@ -601,8 +659,11 @@ public class GameActivity extends BaseActivity {
 
     /** Player cards, each in the screen corner next to that player's yard. */
     private void renderChips() {
-        JSONObject room = app.socket.room;
-        if (room != null) {
+        JSONObject room = local != null ? null : app.socket.room;
+        if (local != null) {
+            titleView.setText("Offline match");
+            feeView.setText("Pass the phone — no coins at stake");
+        } else if (room != null) {
             JSONObject mode = room.optJSONObject("mode");
             long fee = room.optLong("entryFee");
             titleView.setText(mode != null ? mode.optString("name") : "Ludo");
@@ -639,7 +700,7 @@ public class GameActivity extends BaseActivity {
         boolean current = idx == state.current && !"over".equals(state.phase);
         boolean bot = "ai".equals(p.kind);
         boolean online = bot || seat == null || seat.optBoolean("connected", true);
-        boolean mine = p.color.equals(app.socket.myColor());
+        boolean mine = isMine(p.color);
         int col = Board.colorArgb(p.color);
         int size = avSize();
 
@@ -653,7 +714,7 @@ public class GameActivity extends BaseActivity {
         name.setMaxWidth(Ui.dp(this, size * 2.6f));
         name.setShadowLayer(4, 0, 1, 0xcc000000);
         name.setPadding(Ui.dp(this, 2), 0, Ui.dp(this, 2), 0);
-        name.setOnClickListener(v -> PlayerProfile.show(this, p.name, p.color, seat, bot, mine, online));
+        if (local == null) name.setOnClickListener(v -> PlayerProfile.show(this, p.name, p.color, seat, bot, mine, online));
 
         LinearLayout row = Ui.hbox(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -693,10 +754,12 @@ public class GameActivity extends BaseActivity {
             PlayerProfile.load(this, pid, false, this::renderChips);
         }
         av.setContentDescription("Profile of " + p.name);
-        av.setOnClickListener(v -> {
-            pressPop(v);
-            PlayerProfile.show(this, p.name, p.color, seat, bot, mine, online);
-        });
+        if (local == null) {
+            av.setOnClickListener(v -> {
+                pressPop(v);
+                PlayerProfile.show(this, p.name, p.color, seat, bot, mine, online);
+            });
+        }
 
         // Dice box, pointing at the avatar.
         // Not gated on `busy`: the next turn's update can arrive before the server acks my
@@ -716,7 +779,7 @@ public class GameActivity extends BaseActivity {
 
         // My gem re-roll button with its countdown ring and cost.
         LinearLayout retry = null;
-        if (mine) {
+        if (mine && local == null) {
             retry = Ui.vbox(this);
             retry.setGravity(Gravity.CENTER_HORIZONTAL);
             FrameLayout rb = new FrameLayout(this);
@@ -769,7 +832,7 @@ public class GameActivity extends BaseActivity {
         }
 
         // Under my card: my coins and gems; others show bot / offline.
-        String info = mine ? "🪙 " + Ui.fmt(app.balance()) + "   💎 " + Ui.fmt(app.wallet.optLong("gems"))
+        String info = local != null ? "" : mine ? "🪙 " + Ui.fmt(app.balance()) + "   💎 " + Ui.fmt(app.wallet.optLong("gems"))
                 : bot ? "" : online ? "" : "● Offline";
         if (!info.isEmpty()) {
             TextView t = Ui.bold(Ui.text(this, info, compact ? 11 : 12, mine ? Ui.GOLD : Ui.MUTED));
@@ -800,9 +863,9 @@ public class GameActivity extends BaseActivity {
     private void renderStatus() {
         if (status == null) return;
         String text;
-        boolean online = "online".equals(app.socket.connection);
-        connView.setText(online ? "● Online" : "● Reconnecting");
-        connView.setTextColor(online ? Ui.SUCCESS : Ui.GOLD);
+        boolean online = local != null || "online".equals(app.socket.connection);
+        connView.setText(local != null ? "● Offline" : online ? "● Online" : "● Reconnecting");
+        connView.setTextColor(local != null ? Ui.MUTED : online ? Ui.SUCCESS : Ui.GOLD);
         long left = -1;
         if (!online) {
             text = "Reconnecting…";
@@ -813,7 +876,10 @@ public class GameActivity extends BaseActivity {
         } else {
             GameState.Player cur = state.currentPlayer();
             left = deadline > 0 ? Math.max(0, (deadline - System.currentTimeMillis() + 999) / 1000) : -1;
-            if (isMyTurn(state)) {
+            if (local != null) {
+                text = "roll".equals(state.phase) ? cur.name + "'s turn — tap your dice!"
+                        : cur.name + " rolled " + state.dice + " — tap a glowing token";
+            } else if (isMyTurn(state)) {
                 if ("roll".equals(state.phase)) {
                     text = busy ? "Rolling…" : "Your turn — tap your dice!";
                 } else {
@@ -840,7 +906,7 @@ public class GameActivity extends BaseActivity {
         timerBar.setBackground(Ui.round(frac < 0.25f ? Ui.DANGER : Ui.GOLD, Ui.dp(this, 2)));
         if (timerPie != null) timerPie.setFraction(frac, frac < 0.25f ? 0x99e53945 : 0x9922c55e);
         // Every time it's my turn to roll, my die glows and the arrow points at it.
-        View myDice = root.findViewWithTag("dice:" + app.socket.myColor());
+        View myDice = root.findViewWithTag("dice:" + (local != null && state != null ? state.currentPlayer().color : app.socket.myColor()));
         if (myDice instanceof DiceView) {
             ((DiceView) myDice).setReady(online && isMyTurn(state) && "roll".equals(state.phase) && !busy);
         }
@@ -889,7 +955,7 @@ public class GameActivity extends BaseActivity {
                 }
             }
         }
-        int unread = app.socket.unreadChat;
+        int unread = local != null ? 0 : app.socket.unreadChat;
         chatBtn.setText(unread > 0 ? "💬" + Math.min(unread, 99) : "💬");
         chatBtn.setTextSize(unread > 0 ? 16 : 22);
     }
@@ -904,15 +970,15 @@ public class GameActivity extends BaseActivity {
         dismissResult();
         LinearLayout box = Ui.vbox(this);
         box.setGravity(Gravity.CENTER_HORIZONTAL);
-        String me = app.socket.myColor();
+        String me = local != null ? "" : app.socket.myColor();
         int winnerIdx = state.ranking.isEmpty() ? -1 : state.ranking.get(0);
         GameState.Player winner = winnerIdx >= 0 ? state.players.get(winnerIdx) : null;
         boolean iWon = winner != null && winner.color.equals(me);
-        if (firstTime) Sfx.get().play(iWon ? Sfx.S.VICTORY : Sfx.S.DEFEAT);
+        if (firstTime) Sfx.get().play(iWon || local != null ? Sfx.S.VICTORY : Sfx.S.DEFEAT);
         TextView big = Ui.text(this, iWon ? "🏆" : "🎲", 60, Ui.INK);
         big.setGravity(Gravity.CENTER);
         box.addView(big);
-        JSONObject s = app.socket.settlement;
+        JSONObject s = local != null ? null : app.socket.settlement;
         if (s != null && s.optLong("entryFee") > 0) {
             Fx.GoldText pay = new Fx.GoldText(this, iWon ? "+🪙 " + Ui.fmt(s.optLong("payout")) : "Winner got 🪙 " + Ui.fmt(s.optLong("payout")), iWon ? 26 : 18);
             pay.setGravity(Gravity.CENTER);
@@ -930,6 +996,13 @@ public class GameActivity extends BaseActivity {
             LinearLayout.LayoutParams lp = Ui.lpMatchWrap();
             lp.topMargin = Ui.dp(this, 8);
             box.addView(ribbon, lp);
+        }
+        if (local != null) {
+            resultDialog = Popup.showModal(this, winner != null ? winner.name + " wins!" : "Match over", box,
+                    Popup.ok("Play again", this::localRematch),
+                    Popup.plain("View board", null),
+                    Popup.danger("Leave", this::finish));
+            return;
         }
         resultDialog = Popup.showModal(this, iWon ? "You won!" : winner != null ? winner.name + " wins" : "Match over", box,
                 Popup.ok("Rematch", () -> app.socket.emit("game:rematch", new JSONObject(), res -> {
@@ -949,6 +1022,11 @@ public class GameActivity extends BaseActivity {
     }
 
     private void confirmLeave() {
+        if (local != null) {
+            if (state == null || "over".equals(state.phase)) finish();
+            else Popup.message(this, "Quit the match?", "This offline match will end.", Popup.ok("Stay", null), Popup.danger("Quit", this::finish));
+            return;
+        }
         if (state == null || "over".equals(state.phase)) {
             app.socket.leave(res -> finish());
             return;
@@ -1113,6 +1191,10 @@ public class GameActivity extends BaseActivity {
         long now = System.currentTimeMillis();
         if (now - lastEmoteAt < 1200) return;
         lastEmoteAt = now;
+        if (local != null) {
+            if (state != null) showEmote(id, state.currentPlayer().color);
+            return;
+        }
         app.socket.emit("emote:send", PlayFlow.obj("id", id), PlayFlow.toastOnError());
     }
 

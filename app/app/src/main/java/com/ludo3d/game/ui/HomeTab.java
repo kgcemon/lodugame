@@ -54,6 +54,7 @@ final class HomeTab {
         small.addView(artTile(Fx.YELLOW, "PLAY\nONLINE", 0xffa66f00, emoji("🌍", 44), v -> pickMode(0)), tileLp(1, 150, 5, 0));
         col.addView(small);
 
+        offlineBanner();
         banner();
         onlineFriends();
     }
@@ -80,6 +81,27 @@ final class HomeTab {
             if (bonus) claimBonus(d, true);
             else a.startActivity(new android.content.Intent(a, HistoryActivity.class));
         });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 78));
+        lp.topMargin = Ui.dp(a, 14);
+        col.addView(t, lp);
+    }
+
+    /** A wide 3D banner for offline pass-and-play with 2 to 4 players on this phone. */
+    private void offlineBanner() {
+        Fx.Tile t = new Fx.Tile(a, Fx.GREEN, 18, 6);
+        LinearLayout row = Ui.hbox(a);
+        row.setPadding(Ui.dp(a, 16), 0, Ui.dp(a, 16), 0);
+        row.addView(emoji("📱", 32));
+        LinearLayout txt = Ui.vbox(a);
+        txt.setPadding(Ui.dp(a, 12), 0, 0, 0);
+        txt.addView(Fx.GoldText.label(a, "PLAY OFFLINE", 17, 0xff1f6d0a));
+        TextView sub = Ui.bold(Ui.text(a, "2, 3 or 4 players on one phone", 12, 0xffeaffe0));
+        sub.setPadding(Ui.dp(a, 4), 0, 0, 0);
+        txt.addView(sub);
+        row.addView(txt, Ui.weight(1));
+        row.addView(Fx.GoldText.label(a, "▶", 20, 0xff1f6d0a));
+        t.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        t.setOnClickListener(v -> OfflineSetup.show(a));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 78));
         lp.topMargin = Ui.dp(a, 14);
         col.addView(t, lp);

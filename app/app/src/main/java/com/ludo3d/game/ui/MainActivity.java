@@ -97,6 +97,9 @@ public class MainActivity extends BaseActivity {
             root.addView(Ui.spinner(this));
             loadSession();
         }));
+        TextView offline = Ui.button(this, "📱 Play offline", "ok", v -> OfflineSetup.show(this));
+        Ui.margins(offline, this, 0, 12, 0, 0);
+        l.addView(offline);
         root.addView(l, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 

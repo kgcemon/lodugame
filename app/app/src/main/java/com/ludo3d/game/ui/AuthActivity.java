@@ -137,6 +137,11 @@ public class AuthActivity extends BaseActivity {
             links.addView(link("Already have an account? Sign in", "login"));
         }
         col.addView(links);
+
+        // No account or no internet needed to pass one phone around.
+        TextView offline = Ui.button(this, "📱 Play offline", "ok", v -> OfflineSetup.show(this));
+        Ui.margins(offline, this, 0, 18, 0, 0);
+        col.addView(offline, Ui.lpMatchWrap());
     }
 
     private TextView link(String text, String target) {
