@@ -1,0 +1,526 @@
+import { useEffect, useState } from 'react';
+import { api, fmt, get, post, type MatchMode } from '../../lib/api';
+import { useGame } from '../../store/game';
+import { Button, Segmented, Toggle } from '../common';
+import { Card, Confirm, Empty, ErrorNote, PageTitle, Spinner, useFetch } from './kit';
+
+/** Administrator tools. Every endpoint re-checks the admin role on the server. */
+
+type Tab = 'overview' | 'users' | 'transactions' | 'matches' | 'disputes' | 'settings' | 'audit';
+
+type Row = Record<string, string | number | boolean | null>;
+
+const toast = (t: string) => useGame.getState().toast(t);
+const d = (v: unknown) => (v ? new Date(String(v)).toLocaleString() : '—');
+
+function Overview() {
+  const o = useFetch(() => get<Record<string, number | Record<string, number>>>('/admin/overview'), []);
+  if (o.loading) return <Spinner />;
+  if (!o.data) return <ErrorNote error={o.error} />;
+  const x = o.data as Record<string, number> & { matchesByStatus: Record<string, number> };
+  const tiles: [string, string | number][] = [
+    ['Users', x.users],
+    ['Active today', x.activeToday],
+    ['Suspended', x.suspended],
+    ['Live rooms', x.liveRooms],
+    ['Coins in circulation', fmt(x.coinsInCirculation)],
+    ['Total payouts', fmt(x.totalPayouts)],
+    ['House total', fmt(x.houseTotal)],
+    ['Open disputes', x.openDisputes],
+  ];
+  return (
+    <>
+      <div className="stat-row">
+        {tiles.map(([k, v]) => (
+          <div className="stat-tile glass" key={k}>
+            <span className="muted">{k}</span>
+            <b>{v}</b>
+          </div>
+        ))}
+      </div>
+      <Card title="Matches by status">
+        <div className="stat-row">
+          {['waiting', 'in_progress', 'completed', 'cancelled', 'abandoned'].map((s) => (
+            <div className="stat-tile glass" key={s}>
+              <span className="muted">{s.replace('_', ' ')}</span>
+              <b>{x.matchesByStatus[s] ?? 0}</b>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </>
+  );
+}
+
+function Users() {
+  const [q, setQ] = useState('');
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const list = useFetch(() => get<{ items: Row[] }>(`/admin/users?page=${page}&q=${encodeURIComponent(query)}`), [query, page]);
+  const [adjust, setAdjust] = useState<Row | null>(null);
+  const [suspend, setSuspend] = useState<Row | null>(null);
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [requestId, setRequestId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const doAdjust = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/admin/users/${adjust!.id}/adjust`, { amount: Number(amount), reason, requestId });
+      toast('Balance adjusted and recorded in the audit log');
+      setAdjust(null);
+      list.reload();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const doSuspend = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/admin/users/${suspend!.id}/suspend`, { reason });
+      toast('Account suspended and signed out');
+      setSuspend(null);
+      list.reload();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <form
+        className="join-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setQuery(q);
+        }}
+      >
+        <input className="input" placeholder="Email, username, name or player ID" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search users" />
+        <Button type="submit">Search</Button>
+      </form>
+      {list.loading && !list.data ? (
+        <Spinner />
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Email</th>
+                <th className="num">Balance</th>
+                <th className="num">Matches</th>
+                <th>Status</th>
+                <th>Joined</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {list.data?.items.map((u) => (
+                <tr key={String(u.id)}>
+                  <td>
+                    <b>{u.username}</b>
+                    <small className="muted block">
+                      {u.full_name} · {u.public_id}
+                    </small>
+                  </td>
+                  <td>
+                    {u.email}
+                    {!u.email_verified_at && <small className="muted block">unverified</small>}
+                  </td>
+                  <td className="num">{fmt(Number(u.balance))}</td>
+                  <td className="num">{u.matches}</td>
+                  <td>{u.role === 'admin' ? <span className="tag tag-gold">admin</span> : u.suspended_at ? <span className="tag tag-warn">suspended</span> : 'active'}</td>
+                  <td>{d(u.created_at)}</td>
+                  <td className="actions">
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setAdjust(u);
+                        setAmount('');
+                        setReason('');
+                        setRequestId(crypto.randomUUID());
+                        setError(null);
+                      }}
+                    >
+                      Adjust coins
+                    </Button>
+                    {u.role !== 'admin' &&
+                      (u.suspended_at ? (
+                        <Button size="sm" onClick={() => post(`/admin/users/${u.id}/unsuspend`).then(() => (toast('Unsuspended'), list.reload()), (e: Error) => toast(e.message))}>
+                          Unsuspend
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="danger" onClick={() => (setSuspend(u), setReason(''), setError(null))}>
+                          Suspend
+                        </Button>
+                      ))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="pager">
+        <Button size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+          Previous
+        </Button>
+        <span className="muted">Page {page}</span>
+        <Button size="sm" disabled={(list.data?.items.length ?? 0) < 20} onClick={() => setPage(page + 1)}>
+          Next
+        </Button>
+      </div>
+      {adjust && (
+        <Confirm title={`Adjust ${adjust.username}'s coins`} confirmLabel="Apply adjustment" busy={busy} onConfirm={doAdjust} onClose={() => setAdjust(null)}>
+          <p className="muted">Current balance: {fmt(Number(adjust.balance))}. Use a negative number to remove coins. Balances cannot go below zero.</p>
+          <input className="input" type="number" inputMode="numeric" placeholder="Amount, e.g. 500 or -200" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          <input className="input" placeholder="Reason (required, saved in the audit log)" maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} />
+          <ErrorNote error={error} />
+        </Confirm>
+      )}
+      {suspend && (
+        <Confirm title={`Suspend ${suspend.username}?`} confirmLabel="Suspend account" busy={busy} onConfirm={doSuspend} onClose={() => setSuspend(null)}>
+          <p className="muted">They are signed out everywhere and removed from any room (a bot finishes their seat).</p>
+          <input className="input" placeholder="Reason (shown to the user)" maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} />
+          <ErrorNote error={error} />
+        </Confirm>
+      )}
+    </Card>
+  );
+}
+
+function Transactions() {
+  const [suspicious, setSuspicious] = useState(true);
+  const [page, setPage] = useState(1);
+  const list = useFetch(() => get<{ items: Row[] }>(`/admin/transactions?page=${page}${suspicious ? '&suspicious=1' : ''}`), [suspicious, page]);
+  return (
+    <Card>
+      <Toggle label="Only suspicious (large amounts and admin adjustments)" checked={suspicious} onChange={(v) => (setSuspicious(v), setPage(1))} />
+      {list.loading && !list.data ? (
+        <Spinner />
+      ) : list.data?.items.length ? (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>User</th>
+                <th>Type</th>
+                <th className="num">Amount</th>
+                <th className="num">After</th>
+                <th>Note / by</th>
+                <th>ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data.items.map((t) => (
+                <tr key={String(t.id)}>
+                  <td>{d(t.created_at)}</td>
+                  <td>{t.username}</td>
+                  <td>{String(t.type).replace(/_/g, ' ')}</td>
+                  <td className={`num ${Number(t.amount) > 0 ? 'pos' : 'neg'}`}>{fmt(Number(t.amount))}</td>
+                  <td className="num">{fmt(Number(t.balance_after))}</td>
+                  <td>
+                    {t.note}
+                    {t.created_by_name && <small className="muted block">by {t.created_by_name}</small>}
+                  </td>
+                  <td className="mono" title={String(t.id)}>
+                    {String(t.id).slice(0, 8)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <Empty title="No transactions" />
+      )}
+      <div className="pager">
+        <Button size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+          Previous
+        </Button>
+        <span className="muted">Page {page}</span>
+        <Button size="sm" disabled={(list.data?.items.length ?? 0) < 20} onClick={() => setPage(page + 1)}>
+          Next
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function Matches() {
+  const [status, setStatus] = useState('');
+  const [page, setPage] = useState(1);
+  const list = useFetch(() => get<{ items: Row[] }>(`/admin/matches?page=${page}${status ? `&status=${status}` : ''}`), [status, page]);
+  return (
+    <Card>
+      <select className="input select" value={status} onChange={(e) => (setStatus(e.target.value), setPage(1))} aria-label="Filter by status">
+        <option value="">All statuses</option>
+        {['waiting', 'in_progress', 'completed', 'cancelled', 'abandoned'].map((s) => (
+          <option key={s} value={s}>
+            {s.replace('_', ' ')}
+          </option>
+        ))}
+      </select>
+      {list.loading && !list.data ? (
+        <Spinner />
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Match</th>
+                <th>Mode</th>
+                <th className="num">Fee</th>
+                <th>Status</th>
+                <th className="num">Players</th>
+                <th>Winner</th>
+                <th className="num">Pot / payout / house</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data?.items.map((m) => (
+                <tr key={String(m.id)}>
+                  <td className="mono" title={String(m.id)}>
+                    {String(m.id).slice(0, 8)} <small className="muted">{m.room_code}</small>
+                  </td>
+                  <td>{m.mode}</td>
+                  <td className="num">{m.entry_fee}</td>
+                  <td>
+                    {String(m.status).replace('_', ' ')}
+                    {m.end_reason && <small className="muted block">{m.end_reason}</small>}
+                  </td>
+                  <td className="num">{m.players}</td>
+                  <td>{m.winner ?? '—'}</td>
+                  <td className="num">{m.total_pot == null ? '—' : `${m.total_pot} / ${m.payout} / ${m.house_amount}`}</td>
+                  <td>{d(m.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="pager">
+        <Button size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+          Previous
+        </Button>
+        <span className="muted">Page {page}</span>
+        <Button size="sm" disabled={(list.data?.items.length ?? 0) < 20} onClick={() => setPage(page + 1)}>
+          Next
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function Disputes() {
+  const [status, setStatus] = useState<'open' | 'resolved' | 'rejected'>('open');
+  const list = useFetch(() => get<{ items: Row[] }>(`/admin/disputes?status=${status}`), [status]);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const decide = async (id: string, s: 'resolved' | 'rejected') => {
+    try {
+      await post(`/admin/disputes/${id}`, { status: s, note: notes[id] ?? '' });
+      toast(`Dispute ${s}`);
+      list.reload();
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  };
+  return (
+    <Card>
+      <Segmented value={status} options={[{ value: 'open', label: 'Open' }, { value: 'resolved', label: 'Resolved' }, { value: 'rejected', label: 'Rejected' }]} onChange={setStatus} />
+      {list.loading && !list.data ? (
+        <Spinner />
+      ) : list.data?.items.length ? (
+        <ul className="dispute-list">
+          {list.data.items.map((x) => (
+            <li key={String(x.id)} className="glass">
+              <div>
+                <b>{x.username}</b> reported match <span className="mono">{String(x.match_id).slice(0, 8)}</span> ({x.mode}, fee {x.entry_fee}, {x.match_status}, winner {x.winner ?? '—'})
+                <p>{x.reason}</p>
+                {x.admin_note && <p className="muted">Admin note: {x.admin_note}</p>}
+                <small className="muted">{d(x.created_at)}</small>
+              </div>
+              {status === 'open' && (
+                <div className="stack">
+                  <input className="input" placeholder="Decision note (required)" value={notes[String(x.id)] ?? ''} onChange={(e) => setNotes({ ...notes, [String(x.id)]: e.target.value })} />
+                  <div className="row gap-s">
+                    <Button size="sm" variant="primary" onClick={() => decide(String(x.id), 'resolved')}>
+                      Resolve
+                    </Button>
+                    <Button size="sm" onClick={() => decide(String(x.id), 'rejected')}>
+                      Reject
+                    </Button>
+                  </div>
+                  <p className="hint">If coins are owed, use Users → Adjust coins with this match id in the reason.</p>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <Empty title={`No ${status} disputes`} />
+      )}
+    </Card>
+  );
+}
+
+interface AdminSettings {
+  welcomeBonus: number;
+  dailyBonus: number;
+  payoutMultiplier: number;
+  matchmakingWaitSeconds: number;
+  suspiciousAmount: number;
+  modes: MatchMode[];
+}
+
+function SettingsTab() {
+  const [s, setS] = useState<AdminSettings | null>(null);
+  const [policy, setPolicy] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    get<{ settings: AdminSettings; policy: string }>('/admin/settings').then((r) => (setS(r.settings), setPolicy(r.policy)), (e: Error) => setError(e.message));
+  }, []);
+  if (!s) return error ? <ErrorNote error={error} /> : <Spinner />;
+  const num = (k: keyof Omit<AdminSettings, 'modes'>) => (
+    <label className="setting-row">
+      <span>{({ welcomeBonus: 'Welcome bonus (new accounts)', dailyBonus: 'Daily bonus', payoutMultiplier: 'Winner payout multiplier (× entry fee)', matchmakingWaitSeconds: 'Matchmaking wait before starting with 2+ players (s)', suspiciousAmount: 'Flag transactions at or above' } as const)[k]}</span>
+      <input className="input" type="number" step={k === 'payoutMultiplier' ? 0.25 : 1} value={s[k]} onChange={(e) => setS({ ...s, [k]: Number(e.target.value) })} />
+    </label>
+  );
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<{ settings: AdminSettings; policy: string }>('PUT', '/admin/settings', s);
+      setS(r.settings);
+      setPolicy(r.policy);
+      toast('Settings saved (new rooms use them; running rooms keep their fee)');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card>
+      <div className="stack">
+        {num('welcomeBonus')}
+        {num('dailyBonus')}
+        {num('payoutMultiplier')}
+        {num('matchmakingWaitSeconds')}
+        {num('suspiciousAmount')}
+        <p className="hint policy">{policy}</p>
+        <h3 className="sub-title">Match modes</h3>
+        {s.modes.map((m, i) => {
+          const upd = (patch: Partial<MatchMode>) => setS({ ...s, modes: s.modes.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+          return (
+            <div key={m.id} className="mode-edit glass">
+              <input className="input" value={m.name} aria-label="Mode name" onChange={(e) => upd({ name: e.target.value })} />
+              <label>
+                Fee <input className="input" type="number" min={m.privateOnly ? 0 : 1} value={m.entryFee} onChange={(e) => upd({ entryFee: Number(e.target.value) })} />
+              </label>
+              <label>
+                Max players <input className="input" type="number" min={2} max={4} value={m.maxPlayers} onChange={(e) => upd({ maxPlayers: Number(e.target.value) })} />
+              </label>
+              <Toggle label="Enabled" checked={m.enabled} onChange={(v) => upd({ enabled: v })} />
+              <input className="input wide" value={m.description} aria-label="Description" onChange={(e) => upd({ description: e.target.value })} />
+            </div>
+          );
+        })}
+        <ErrorNote error={error} />
+        <Button variant="primary" onClick={save} disabled={busy}>
+          {busy ? 'Saving…' : 'Save settings'}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function Audit() {
+  const [page, setPage] = useState(1);
+  const list = useFetch(() => get<{ items: Row[] }>(`/admin/audit?page=${page}`), [page]);
+  return (
+    <Card>
+      {list.loading && !list.data ? (
+        <Spinner />
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Admin</th>
+                <th>Action</th>
+                <th>Target</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data?.items.map((l) => (
+                <tr key={String(l.id)}>
+                  <td>{d(l.created_at)}</td>
+                  <td>{l.actor ?? '—'}</td>
+                  <td>{l.action}</td>
+                  <td>{l.target ?? '—'}</td>
+                  <td className="mono small">{JSON.stringify(l.details).slice(0, 160)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="pager">
+        <Button size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+          Previous
+        </Button>
+        <span className="muted">Page {page}</span>
+        <Button size="sm" disabled={(list.data?.items.length ?? 0) < 20} onClick={() => setPage(page + 1)}>
+          Next
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+export function AdminPage() {
+  const [tab, setTab] = useState<Tab>('overview');
+  return (
+    <div className="page">
+      <PageTitle title="Administration" subtitle="Every change here is recorded in the audit log." />
+      <div className="admin-tabs">
+        <Segmented<Tab>
+          value={tab}
+          options={[
+            { value: 'overview', label: 'Overview' },
+            { value: 'users', label: 'Users' },
+            { value: 'transactions', label: 'Transactions' },
+            { value: 'matches', label: 'Matches' },
+            { value: 'disputes', label: 'Disputes' },
+            { value: 'settings', label: 'Settings' },
+            { value: 'audit', label: 'Audit log' },
+          ]}
+          onChange={setTab}
+        />
+      </div>
+      {tab === 'overview' && <Overview />}
+      {tab === 'users' && <Users />}
+      {tab === 'transactions' && <Transactions />}
+      {tab === 'matches' && <Matches />}
+      {tab === 'disputes' && <Disputes />}
+      {tab === 'settings' && <SettingsTab />}
+      {tab === 'audit' && <Audit />}
+    </div>
+  );
+}

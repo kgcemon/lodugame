@@ -1,0 +1,47 @@
+{
+  "name": "ludo-3d",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "3D Ludo platform: accounts, coin wallet, paid matches, friends, chat — with a server-authoritative Socket.IO game.",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:client": "vite",
+    "dev:server": "tsx watch server/index.ts",
+    "build": "tsc && vite build",
+    "start": "tsx server/index.ts",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc",
+    "db:migrate": "tsx server/db/migrate-cli.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.2.13",
+    "@react-three/drei": "9.122.0",
+    "@react-three/fiber": "8.17.10",
+    "express": "4.22.3",
+    "framer-motion": "11.11.9",
+    "mysql2": "3.24.5",
+    "pg": "8.13.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.30.6",
+    "socket.io": "4.8.0",
+    "socket.io-client": "4.8.0",
+    "three": "0.169.0",
+    "tsx": "4.23.15",
+    "zustand": "4.5.5"
+  },
+  "devDependencies": {
+    "@types/express": "4.17.21",
+    "@types/node": "22.8.6",
+    "@types/pg": "8.11.10",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@types/three": "0.169.0",
+    "@vitejs/plugin-react": "4.3.3",
+    "typescript": "5.6.3",
+    "vite": "5.4.10",
+    "vitest": "2.1.4"
+  }
+}

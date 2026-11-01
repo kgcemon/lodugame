@@ -1,0 +1,827 @@
+import { randomBytes, randomInt } from 'node:crypto';
+import type { Server, Socket } from 'socket.io';
+import { chooseMove } from '../shared/ai';
+import { applyAction, colorsForCount, createGame, RuleError } from '../shared/engine';
+import type {
+  ClientToServerEvents,
+  GameUpdate,
+  RoomPreview,
+  RoomStatus,
+  RoomView,
+  ServerToClientEvents,
+} from '../shared/protocol';
+import { MAX_NAME_LENGTH, ROOM_CODE_LENGTH, type ChatMessage } from '../shared/protocol';
+import {
+  botReaction,
+  CHAT_HISTORY,
+  CHAT_LIMIT,
+  EMOTE_LIMIT,
+  isEmoteId,
+  normalizeChat,
+  RateLimiter,
+} from '../shared/social';
+import type { AiLevel, Color, GameAction, GameEvent, GameState, PlayerKind } from '../shared/types';
+import { COLORS } from '../shared/types';
+import type { AuthUser } from './http';
+import type { MatchLedger } from './ledger';
+import type { Presence } from './presence';
+import { HttpError } from './security';
+import type { MatchMode, Settings } from './settings';
+
+export type IO = Server<ClientToServerEvents, ServerToClientEvents>;
+export type ClientSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
+
+export interface Timings {
+  /** How long a connected human has to act. */
+  turnMs: number;
+  /** How long to wait before auto-playing for a disconnected human. */
+  disconnectedTurnMs: number;
+  /** Pause before a bot acts, on top of the client animation time. */
+  botThinkMs: number;
+  /** Lobby seats of disconnected players are released after this. */
+  lobbyGraceMs: number;
+  /** Rooms with nobody connected are deleted after this. */
+  emptyRoomMs: number;
+  /** Multiplier for the estimated client animation time (0 in tests). */
+  animScale: number;
+  /** Overrides the configured matchmaking wait (tests). */
+  matchWaitMs?: number;
+}
+
+export const DEFAULT_TIMINGS: Timings = {
+  turnMs: 25_000,
+  disconnectedTurnMs: 6_000,
+  botThinkMs: 650,
+  lobbyGraceMs: 30_000,
+  emptyRoomMs: 120_000,
+  animScale: 1,
+};
+
+interface Seat {
+  id: string;
+  /** Authenticated user id (null for bots) — never broadcast. */
+  playerId: string | null;
+  publicId: string | null;
+  avatarHue: number;
+  name: string;
+  kind: PlayerKind;
+  aiLevel: AiLevel;
+  ready: boolean;
+  /** Seat reserved while the entry fee is being charged. */
+  pending: boolean;
+  socketId: string | null;
+  connected: boolean;
+  color: Color;
+  graceTimer?: NodeJS.Timeout;
+}
+
+interface Room {
+  code: string;
+  hostPid: string | null;
+  isPublic: boolean;
+  quick: boolean;
+  mode: MatchMode;
+  matchId: string;
+  entryFee: number;
+  payoutMultiplier: number;
+  maxPlayers: number;
+  status: RoomStatus;
+  seats: Seat[];
+  game: GameState | null;
+  deadline: number | null;
+  timer: NodeJS.Timeout | null;
+  emptyTimer: NodeJS.Timeout | null;
+  waitTimer: NodeJS.Timeout | null;
+  starting: boolean;
+  lastEvents: GameEvent[];
+  chat: ChatMessage[];
+  chatSeq: number;
+  /** Per-player limiters, keyed by the user id (not by socket). */
+  limits: Map<string, { chat: RateLimiter; emote: RateLimiter }>;
+  /** Delayed bot reactions; cleared with the room. */
+  botTimers: Set<NodeJS.Timeout>;
+}
+
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const MAX_ROOMS = 1000;
+const BOT_NAMES = ['Nova', 'Atlas', 'Pixel', 'Orion', 'Echo', 'Vega', 'Blaze', 'Kiwi'];
+
+export function sanitizeName(raw: unknown): string {
+  if (typeof raw !== 'string') return 'Player';
+  const clean = raw.replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, MAX_NAME_LENGTH);
+  return clean || 'Player';
+}
+
+/** Rough client animation time for a batch of events, so bots and timers wait for it. */
+export function animationMs(events: GameEvent[]): number {
+  let ms = 0;
+  for (const e of events) {
+    switch (e.type) {
+      case 'rolled': ms += 1300; break;
+      case 'moved': ms += 230 * Math.max(1, e.to - Math.max(e.from, 0)) + 250; break;
+      case 'captured': ms += 750; break;
+      case 'tokenHome': ms += 450; break;
+      case 'noMoves': case 'forfeitSixes': ms += 900; break;
+      case 'extraTurn': ms += 350; break;
+      case 'turn': ms += 300; break;
+      default: break;
+    }
+  }
+  return ms;
+}
+
+export class RoomManager {
+  private rooms = new Map<string, Room>();
+  private pidRoom = new Map<string, string>();
+  private botCounter = 0;
+
+  constructor(
+    private io: IO,
+    private ledger: MatchLedger,
+    private settings: Settings,
+    private presence: Presence,
+    private t: Timings = DEFAULT_TIMINGS,
+    private roll: () => number = () => randomInt(1, 7),
+  ) {}
+
+  get roomCount(): number {
+    return this.rooms.size;
+  }
+
+  // ---------------------------------------------------------------- views
+
+  private view(room: Room, pid: string | null): RoomView {
+    return {
+      code: room.code,
+      isPublic: room.isPublic,
+      maxPlayers: room.maxPlayers,
+      status: room.status,
+      mode: { id: room.mode.id, name: room.mode.name },
+      entryFee: room.entryFee,
+      payoutMultiplier: room.payoutMultiplier,
+      you: pid ? room.seats.findIndex((s) => s.playerId === pid) : -1,
+      seats: room.seats.map((s) => ({
+        id: s.id,
+        name: s.name,
+        color: s.color,
+        kind: s.kind,
+        publicId: s.publicId,
+        avatarHue: s.avatarHue,
+        ready: s.kind === 'ai' || ((s.ready || s.playerId === room.hostPid) && !s.pending),
+        connected: s.kind === 'ai' || (s.connected && !s.pending),
+        isHost: s.playerId !== null && s.playerId === room.hostPid,
+      })),
+    };
+  }
+
+  preview(code: unknown): RoomPreview {
+    if (typeof code !== 'string') throw new HttpError(400, 'Enter a room code');
+    const room = this.rooms.get(code.trim().toUpperCase());
+    if (!room) throw new HttpError(404, 'Room not found');
+    const host = room.seats.find((s) => s.playerId === room.hostPid);
+    return {
+      code: room.code,
+      mode: { id: room.mode.id, name: room.mode.name, description: room.mode.description },
+      entryFee: room.entryFee,
+      payoutMultiplier: room.payoutMultiplier,
+      players: room.seats.length,
+      maxPlayers: room.maxPlayers,
+      status: room.status,
+      isPublic: room.isPublic,
+      hostName: host?.name ?? null,
+      joinable: room.status === 'lobby' && room.seats.length < room.maxPlayers,
+    };
+  }
+
+  private broadcastRoom(room: Room): void {
+    for (const s of room.seats) {
+      if (s.socketId && s.playerId) this.io.to(s.socketId).emit('room:state', this.view(room, s.playerId));
+    }
+  }
+
+  private update(room: Room, events: GameEvent[]): GameUpdate {
+    return { state: room.game!, events, deadline: room.deadline, serverTime: Date.now() };
+  }
+
+  // ---------------------------------------------------------------- session
+
+  private user(socket: ClientSocket): AuthUser {
+    const u = socket.data.user as AuthUser | undefined;
+    if (!u) throw new RuleError('Please sign in');
+    return u;
+  }
+
+  hello(socket: ClientSocket): RoomView | null {
+    const u = this.user(socket);
+    const room = this.roomOf(u.id);
+    if (!room) return null;
+    const seat = room.seats.find((s) => s.playerId === u.id)!;
+    // A newer tab replaces an older connection for the same player.
+    if (seat.socketId && seat.socketId !== socket.id) this.io.sockets.sockets.get(seat.socketId)?.leave(room.code);
+    seat.socketId = socket.id;
+    seat.connected = true;
+    if (seat.graceTimer) clearTimeout(seat.graceTimer);
+    if (room.emptyTimer) {
+      clearTimeout(room.emptyTimer);
+      room.emptyTimer = null;
+    }
+    socket.join(room.code);
+    socket.emit('chat:history', room.chat);
+    if (room.game) {
+      if (this.isCurrent(room, seat)) this.reschedule(room, 0);
+      socket.emit('game:update', this.update(room, []));
+    }
+    this.broadcastRoom(room);
+    return this.view(room, u.id);
+  }
+
+  disconnect(socket: ClientSocket): void {
+    const u = socket.data.user as AuthUser | undefined;
+    if (!u) return;
+    const room = this.roomOf(u.id);
+    if (!room) return;
+    const seat = room.seats.find((s) => s.playerId === u.id);
+    if (!seat || seat.socketId !== socket.id) return;
+    seat.connected = false;
+    seat.socketId = null;
+    if (room.status === 'lobby') {
+      seat.graceTimer = setTimeout(() => {
+        if (!seat.connected && seat.playerId) void this.removeFromRoom(room, seat.playerId);
+      }, this.t.lobbyGraceMs);
+    } else if (room.game && room.game.phase !== 'over' && this.isCurrent(room, seat)) {
+      // Shorten their turn: an autopilot plays for them until they return.
+      this.reschedule(room, 0);
+    }
+    this.checkEmpty(room);
+    this.broadcastRoom(room);
+  }
+
+  private isCurrent(room: Room, seat: Seat): boolean {
+    const g = room.game;
+    return !!g && g.phase !== 'over' && g.players[g.current].color === seat.color;
+  }
+
+  // ---------------------------------------------------------------- lobby
+
+  private roomOf(pid: string): Room | undefined {
+    const code = this.pidRoom.get(pid);
+    return code ? this.rooms.get(code) : undefined;
+  }
+
+  private newCode(): string {
+    for (;;) {
+      const bytes = randomBytes(ROOM_CODE_LENGTH);
+      let code = '';
+      for (const b of bytes) code += CODE_ALPHABET[b % CODE_ALPHABET.length];
+      if (!this.rooms.has(code)) return code;
+    }
+  }
+
+  private freeColor(room: Room): Color {
+    return COLORS.find((c) => !room.seats.some((s) => s.color === c))!;
+  }
+
+  private seatFor(socket: ClientSocket, room: Room): Seat {
+    const u = this.user(socket);
+    return {
+      id: randomBytes(6).toString('hex'),
+      playerId: u.id,
+      publicId: u.publicId,
+      avatarHue: u.avatarHue,
+      name: u.username,
+      kind: 'human',
+      aiLevel: 'medium',
+      ready: false,
+      pending: true,
+      socketId: socket.id,
+      connected: true,
+      color: this.freeColor(room),
+    };
+  }
+
+  private track(pid: string, room: Room | null): void {
+    if (room) this.pidRoom.set(pid, room.code);
+    else this.pidRoom.delete(pid);
+    this.presence.setRoom(pid, room?.code ?? null);
+  }
+
+  /** Create a room backed by a new match row, seat the creator and charge their entry fee. */
+  private async openRoom(socket: ClientSocket, mode: MatchMode, maxPlayers: number, isPublic: boolean, quick: boolean): Promise<Room> {
+    const u = this.user(socket);
+    if (this.rooms.size >= MAX_ROOMS) throw new RuleError('Server is full, try again shortly');
+    await this.ledger.assertCanPlay(u.id, mode.entryFee);
+    await this.leave(socket);
+    const code = this.newCode();
+    const info = await this.ledger.createMatch({ roomCode: code, mode, maxPlayers, isPrivate: !isPublic, createdBy: u.id });
+    const room: Room = {
+      code,
+      hostPid: u.id,
+      isPublic,
+      quick,
+      mode,
+      matchId: info.matchId,
+      entryFee: info.entryFee,
+      payoutMultiplier: info.payoutMultiplier,
+      maxPlayers,
+      status: 'lobby',
+      seats: [],
+      game: null,
+      deadline: null,
+      timer: null,
+      emptyTimer: null,
+      waitTimer: null,
+      starting: false,
+      lastEvents: [],
+      chat: [],
+      chatSeq: 0,
+      limits: new Map(),
+      botTimers: new Set(),
+    };
+    const seat = this.seatFor(socket, room);
+    room.seats.push(seat);
+    this.rooms.set(code, room);
+    this.track(u.id, room);
+    try {
+      await this.ledger.join(room.matchId, u.id);
+    } catch (e) {
+      this.deleteRoom(room, 'creation failed');
+      throw e;
+    }
+    seat.pending = false;
+    socket.join(code);
+    this.broadcastRoom(room);
+    return room;
+  }
+
+  async create(socket: ClientSocket, modeId: unknown, maxPlayers: unknown): Promise<RoomView> {
+    const u = this.user(socket);
+    const mode = this.settings.mode(modeId);
+    const n = Number(maxPlayers);
+    if (!Number.isInteger(n) || n < 2 || n > 4) throw new RuleError('Rooms hold 2 to 4 players');
+    const room = await this.openRoom(socket, mode, n, false, false);
+    return this.view(room, u.id);
+  }
+
+  async join(socket: ClientSocket, rawCode: unknown): Promise<RoomView> {
+    const u = this.user(socket);
+    if (typeof rawCode !== 'string') throw new RuleError('Enter a room code');
+    const code = rawCode.trim().toUpperCase();
+    const room = this.rooms.get(code);
+    if (!room) throw new RuleError('Room not found');
+    if (room.seats.some((s) => s.playerId === u.id)) return this.hello(socket)!;
+    if (room.status !== 'lobby' || room.starting) throw new RuleError('That match has already started');
+    if (room.seats.length >= room.maxPlayers) throw new RuleError('Room is full');
+    await this.ledger.assertCanPlay(u.id, room.entryFee);
+    await this.leave(socket);
+    // Re-check after the await: the room may have filled or started meanwhile.
+    if (!this.rooms.has(code) || room.status !== 'lobby' || room.starting) throw new RuleError('That match has already started');
+    if (room.seats.length >= room.maxPlayers) throw new RuleError('Room is full');
+    const seat = this.seatFor(socket, room);
+    room.seats.push(seat);
+    this.track(u.id, room);
+    this.broadcastRoom(room);
+    try {
+      await this.ledger.join(room.matchId, u.id);
+    } catch (e) {
+      room.seats.splice(room.seats.indexOf(seat), 1);
+      this.track(u.id, null);
+      this.broadcastRoom(room);
+      throw e;
+    }
+    if (!this.rooms.has(code) || !room.seats.includes(seat)) {
+      // The room went away while we were charging: give the fee back.
+      await this.ledger.leaveBeforeStart(room.matchId, u.id);
+      throw new RuleError('The room was closed');
+    }
+    seat.pending = false;
+    socket.join(room.code);
+    socket.emit('chat:history', room.chat);
+    this.broadcastRoom(room);
+    if (room.quick) this.checkQuickStart(room);
+    return this.view(room, u.id);
+  }
+
+  /** Public matchmaking for a mode: join a waiting room of that mode or open one. */
+  async quick(socket: ClientSocket, modeId: unknown): Promise<RoomView> {
+    const u = this.user(socket);
+    const mode = this.settings.mode(modeId);
+    if (mode.privateOnly) throw new RuleError(`${mode.name} is only available as a private room`);
+    const current = this.roomOf(u.id);
+    if (current?.quick && current.status === 'lobby' && current.mode.id === mode.id) return this.view(current, u.id);
+    for (const room of this.rooms.values()) {
+      if (
+        room.quick &&
+        room.mode.id === mode.id &&
+        room.status === 'lobby' &&
+        !room.starting &&
+        room.seats.length < room.maxPlayers &&
+        room.seats.some((s) => s.connected && !s.pending)
+      ) {
+        return this.join(socket, room.code);
+      }
+    }
+    const room = await this.openRoom(socket, mode, mode.maxPlayers, true, true);
+    return this.view(room, u.id);
+  }
+
+  /** Quick rooms start when full, or after the matchmaking wait once two players are in. */
+  private checkQuickStart(room: Room): void {
+    const seated = room.seats.filter((s) => !s.pending).length;
+    if (seated >= room.maxPlayers) {
+      void this.startGame(room).catch((e) => console.error('[rooms] quick start failed', e));
+      return;
+    }
+    if (seated >= 2 && !room.waitTimer) {
+      const ms = this.t.matchWaitMs ?? this.settings.get().matchmakingWaitSeconds * 1000;
+      room.waitTimer = setTimeout(() => {
+        room.waitTimer = null;
+        if (this.rooms.has(room.code) && room.status === 'lobby' && room.seats.filter((s) => !s.pending).length >= 2) {
+          void this.startGame(room).catch((e) => console.error('[rooms] quick start failed', e));
+        }
+      }, ms);
+    }
+  }
+
+  setReady(socket: ClientSocket, ready: boolean): void {
+    const { room, seat } = this.mySeat(socket);
+    if (room.status !== 'lobby') throw new RuleError('Match already started');
+    seat.ready = !!ready;
+    this.broadcastRoom(room);
+  }
+
+  addBot(socket: ClientSocket): void {
+    const { room } = this.hostRoom(socket);
+    if (room.status !== 'lobby') throw new RuleError('Match already started');
+    if (room.entryFee > 0) throw new RuleError('Bots can only join free Friendly rooms');
+    if (room.seats.length >= room.maxPlayers) throw new RuleError('Room is full');
+    const name = `${BOT_NAMES[this.botCounter++ % BOT_NAMES.length]} (bot)`;
+    room.seats.push({
+      id: randomBytes(6).toString('hex'),
+      playerId: null,
+      publicId: null,
+      avatarHue: 0,
+      name,
+      kind: 'ai',
+      aiLevel: 'medium',
+      ready: true,
+      pending: false,
+      socketId: null,
+      connected: true,
+      color: this.freeColor(room),
+    });
+    this.broadcastRoom(room);
+  }
+
+  async kick(socket: ClientSocket, seatIdx: number): Promise<void> {
+    const { room } = this.hostRoom(socket);
+    if (room.status !== 'lobby') throw new RuleError('Match already started');
+    const seat = room.seats[seatIdx];
+    if (!Number.isInteger(seatIdx) || !seat) throw new RuleError('No such seat');
+    if (seat.pending) throw new RuleError('That player is still joining');
+    if (seat.playerId === room.hostPid) throw new RuleError('You cannot remove yourself');
+    if (seat.playerId) {
+      if (seat.socketId) {
+        this.io.to(seat.socketId).emit('room:closed', 'You were removed from the room (entry fee refunded)');
+        this.io.sockets.sockets.get(seat.socketId)?.leave(room.code);
+      }
+      await this.removeFromRoom(room, seat.playerId);
+    } else {
+      room.seats.splice(seatIdx, 1);
+      this.broadcastRoom(room);
+    }
+  }
+
+  async start(socket: ClientSocket): Promise<void> {
+    const { room } = this.hostRoom(socket);
+    if (room.status !== 'lobby' || room.starting) throw new RuleError('Match already started');
+    if (room.seats.some((s) => s.pending)) throw new RuleError('A player is still joining');
+    if (room.seats.length < 2) {
+      throw new RuleError(room.entryFee > 0 ? 'Need at least 2 players — invite a friend' : 'Need at least 2 players — invite a friend or add a bot');
+    }
+    const notReady = room.seats.filter((s) => s.kind === 'human' && s.playerId !== room.hostPid && !s.ready);
+    if (notReady.length) throw new RuleError(`Waiting for ${notReady.map((s) => s.name).join(', ')} to be ready`);
+    await this.startGame(room);
+  }
+
+  /** A rematch is a new match: everyone pays the entry fee again; anyone who can't is removed. */
+  async rematch(socket: ClientSocket): Promise<void> {
+    const { room } = this.hostRoom(socket);
+    if (room.status !== 'over') throw new RuleError('The match is still running');
+    const info = await this.ledger.createMatch({
+      roomCode: room.code,
+      mode: room.mode,
+      maxPlayers: room.maxPlayers,
+      isPrivate: !room.isPublic,
+      createdBy: room.hostPid!,
+    });
+    room.matchId = info.matchId;
+    room.entryFee = info.entryFee;
+    room.payoutMultiplier = info.payoutMultiplier;
+    room.status = 'lobby';
+    room.game = null;
+    room.deadline = null;
+    if (room.timer) clearTimeout(room.timer);
+    room.timer = null;
+    // Seats a bot took over are cleared from paid rooms; free rooms keep them.
+    room.seats = room.seats.filter((s) => s.playerId || room.entryFee === 0);
+    for (const s of [...room.seats]) {
+      s.ready = false;
+      if (!s.playerId) continue;
+      try {
+        await this.ledger.join(room.matchId, s.playerId);
+      } catch (e) {
+        room.seats.splice(room.seats.indexOf(s), 1);
+        this.track(s.playerId, null);
+        if (s.socketId) {
+          this.io.to(s.socketId).emit('room:closed', `Rematch: ${(e as Error).message}`);
+          this.io.sockets.sockets.get(s.socketId)?.leave(room.code);
+        }
+      }
+    }
+    if (room.hostPid && !room.seats.some((s) => s.playerId === room.hostPid)) room.hostPid = room.seats.find((s) => s.playerId)?.playerId ?? null;
+    if (!room.seats.some((s) => s.playerId)) {
+      this.deleteRoom(room, 'rematch failed');
+      return;
+    }
+    this.broadcastRoom(room);
+  }
+
+  private async startGame(room: Room): Promise<void> {
+    if (room.starting || room.status !== 'lobby') return;
+    room.starting = true;
+    if (room.waitTimer) clearTimeout(room.waitTimer);
+    room.waitTimer = null;
+    try {
+      const colors = colorsForCount(room.seats.length);
+      room.seats.forEach((s, i) => (s.color = colors[i]));
+      await this.ledger.start(
+        room.matchId,
+        room.seats.filter((s) => s.playerId).map((s) => ({ userId: s.playerId!, color: s.color })),
+      );
+    } finally {
+      room.starting = false;
+    }
+    if (!this.rooms.has(room.code)) return;
+    room.game = createGame(room.seats.map((s) => ({ color: s.color, name: s.name, kind: s.kind, aiLevel: s.aiLevel })));
+    room.status = 'playing';
+    room.lastEvents = [];
+    this.reschedule(room, 0);
+    this.broadcastRoom(room);
+    this.io.to(room.code).emit('game:update', this.update(room, []));
+  }
+
+  async leave(socket: ClientSocket): Promise<void> {
+    const u = socket.data.user as AuthUser | undefined;
+    if (!u) return;
+    const room = this.roomOf(u.id);
+    if (!room) return;
+    socket.leave(room.code);
+    await this.removeFromRoom(room, u.id);
+  }
+
+  private async removeFromRoom(room: Room, pid: string): Promise<void> {
+    const idx = room.seats.findIndex((s) => s.playerId === pid);
+    this.track(pid, null);
+    if (idx < 0) return;
+    const seat = room.seats[idx];
+    if (seat.graceTimer) clearTimeout(seat.graceTimer);
+
+    if (room.status === 'lobby') {
+      room.seats.splice(idx, 1);
+      await this.ledger.leaveBeforeStart(room.matchId, pid).catch((e) => console.error('[rooms] refund failed', e));
+    } else {
+      // Mid-match: the player forfeits (no refund) and a bot finishes their seat.
+      if (room.status === 'playing') await this.ledger.forfeit(room.matchId, pid).catch((e) => console.error('[rooms] forfeit failed', e));
+      seat.playerId = null;
+      seat.socketId = null;
+      seat.kind = 'ai';
+      seat.connected = true;
+      seat.name = `${seat.name} (bot)`;
+      const p = room.game?.players.find((pl) => pl.color === seat.color);
+      if (p) {
+        p.kind = 'ai';
+        p.name = seat.name;
+      }
+      if (room.game && room.game.phase !== 'over') this.reschedule(room, 0);
+    }
+
+    if (room.hostPid === pid) room.hostPid = room.seats.find((s) => s.playerId && !s.pending)?.playerId ?? null;
+    if (!room.seats.some((s) => s.playerId)) {
+      this.deleteRoom(room, room.status === 'lobby' ? 'everyone left' : 'all players left');
+      return;
+    }
+    this.broadcastRoom(room);
+    if (room.game) this.io.to(room.code).emit('game:update', this.update(room, []));
+  }
+
+  private checkEmpty(room: Room): void {
+    if (room.seats.some((s) => s.playerId && s.connected)) return;
+    if (room.emptyTimer) return;
+    room.emptyTimer = setTimeout(() => this.deleteRoom(room, 'everyone disconnected'), this.t.emptyRoomMs);
+  }
+
+  // ---------------------------------------------------------------- chat & emotes
+
+  private limiter(room: Room, pid: string) {
+    let l = room.limits.get(pid);
+    if (!l) {
+      l = {
+        chat: new RateLimiter(CHAT_LIMIT.burst, CHAT_LIMIT.windowMs, CHAT_LIMIT.minGapMs),
+        emote: new RateLimiter(EMOTE_LIMIT.burst, EMOTE_LIMIT.windowMs, EMOTE_LIMIT.cooldownMs),
+      };
+      room.limits.set(pid, l);
+    }
+    return l;
+  }
+
+  /** Room chat. The sender is whoever owns this socket's seat — clients cannot name a sender. */
+  chat(socket: ClientSocket, raw: unknown, quick: unknown): void {
+    const { room, seat } = this.mySeat(socket);
+    const text = normalizeChat(raw);
+    if (!text) throw new RuleError('Message is empty or too long');
+    if (!this.limiter(room, seat.playerId!).chat.take()) throw new RuleError('You are sending messages too fast');
+    const msg: ChatMessage = {
+      id: ++room.chatSeq,
+      seatId: seat.id,
+      color: seat.color,
+      name: seat.name,
+      text,
+      at: Date.now(),
+      quick: quick === true,
+    };
+    room.chat.push(msg);
+    if (room.chat.length > CHAT_HISTORY) room.chat.splice(0, room.chat.length - CHAT_HISTORY);
+    this.io.to(room.code).emit('chat:message', msg);
+  }
+
+  emote(socket: ClientSocket, id: unknown): void {
+    const { room, seat } = this.mySeat(socket);
+    if (!isEmoteId(id)) throw new RuleError('Unknown emote');
+    if (room.status === 'lobby') throw new RuleError('Emotes are available during a match');
+    if (!this.limiter(room, seat.playerId!).emote.take()) throw new RuleError('Emote cooling down');
+    this.io.to(room.code).emit('emote', { id, seatId: seat.id, color: seat.color, name: seat.name, at: Date.now() });
+  }
+
+  /** Bots occasionally react to captures and finishes, after the move has been animated. */
+  private scheduleBotReaction(room: Room, events: GameEvent[]): void {
+    const g = room.game;
+    if (!g) return;
+    const r = botReaction(events, g.players, Math.random);
+    if (!r) return;
+    const seat = room.seats.find((s) => s.color === g.players[r.player].color);
+    if (!seat || seat.kind !== 'ai') return;
+    const t = setTimeout(() => {
+      room.botTimers.delete(t);
+      if (!this.rooms.has(room.code)) return;
+      this.io.to(room.code).emit('emote', { id: r.id, seatId: seat.id, color: seat.color, name: seat.name, at: Date.now() });
+    }, animationMs(events) * this.t.animScale * 0.85 + 150);
+    room.botTimers.add(t);
+  }
+
+  /** Drop a room; its match is cancelled (refunds) before start or abandoned (no refunds) after. */
+  private deleteRoom(room: Room, reason: string): void {
+    for (const t of room.botTimers) clearTimeout(t);
+    room.botTimers.clear();
+    if (room.timer) clearTimeout(room.timer);
+    if (room.emptyTimer) clearTimeout(room.emptyTimer);
+    if (room.waitTimer) clearTimeout(room.waitTimer);
+    for (const s of room.seats) {
+      if (s.graceTimer) clearTimeout(s.graceTimer);
+      if (s.playerId) this.track(s.playerId, null);
+    }
+    this.rooms.delete(room.code);
+    const job =
+      room.status === 'lobby'
+        ? this.ledger.cancel(room.matchId, reason)
+        : room.status === 'playing'
+          ? this.ledger.abandon(room.matchId, reason, false)
+          : Promise.resolve();
+    job.catch((e) => console.error('[rooms] closing match failed', e));
+  }
+
+  // ---------------------------------------------------------------- gameplay
+
+  rollDice(socket: ClientSocket): void {
+    const { room } = this.myTurn(socket);
+    this.apply(room, { type: 'roll', value: this.roll() });
+  }
+
+  move(socket: ClientSocket, token: unknown): void {
+    const { room } = this.myTurn(socket);
+    if (typeof token !== 'number') throw new RuleError('Invalid token');
+    this.apply(room, { type: 'move', token });
+  }
+
+  private apply(room: Room, action: GameAction): void {
+    const { state, events } = applyAction(room.game!, action);
+    room.game = state;
+    room.lastEvents = events;
+    if (state.phase === 'over') room.status = 'over';
+    this.reschedule(room, animationMs(events) * this.t.animScale);
+    this.io.to(room.code).emit('game:update', this.update(room, events));
+    this.scheduleBotReaction(room, events);
+    if (room.status === 'over') {
+      this.broadcastRoom(room);
+      void this.settle(room, state);
+    }
+  }
+
+  /** The winner comes from the server's own game state, never from a client. */
+  private async settle(room: Room, state: GameState): Promise<void> {
+    const ranking = state.ranking.map((pi) => {
+      const seat = room.seats.find((s) => s.color === state.players[pi].color);
+      return seat && seat.kind === 'human' && seat.playerId ? seat.playerId : null;
+    });
+    const winnerColor = state.players[state.ranking[0]].color;
+    try {
+      const res = await this.ledger.settle(room.matchId, ranking, winnerColor);
+      if (res) {
+        const winnerSeat = room.seats.find((s) => s.color === winnerColor);
+        this.io.to(room.code).emit('match:settled', {
+          winnerName: winnerSeat?.name ?? 'Unknown',
+          winnerColor,
+          payout: res.payout,
+          entryFee: room.entryFee,
+        });
+      }
+    } catch (e) {
+      console.error('[rooms] settlement failed', e);
+    }
+  }
+
+  /** Arm the timer that auto-plays for bots, absent players and expired turns. */
+  private reschedule(room: Room, animMs: number): void {
+    if (room.timer) clearTimeout(room.timer);
+    room.timer = null;
+    room.deadline = null;
+    const g = room.game;
+    if (!g || g.phase === 'over') return;
+    const p = g.players[g.current];
+    const seat = room.seats.find((s) => s.color === p.color);
+    let wait: number;
+    if (p.kind === 'ai' || !seat) {
+      wait = animMs + this.t.botThinkMs;
+    } else {
+      wait = animMs + (seat.connected ? this.t.turnMs : this.t.disconnectedTurnMs);
+      room.deadline = Date.now() + wait;
+    }
+    room.timer = setTimeout(() => this.autoPlay(room), wait);
+  }
+
+  private autoPlay(room: Room): void {
+    room.timer = null;
+    const g = room.game;
+    if (!g || g.phase === 'over' || !this.rooms.has(room.code)) return;
+    const p = g.players[g.current];
+    try {
+      if (g.phase === 'roll') this.apply(room, { type: 'roll', value: this.roll() });
+      else this.apply(room, { type: 'move', token: chooseMove(g, p.kind === 'ai' ? p.aiLevel : 'medium') });
+    } catch (err) {
+      console.error('[rooms] autoplay failed', err);
+    }
+  }
+
+  // ---------------------------------------------------------------- guards
+
+  private mySeat(socket: ClientSocket): { room: Room; seat: Seat } {
+    const u = this.user(socket);
+    const room = this.roomOf(u.id);
+    const seat = room?.seats.find((s) => s.playerId === u.id);
+    if (!room || !seat || seat.pending) throw new RuleError('You are not in a room');
+    if (seat.socketId !== socket.id) throw new RuleError('This room is open in another tab');
+    return { room, seat };
+  }
+
+  private hostRoom(socket: ClientSocket): { room: Room; seat: Seat } {
+    const r = this.mySeat(socket);
+    if (r.room.hostPid !== r.seat.playerId) throw new RuleError('Only the host can do that');
+    return r;
+  }
+
+  private myTurn(socket: ClientSocket): { room: Room; seat: Seat } {
+    const r = this.mySeat(socket);
+    const g = r.room.game;
+    if (!g || r.room.status !== 'playing') throw new RuleError('No match in progress');
+    if (g.players[g.current].color !== r.seat.color) throw new RuleError('It is not your turn');
+    return r;
+  }
+
+  /** Remove a suspended user from any room they're in. */
+  async evict(userId: string): Promise<void> {
+    const room = this.roomOf(userId);
+    if (room) await this.removeFromRoom(room, userId);
+  }
+
+  shutdown(): void {
+    // Rooms stay "open" in the database; recovery on next boot refunds them.
+    for (const room of this.rooms.values()) {
+      for (const t of room.botTimers) clearTimeout(t);
+      if (room.timer) clearTimeout(room.timer);
+      if (room.emptyTimer) clearTimeout(room.emptyTimer);
+      if (room.waitTimer) clearTimeout(room.waitTimer);
+      for (const s of room.seats) if (s.graceTimer) clearTimeout(s.graceTimer);
+    }
+    this.rooms.clear();
+    this.pidRoom.clear();
+  }
+}

@@ -1,0 +1,166 @@
+# Ludo 3D — online platform
+
+A 3D Ludo game (React Three Fiber) plus a full online platform: accounts, a virtual-coin
+wallet with an auditable ledger, paid matches with server-decided payouts, friends, room
+invitations, leaderboards, match history, emotes/chat, and an admin dashboard.
+
+Virtual coins have **no cash value** and cannot be bought or withdrawn.
+
+## Architecture
+
+```
+Browser (React + Vite)  ──HTTPS JSON (/api, cookie session)──►  Node server (Express + Socket.IO)
+        │                                                            │  ├─ auth, wallet, friends, admin  (server/*.ts)
+        └─────────── WebSocket (/socket.io, same cookie) ───────────►│  ├─ rooms + authoritative game     (server/rooms.ts)
+                                                                     │  └─ coin ledger for matches        (server/ledger.ts)
+                                                                     ▼
+                                                PostgreSQL or MySQL (DATABASE_URL, e.g. Supabase / CloudPanel)
+                                                or PGlite (PostgreSQL in WebAssembly, ./data) when unset
+```
+
+* The browser never talks to the database. Every coin movement happens in the server inside a
+  database transaction (`server/wallet.ts → applyWalletTx`), which locks the wallet row, checks an
+  idempotency key, updates the balance (a `CHECK (balance >= 0)` keeps it non-negative) and writes
+  the ledger row.
+* Auth is implemented in the app server: scrypt password hashes, random session tokens stored only
+  as SHA-256 hashes, HttpOnly `SameSite=Lax` cookies (`Secure` in production). Supabase **Auth** is
+  not used; Supabase works as the **PostgreSQL** host.
+* All tables have Row Level Security enabled with no policies, so Supabase's `anon`/`authenticated`
+  keys can't read or change anything. The server connects as the table owner.
+
+## Quick start (local)
+
+Requires Node.js 22+.
+
+```bash
+npm install
+cp .env.example .env        # then edit ADMIN_EMAILS to your own email
+npm run dev                 # API + game server on :3001, Vite on :5173
+```
+
+Open http://localhost:5173 and create an account. Without `DATABASE_URL` the data lives in
+`./data/pglite` (a real PostgreSQL engine, no install needed). Without `RESEND_API_KEY`,
+verification and password-reset links are printed in the server terminal.
+
+| Command              | What it does                                                           |
+| -------------------- | ---------------------------------------------------------------------- |
+| `npm run dev`        | Server (auto-restart) + Vite (hot reload)                              |
+| `npm test`           | Rules engine, game server, chat/emotes and platform tests (Vitest)     |
+| `npm run build`      | Type-check everything and build the site into `dist/`                  |
+| `npm start`          | Production: one process serves `dist/`, `/api` and the game socket     |
+| `npm run db:migrate` | Apply database migrations and exit (the server also does this on boot) |
+
+## Database setup
+
+Migrations are plain SQL in `server/db/migrations/` (PostgreSQL/PGlite) and
+`server/db/migrations-mysql/` (MySQL) and are applied automatically, in order, when the server
+starts (tracked in `schema_migrations`). A schema change needs a file in both folders.
+
+**PostgreSQL / Supabase:**
+
+1. Create a Supabase project (or any PostgreSQL 14+ database).
+2. Copy the connection string (Supabase: *Project Settings → Database → Connection string → URI*)
+   into `.env` as `DATABASE_URL=...` — server only, never in the frontend.
+3. `npm run db:migrate` (or just start the server).
+
+**MySQL / MariaDB (CloudPanel, cPanel, XAMPP; MySQL 8.0.16+ or MariaDB 10.4.2+):**
+
+1. Create an empty database and a user with full rights on it (CloudPanel: *Sites → your site →
+   Databases → Add Database*).
+2. Put it in `.env` as `DATABASE_URL=mysql://DB_USER:DB_PASSWORD@127.0.0.1:3306/DB_NAME`
+   (URL-encode special characters in the password, e.g. `@` → `%40`).
+3. `npm run db:migrate` (or just start the server).
+
+Application SQL is written for PostgreSQL; `server/db/index.ts → toMysql` rewrites the few
+differences (`$1` placeholders, casts, `ilike`, `on conflict`) for MySQL. MySQL has no row level
+security, so keep the database user private to the server. To run the test suite on MySQL, set
+`TEST_MYSQL_URL=mysql://root:PASSWORD@127.0.0.1:3306/` (a user that may create databases); each
+test server gets its own temporary database.
+
+Tables: `users`, `profiles`, `sessions`, `auth_tokens`, `wallets`, `wallet_transactions`,
+`matches`, `match_players`, `match_settlements`, `match_disputes`, `friend_requests`,
+`friendships`, `notifications`, `game_settings`, `audit_logs`.
+
+**Administrators:** put your email in `ADMIN_EMAILS`; that account becomes an admin when it
+registers or next signs in. Admin settings (bonuses, entry fees, payout multiplier, mode
+names/limits) live in `game_settings` and are edited from **/admin → Settings**.
+
+## Production deployment
+
+```bash
+npm ci
+npm run build
+NODE_ENV=production PORT=3001 APP_BASE_URL=https://your-domain.example DATABASE_URL=... npm start
+```
+
+* Serve it behind HTTPS (nginx, Caddy or a PaaS). Enable WebSocket upgrades for `/socket.io/`.
+  Set `TRUST_PROXY=true` behind a proxy so rate limits see real client IPs.
+* `APP_BASE_URL` is used for invitation links and emails — set it to your real public URL.
+* Set `RESEND_API_KEY` and `MAIL_FROM` for real emails; `REQUIRE_EMAIL_VERIFICATION=true` to
+  require a verified email before paid matches.
+* Rooms in progress live in server memory: run **one** server instance. On restart, open matches
+  are refunded automatically (see policy below).
+
+## Coins, matches and policies
+
+| Event | Coins |
+| --- | --- |
+| Registration | Welcome bonus (default 1,000), once per account, same transaction as the account |
+| Daily bonus | Default 100, once per UTC day (`daily:<date>` idempotency key) |
+| Joining a match | Official entry fee from the server's settings, charged once per seat (`entry:<match>:<attempt>`) |
+| Winning | Total payout = multiplier × your fee (default 2×, fee included), once per match (`match_settlements` primary key + `reward:<match>` key) |
+| Admin adjustment | Any amount with a required reason; recorded in the ledger and the audit log |
+
+**Payout accounting:** all players in a room pay the same fee (mixed fees are impossible —
+the fee belongs to the room). 2 players: pot 2E, winner gets 2E. 4 players: pot 4E, winner gets 2E,
+and the remaining 2E is retained by the house and stored per match as `house_amount`. If a bot
+(that took over a leaver's seat) wins, nobody is paid.
+
+**Refund policy** (`server/ledger.ts`):
+
+* Leaving, being removed, or timing out **before the start** → full refund.
+* Room cancelled before the start (everyone left, creation failed) → full refund.
+* Server restart/crash → full refund to players still in the match; players who had already
+  forfeited are not refunded.
+* Leaving or disconnecting **after the start** → no refund (a bot plays the seat).
+* Losing → no refund.
+
+Matchmaking (Quick/Classic/Pro/Master) starts a room when it is full, or after the configured
+wait (default 45 s) once at least two players are in. Friendly rooms are free, private and allow bots.
+
+## Security summary
+
+* Server-side validation on every endpoint; parameterised SQL everywhere (no string-built values).
+* CSRF: state-changing requests need JSON, a custom `X-Requested-With` header and an allowed
+  `Origin`; cookies are `SameSite=Lax`. WebSocket connections also check `Origin`.
+* Rate limits on registration, login, password reset, chat, emotes, friend requests and admin actions.
+* Security headers including a strict Content-Security-Policy; generic error messages (no SQL or stacks).
+* Chat and names are rendered as React text (no HTML injection).
+* Clients never send balances, fees, winners or sender identities — the server derives them.
+
+## Project structure (main parts)
+
+```
+shared/       Rules engine, board geometry, AI, emote/chat rules, socket protocol
+server/
+  index.ts    Express + Socket.IO wiring, static hosting, crash recovery
+  auth.ts     Register / login / logout / verify / reset / change password
+  api.ts      Profile, wallet, history, stats, leaderboard, friends, notifications, admin
+  wallet.ts   Ledger: applyWalletTx, daily bonus, transaction lists
+  ledger.ts   Match money: entry, refunds, settlement, cancellation, recovery
+  rooms.ts    Rooms, matchmaking, authoritative turns, chat/emotes
+  settings.ts Admin-configurable game settings
+  db/         PostgreSQL/MySQL/PGlite adapter, migrations (+ migrations-mysql), migrate CLI
+src/
+  ui/platform Auth pages, dashboard shell, play/room/friends/wallet/history/leaderboard/admin pages
+  ui/         In-game HUD, chat & emote panels, practice setup
+  three/      3D scene, board, tokens, dice, effects (loaded only when a match starts)
+tests/        engine, server, social (chat/emotes), platform (accounts, wallet, payouts, friends, admin)
+```
+
+## Not included
+
+* Real-money purchases or withdrawals (by design), referral rewards.
+* Supabase Auth (accounts are handled by the app server; Supabase is used as the database).
+* Running several server instances at once (rooms are in memory).
+* Profanity filtering / server-side chat moderation (players can mute and hide locally).

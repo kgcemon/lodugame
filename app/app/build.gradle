@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.ludo3d.game'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.ludo3d.game'
+        minSdk 24
+        targetSdk 36
+        versionCode 1
+        versionName '1.0.0'
+
+        // Default game server. Players can change it on the sign-in screen (Server settings).
+        // Emulator -> `npm run dev` on this PC: http://10.0.2.2:3001
+        // Production: your HTTPS site, e.g. https://ludo.your-domain.example
+        buildConfigField 'String', 'DEFAULT_SERVER_URL', '"http://10.0.2.2:3001"'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation('io.socket:socket.io-client:2.1.2') {
+        // Use the org.json that ships with Android.
+        exclude group: 'org.json', module: 'json'
+    }
+}

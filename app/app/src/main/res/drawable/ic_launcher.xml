@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon for Android 7.x: a die on the four Ludo colours. Android 8+ uses drawable-v26. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#141a4a" android:pathData="M54,4a50,50 0 1,0 0.01,0z" />
+    <path android:fillColor="#e53945" android:pathData="M54,54 L18,18 A50,50 0 0,1 90,18 Z" />
+    <path android:fillColor="#22b46b" android:pathData="M54,54 L90,18 A50,50 0 0,1 90,90 Z" />
+    <path android:fillColor="#f6bf26" android:pathData="M54,54 L90,90 A50,50 0 0,1 18,90 Z" />
+    <path android:fillColor="#2f7cf0" android:pathData="M54,54 L18,90 A50,50 0 0,1 18,18 Z" />
+    <path android:fillColor="#ffffff" android:pathData="M36,30h36a6,6 0 0,1 6,6v36a6,6 0 0,1 -6,6h-36a6,6 0 0,1 -6,-6v-36a6,6 0 0,1 6,-6z" />
+    <path android:fillColor="#141a4a" android:pathData="M42,42m-5,0a5,5 0 1,0 10,0a5,5 0 1,0 -10,0" />
+    <path android:fillColor="#141a4a" android:pathData="M54,54m-5,0a5,5 0 1,0 10,0a5,5 0 1,0 -10,0" />
+    <path android:fillColor="#141a4a" android:pathData="M66,66m-5,0a5,5 0 1,0 10,0a5,5 0 1,0 -10,0" />
+</vector>
