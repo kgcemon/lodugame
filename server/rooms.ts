@@ -92,6 +92,8 @@ interface Room {
   timer: NodeJS.Timeout | null;
   emptyTimer: NodeJS.Timeout | null;
   waitTimer: NodeJS.Timeout | null;
+  /** When the quick-play wait runs out and bots fill the empty seats (epoch ms). */
+  waitUntil: number | null;
   starting: boolean;
   lastEvents: GameEvent[];
   chat: ChatMessage[];
@@ -160,6 +162,7 @@ export class RoomManager {
       entryFee: room.entryFee,
       payoutMultiplier: room.payoutMultiplier,
       you: pid ? room.seats.findIndex((s) => s.playerId === pid) : -1,
+      waitMsLeft: room.waitUntil ? Math.max(0, room.waitUntil - Date.now()) : null,
       seats: room.seats.map((s) => ({
         id: s.id,
         name: s.name,
@@ -330,6 +333,7 @@ export class RoomManager {
       timer: null,
       emptyTimer: null,
       waitTimer: null,
+      waitUntil: null,
       starting: false,
       lastEvents: [],
       chat: [],
@@ -349,6 +353,8 @@ export class RoomManager {
     }
     seat.pending = false;
     socket.join(code);
+    // Quick play: the bot-fill countdown starts with the first player, before anyone sees the room.
+    if (quick) this.checkQuickStart(room);
     this.broadcastRoom(room);
     return room;
   }
@@ -424,22 +430,52 @@ export class RoomManager {
     return this.view(room, u.id);
   }
 
-  /** Quick rooms start when full, or after the matchmaking wait once two players are in. */
+  /**
+   * Quick rooms start when full. Otherwise the matchmaking wait starts with the first
+   * player; when it runs out, empty seats are filled with bots and the match starts.
+   */
   private checkQuickStart(room: Room): void {
     const seated = room.seats.filter((s) => !s.pending).length;
     if (seated >= room.maxPlayers) {
       void this.startGame(room).catch((e) => console.error('[rooms] quick start failed', e));
       return;
     }
-    if (seated >= 2 && !room.waitTimer) {
+    if (seated >= 1 && !room.waitTimer) {
       const ms = this.t.matchWaitMs ?? this.settings.get().matchmakingWaitSeconds * 1000;
+      room.waitUntil = Date.now() + ms;
       room.waitTimer = setTimeout(() => {
         room.waitTimer = null;
-        if (this.rooms.has(room.code) && room.status === 'lobby' && room.seats.filter((s) => !s.pending).length >= 2) {
-          void this.startGame(room).catch((e) => console.error('[rooms] quick start failed', e));
+        room.waitUntil = null;
+        if (!this.rooms.has(room.code) || room.status !== 'lobby' || room.starting) return;
+        if (!room.seats.some((s) => s.playerId && !s.pending)) return;
+        if (room.seats.some((s) => s.pending)) {
+          // Someone is paying for a seat right now: give them a moment, then try again.
+          this.checkQuickStart(room);
+          return;
         }
+        // Nobody else came: fill the empty seats with bots so the player isn't kept waiting.
+        while (room.seats.length < room.maxPlayers) room.seats.push(this.makeBot(room));
+        this.broadcastRoom(room);
+        void this.startGame(room).catch((e) => console.error('[rooms] quick start failed', e));
       }, ms);
     }
+  }
+
+  private makeBot(room: Room): Seat {
+    return {
+      id: randomBytes(6).toString('hex'),
+      playerId: null,
+      publicId: null,
+      avatarHue: 0,
+      name: `${BOT_NAMES[this.botCounter++ % BOT_NAMES.length]} (bot)`,
+      kind: 'ai',
+      aiLevel: 'medium',
+      ready: true,
+      pending: false,
+      socketId: null,
+      connected: true,
+      color: this.freeColor(room),
+    };
   }
 
   setReady(socket: ClientSocket, ready: boolean): void {
@@ -454,21 +490,7 @@ export class RoomManager {
     if (room.status !== 'lobby') throw new RuleError('Match already started');
     if (room.entryFee > 0) throw new RuleError('Bots can only join free Friendly rooms');
     if (room.seats.length >= room.maxPlayers) throw new RuleError('Room is full');
-    const name = `${BOT_NAMES[this.botCounter++ % BOT_NAMES.length]} (bot)`;
-    room.seats.push({
-      id: randomBytes(6).toString('hex'),
-      playerId: null,
-      publicId: null,
-      avatarHue: 0,
-      name,
-      kind: 'ai',
-      aiLevel: 'medium',
-      ready: true,
-      pending: false,
-      socketId: null,
-      connected: true,
-      color: this.freeColor(room),
-    });
+    room.seats.push(this.makeBot(room));
     this.broadcastRoom(room);
   }
 
@@ -551,6 +573,7 @@ export class RoomManager {
     room.starting = true;
     if (room.waitTimer) clearTimeout(room.waitTimer);
     room.waitTimer = null;
+    room.waitUntil = null;
     try {
       const colors = colorsForCount(room.seats.length);
       room.seats.forEach((s, i) => (s.color = colors[i]));

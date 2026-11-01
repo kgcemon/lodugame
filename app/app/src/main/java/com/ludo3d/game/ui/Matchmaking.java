@@ -44,6 +44,8 @@ final class Matchmaking {
     private final List<ValueAnimator> loops = new ArrayList<>();
     private TextView timer, searching, title;
     private int lastFilled = -1;
+    /** When bots fill the empty seats (elapsedRealtime), or 0 if the server hasn't said. */
+    private long deadline;
 
     /** One avatar frame: shows a player, or shuffles faces while the seat is open. */
     private final class Slot {
@@ -253,7 +255,7 @@ final class Matchmaking {
         col.addView(searchRow, srlp);
         loop(ObjectAnimator.ofFloat(glass, "translationX", -Ui.dp(a, 5), Ui.dp(a, 5)), 600, true);
 
-        TextView hint = Ui.muted(a, "The match starts by itself when the room is full, or after a short wait with at least 2 players.");
+        TextView hint = Ui.muted(a, "If no one else joins before the timer ends, bots take the empty seats and the match starts.");
         hint.setGravity(Gravity.CENTER);
         hint.setPadding(Ui.dp(a, 10), Ui.dp(a, 8), Ui.dp(a, 10), 0);
         col.addView(hint);
@@ -276,17 +278,42 @@ final class Matchmaking {
         ticker.setRepeatCount(ValueAnimator.INFINITE);
         ticker.setInterpolator(new LinearInterpolator());
         final long[] lastShuffle = {0};
+        final long[] lastMusic = {-10_000};
+        final long[] lastTickSec = {-1};
         ticker.addUpdateListener(va -> {
             long now = SystemClock.elapsedRealtime();
+            boolean searchingNow = lastFilled < slots.size();
             if (now - lastShuffle[0] > 110) {
                 lastShuffle[0] = now;
                 for (Slot s : slots) s.shuffle();
             }
-            long secs = (now - searchStart) / 1000;
+            // Gentle search music, looped every two seconds while we wait.
+            if (searchingNow && now - lastMusic[0] >= 2000) {
+                lastMusic[0] = now;
+                Sfx.get().play(Sfx.S.SEARCH, 0.55f, 1f);
+            }
+            long secs;
+            if (deadline > 0) {
+                // Count down to the moment bots fill the empty seats.
+                secs = Math.max(0, (deadline - now + 999) / 1000);
+                if (searchingNow && secs <= 10 && secs > 0 && secs != lastTickSec[0]) {
+                    lastTickSec[0] = secs;
+                    Sfx.get().play(Sfx.S.TICK, 0.8f, secs <= 3 ? 1.25f : 1f);
+                    timer.setScaleX(1.25f);
+                    timer.setScaleY(1.25f);
+                    timer.animate().scaleX(1).scaleY(1).setDuration(300).start();
+                }
+            } else {
+                secs = (now - searchStart) / 1000;
+            }
             timer.setText(String.format(java.util.Locale.US, "%02d:%02d", secs / 60, secs % 60));
-            if (lastFilled < slots.size()) {
-                int dots = (int) ((now / 400) % 4);
-                searching.setText("SEARCHING FOR PLAYERS" + "...".substring(0, dots) + "   ".substring(dots));
+            if (searchingNow) {
+                if (deadline > 0 && secs == 0) {
+                    searching.setText("ADDING BOTS...");
+                } else {
+                    int dots = (int) ((now / 400) % 4);
+                    searching.setText("SEARCHING FOR PLAYERS" + "...".substring(0, dots) + "   ".substring(dots));
+                }
             }
         });
         ticker.start();
@@ -308,8 +335,12 @@ final class Matchmaking {
             if (i < order.size() && order.get(i) != null) slots.get(i).setPlayer(order.get(i), i == 0);
             else if (slots.get(i).filled) slots.get(i).setOpen();
         }
+        // The server says how long until bots fill the empty seats.
+        if (!room.isNull("waitMsLeft") && room.has("waitMsLeft")) {
+            deadline = SystemClock.elapsedRealtime() + room.optLong("waitMsLeft");
+        }
         int filled = Math.min(order.size(), slots.size());
-        if (lastFilled >= 0 && filled > lastFilled) Sfx.get().play(filled >= slots.size() ? Sfx.S.HOME : Sfx.S.EXTRA);
+        if (lastFilled >= 0 && filled > lastFilled) Sfx.get().play(filled >= slots.size() ? Sfx.S.MATCH_FOUND : Sfx.S.EXTRA);
         if (filled >= slots.size()) {
             searching.setText("MATCH FOUND! GET READY...");
             title.setText("MATCH FOUND!");

@@ -26,6 +26,8 @@ export interface RoomView {
   seats: SeatView[];
   /** Index of the receiving client's seat (-1 when not seated). */
   you: number;
+  /** Quick play: ms until bots fill the empty seats and the match starts (null when not counting). */
+  waitMsLeft: number | null;
   mode: { id: string; name: string };
   /** Official fee every player in this room paid (set by the server from game settings). */
   entryFee: number;

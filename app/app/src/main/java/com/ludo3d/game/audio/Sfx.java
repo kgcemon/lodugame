@@ -19,11 +19,12 @@ import java.nio.ByteOrder;
 public final class Sfx {
     public enum S {
         CLICK, DICE_SHAKE, DICE_LAND, STEP, CAPTURE, HOME, TURN, EXTRA, VICTORY, DEFEAT, ERROR, MESSAGE,
-        E_LAUGH, E_LOVE, E_FIRE, E_CLAP, E_WOW, E_CRY, E_PARTY, E_COOL, E_POP
+        E_LAUGH, E_LOVE, E_FIRE, E_CLAP, E_WOW, E_CRY, E_PARTY, E_COOL, E_POP,
+        SEARCH, TICK, MATCH_FOUND
     }
 
     /** Bump when a sound's design changes so cached files are regenerated. */
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
     private static Sfx instance;
 
     private final SharedPreferences prefs;
@@ -234,6 +235,31 @@ public final class Sfx {
                         .tone(0, 0.3, 110, 82, Synth.SINE, 0.7, 0.005, 1.8)
                         .bell(0.08, 0.5, E5, 0.3).bell(0.08, 0.5, 830.6, 0.25).bell(0.08, 0.55, B5, 0.25)
                         .render(0.65);
+            case SEARCH: {
+                // A soft, hopeful 2-bar loop for matchmaking: rising arpeggio over a warm pad.
+                x = new Synth(2.0);
+                double[] notes = {C5, E5, G5, B5, C6, G5, E5, G5};
+                for (int i = 0; i < notes.length; i++) x.bell(i * 0.25, 0.5, notes[i], 0.28);
+                for (double f : new double[]{261.63, 329.63, 392.0}) x.tone(0, 2.0, f, f, Synth.SINE, 0.12, 0.35, 1.1, 4, 0.004);
+                x.noise(0, 2.0, 0.025, 0.9, 0.92, 0.5, 1.2); // airy shimmer
+                return x.render(0.42);
+            }
+            case TICK:
+                // A light clock tick for the final seconds.
+                return new Synth(0.06)
+                        .tone(0, 0.03, 2600, 2200, Synth.SINE, 0.6, 0.0005, 3)
+                        .noise(0, 0.01, 0.4, 0.9, 0.8, 0.0003, 2)
+                        .render(0.4);
+            case MATCH_FOUND: {
+                // Upward sweep into a bright chord with sparkles.
+                x = new Synth(1.3);
+                x.tone(0, 0.35, 300, 1200, Synth.SAW, 0.15, 0.02, 0.6);
+                x.noise(0, 0.35, 0.12, 0.3, 0, 0.25, 0.8);
+                for (double f : new double[]{C6, E6, G6}) x.tone(0.32, 0.9, f, f, Synth.TRIANGLE, 0.28, 0.005, 1.8, 5, 0.004);
+                x.bell(0.32, 0.6, C7, 0.3).bell(0.45, 0.5, E6 * 2, 0.22).bell(0.6, 0.55, G6 * 2, 0.18);
+                x.noise(0.32, 0.8, 0.07, 0.9, 0.9, 0.02, 2);
+                return x.render(0.8);
+            }
             default: // E_POP
                 return new Synth(0.25)
                         .tone(0, 0.07, 380, 1250, Synth.SINE, 0.7, 0.002, 1.5)

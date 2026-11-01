@@ -109,6 +109,30 @@ describe('online game server (authenticated)', () => {
     await tick();
   });
 
+  it('fills quick play with bots when nobody else joins before the wait runs out', async () => {
+    const st = await bootServer({ timings: { matchWaitMs: 300 } });
+    try {
+      const u = await registerUser(st, 'Lonely');
+      const s = await socketFor(st, u.cookie);
+      const started = nextUpdate(s);
+      const q = await emit<{ room: RoomView }>(s, 'room:quick', { modeId: 'classic' });
+      expect(q.ok).toBe(true);
+      if (!q.ok) return;
+      // The client is told how long the search lasts.
+      expect(q.room.waitMsLeft).toBeGreaterThan(0);
+      expect(q.room.waitMsLeft).toBeLessThanOrEqual(300);
+      const u1 = await started;
+      // Classic is a 4-player mode: one human plus three bots.
+      expect(u1.state.players).toHaveLength(4);
+      expect(u1.state.players.filter((p) => p.kind === 'ai')).toHaveLength(3);
+      // The entry fee was charged once, for the human only.
+      const me = await u.call<{ wallet: { balance: number } }>('GET', '/wallet');
+      expect(me.body.wallet.balance).toBe(1000 - 50);
+    } finally {
+      await st.stop();
+    }
+  });
+
   it('rejects unknown modes and private-only modes in matchmaking', async () => {
     const u = await registerUser(t, 'Picky');
     const s = await socketFor(t, u.cookie);
