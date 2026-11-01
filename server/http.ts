@@ -3,6 +3,7 @@ import type { ServerConfig } from './config';
 import type { Db } from './db';
 import type { Mailer } from './mailer';
 import type { Presence } from './presence';
+import type { PlayVerifier } from './googleplay';
 import { HttpError, WindowLimiter, hashToken } from './security';
 import type { Settings } from './settings';
 
@@ -14,6 +15,8 @@ export interface AppCtx {
   mailer: Mailer;
   settings: Settings;
   presence: Presence;
+  /** Google Play purchase verification; null when not configured. */
+  play: PlayVerifier | null;
 }
 
 export interface AuthUser {

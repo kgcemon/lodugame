@@ -82,6 +82,7 @@ export async function applyWalletTx(q: Queryable, t: WalletTxInput): Promise<{ t
 
 export interface WalletSummary {
   balance: number;
+  gems: number;
   totalEarned: number;
   totalSpent: number;
   dailyBonus: { amount: number; claimedToday: boolean; nextAt: string };
@@ -98,14 +99,15 @@ function nextUtcMidnight(): string {
 }
 
 export async function walletSummary(db: Queryable, userId: string, dailyAmount: number): Promise<WalletSummary> {
-  const w = await db.query<{ balance: number; total_earned: number; total_spent: number }>(
-    'select balance, total_earned, total_spent from wallets where user_id = $1',
+  const w = await db.query<{ balance: number; gems: number; total_earned: number; total_spent: number }>(
+    'select balance, gems, total_earned, total_spent from wallets where user_id = $1',
     [userId],
   );
   if (!w.rows.length) throw new HttpError(404, 'Wallet not found');
   const claimed = await db.query('select 1 from wallet_transactions where user_id = $1 and idempotency_key = $2', [userId, `daily:${today()}`]);
   return {
     balance: w.rows[0].balance,
+    gems: Number(w.rows[0].gems),
     totalEarned: w.rows[0].total_earned,
     totalSpent: w.rows[0].total_spent,
     dailyBonus: { amount: dailyAmount, claimedToday: claimed.rows.length > 0, nextAt: nextUtcMidnight() },

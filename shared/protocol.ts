@@ -62,6 +62,12 @@ export interface GameUpdate {
   /** Epoch ms when the current player's turn will be auto-played, or null. */
   deadline: number | null;
   serverTime: number;
+  /**
+   * The roll that can still be re-rolled with gems: whose it is, what the next re-roll
+   * costs (null when the 3 re-rolls of this match are used up) and, when the turn has
+   * already passed, how long the offer stays open. Null when nothing can be re-rolled.
+   */
+  reroll: { color: Color; nextCost: number | null; msLeft: number | null } | null;
 }
 
 /** A chat line. Sender identity is filled in by the server from the socket's seat. */
@@ -97,6 +103,8 @@ export interface ClientToServerEvents {
   'room:start': (p: Record<string, never>, ack: AckFn) => void;
   'room:leave': (p: Record<string, never>, ack: AckFn) => void;
   'game:roll': (p: Record<string, never>, ack: AckFn) => void;
+  /** Pay gems to roll your last roll again (5, 15, 45 per match; at most 3). */
+  'game:reroll': (p: Record<string, never>, ack: AckFn<{ cost: number; gems: number }>) => void;
   'game:move': (p: { token: number }, ack: AckFn) => void;
   'game:rematch': (p: Record<string, never>, ack: AckFn) => void;
   'chat:send': (p: { text: string; quick?: boolean }, ack: AckFn) => void;

@@ -125,8 +125,30 @@ and the remaining 2E is retained by the house and stored per match as `house_amo
 * Leaving or disconnecting **after the start** → no refund (a bot plays the seat).
 * Losing → no refund.
 
-Matchmaking (Quick/Classic/Pro/Master) starts a room when it is full, or after the configured
-wait (default 45 s) once at least two players are in. Friendly rooms are free, private and allow bots.
+Matchmaking (Quick/Classic/Pro/Master) starts a room when it is full. Otherwise, when the
+configured wait (default 45 s, `matchmaking_wait_seconds`) runs out, bots take the empty seats
+and the match starts. Bots never receive payouts. Friendly rooms are free, private and allow bots.
+
+## Gems and re-rolls
+
+Gems are a second currency, bought in the Android app through Google Play
+(`server/gems.ts`, `server/googleplay.ts`):
+
+* **Re-roll:** after rolling, a player can pay gems to roll again — 5, then 15, then 45 gems,
+  at most 3 times per match. It works until they move; if the roll already passed the turn,
+  the next player is held for 2.5 s so the roller can still decide. The server rolls the new
+  number. Every gem change is a row in `gem_transactions`; the balance can't go negative.
+* **Packs:** `gems_50`, `gems_150`, `gems_500` (consumable in-app products). Create them with
+  these exact ids in Play Console → Monetize → In-app products and set the prices there.
+* **Verification:** the app sends the purchase token to `POST /api/gems/purchase`; the server
+  checks it with the Google Play Developer API, grants the gems once (tokens are unique and tied
+  to the buyer's account) and consumes the purchase. Setup:
+  1. Play Console → Setup → API access: link a Google Cloud project, create a service account,
+     grant it *View financial data* and *Manage orders* for the app, download its JSON key.
+  2. On the server: `GOOGLE_PLAY_SERVICE_ACCOUNT=/path/to/key.json` (keep it out of git) and
+     `GOOGLE_PLAY_PACKAGE=com.ludo3d.game`, then restart.
+  3. Purchases only work for builds installed from Play (internal testing track is enough).
+* **Support:** admins can add or remove gems with `POST /api/admin/users/:id/gems`.
 
 ## Security summary
 
@@ -160,7 +182,7 @@ tests/        engine, server, social (chat/emotes), platform (accounts, wallet, 
 
 ## Not included
 
-* Real-money purchases or withdrawals (by design), referral rewards.
+* Buying coins, or withdrawing coins or gems (by design); gems are bought only through Google Play. Referral rewards.
 * Supabase Auth (accounts are handled by the app server; Supabase is used as the database).
 * Running several server instances at once (rooms are in memory).
 * Profanity filtering / server-side chat moderation (players can mute and hide locally).

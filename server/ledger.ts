@@ -4,6 +4,7 @@ import { notify, type Presence } from './presence';
 import { HttpError } from './security';
 import type { MatchMode, Settings } from './settings';
 import { applyWalletTx, walletSummary } from './wallet';
+import { MAX_REROLLS, REROLL_COSTS, applyGemTx, gemBalance, rerollsUsed } from './gems';
 
 /**
  * Money side of a match. Each step is one database transaction that locks the
@@ -257,6 +258,36 @@ export class MatchLedger {
       return ps.map((p) => p.user_id);
     });
     if (refund && ids.length) await this.pushWallet(ids);
+  }
+
+  /** Current gem balance (0 for unknown users). */
+  async gems(userId: string): Promise<number> {
+    return gemBalance(this.ctx.db, userId);
+  }
+
+  /**
+   * Charge the next re-roll of this match: 5, 15, then 45 gems, at most three per match.
+   * Keyed by match and attempt number, so a retried request never charges twice.
+   */
+  async chargeReroll(matchId: string, userId: string): Promise<{ attempt: number; cost: number; gems: number }> {
+    const res = await this.ctx.db.tx(async (q) => {
+      const used = await rerollsUsed(q, userId, matchId);
+      if (used >= MAX_REROLLS) throw new HttpError(409, `You can re-roll at most ${MAX_REROLLS} times per match`);
+      const attempt = used + 1;
+      const cost = REROLL_COSTS[used];
+      const r = await applyGemTx(q, { userId, type: 'reroll', amount: -cost, key: `reroll:${matchId}:${attempt}`, matchId, note: `Dice re-roll #${attempt}` });
+      return { attempt, cost, gems: r.balance };
+    });
+    await this.pushWallet([userId]);
+    return res;
+  }
+
+  /** Give a re-roll back when it could not be applied (the game moved on meanwhile). */
+  async refundReroll(matchId: string, userId: string, attempt: number, cost: number): Promise<void> {
+    await this.ctx.db.tx((q) =>
+      applyGemTx(q, { userId, type: 'reroll_refund', amount: cost, key: `reroll-refund:${matchId}:${attempt}`, matchId, note: 'Re-roll refunded' }),
+    );
+    await this.pushWallet([userId]);
   }
 
   /** After a restart no in-memory room survives: refund every open match. */

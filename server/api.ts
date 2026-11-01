@@ -7,6 +7,7 @@ import { notify } from './presence';
 import type { RoomManager } from './rooms';
 import * as v from './security';
 import { HttpError } from './security';
+import { GEM_PACKS, REROLL_COSTS, applyGemTx } from './gems';
 import { payoutPolicy } from './settings';
 import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type TxType } from './wallet';
 
@@ -103,6 +104,9 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         payoutMultiplier: s.payoutMultiplier,
         payoutPolicy: payoutPolicy(s),
         modes: s.modes.filter((m) => m.enabled),
+        gemPacks: GEM_PACKS,
+        rerollCosts: REROLL_COSTS,
+        purchasesEnabled: !!ctx.play,
       };
     }),
   );
@@ -196,6 +200,70 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
       presence.emit(req.user!.id, 'wallet', wallet);
       return { ok: true, tx, wallet };
+    }),
+  );
+
+  // ---------------------------------------------------------------- gems (Google Play)
+
+  /**
+   * Redeem a Google Play purchase. The server checks the token with Google, grants the
+   * pack's gems once (the token is unique in the ledger), then consumes the purchase.
+   * Safe to call again for the same token: it answers with the current balance.
+   */
+  r.post(
+    '/gems/purchase',
+    rateLimit(30, 60_000, (req) => req.user!.id),
+    h(async (req) => {
+      const productId = v.str(req.body?.productId, 'Product', 1, 100);
+      const token = v.str(req.body?.purchaseToken, 'Purchase token', 10, 500);
+      const pack = GEM_PACKS.find((p) => p.productId === productId);
+      if (!pack) throw new HttpError(400, 'Unknown gem pack');
+      if (!ctx.play) throw new HttpError(503, 'Gem purchases are not set up on this server yet');
+      const me = req.user!.id;
+
+      // Already redeemed? Same user: fine (retry). Another user: refuse.
+      const used = await db.query<{ user_id: string }>('select user_id from gem_transactions where purchase_token = $1', [token]);
+      if (used.rows.length) {
+        if (used.rows[0].user_id !== me) throw new HttpError(409, 'This purchase belongs to another account');
+        await ctx.play.consume(productId, token).catch(() => {});
+        const wallet = await walletSummary(db, me, settings.get().dailyBonus);
+        return { gems: wallet.gems, granted: 0, wallet };
+      }
+
+      let purchase;
+      try {
+        purchase = await ctx.play.verify(productId, token);
+      } catch (e) {
+        if ((e as Error).message === 'INVALID_PURCHASE') throw new HttpError(400, 'This purchase could not be verified');
+        throw new HttpError(502, 'Could not reach Google Play — please try again');
+      }
+      if (purchase.purchaseState !== 0) throw new HttpError(400, purchase.purchaseState === 2 ? 'Payment is still pending' : 'This purchase was cancelled');
+      if (purchase.obfuscatedExternalAccountId && purchase.obfuscatedExternalAccountId !== me) {
+        throw new HttpError(409, 'This purchase belongs to another account');
+      }
+      if (purchase.consumptionState === 1) throw new HttpError(409, 'This purchase was already used');
+
+      try {
+        await db.tx((q) =>
+          applyGemTx(q, {
+            userId: me,
+            type: 'purchase',
+            amount: pack.gems,
+            key: `play:${purchase.orderId ?? token.slice(0, 180)}`,
+            productId,
+            purchaseToken: token,
+            note: `${pack.gems} gems (Google Play)`,
+          }),
+        );
+      } catch (e) {
+        if ((e as { code?: string }).code === '23505') throw new HttpError(409, 'This purchase was already used');
+        throw e;
+      }
+      // Consume so the pack can be bought again; the grant above is already final.
+      await ctx.play.consume(productId, token).catch((e) => console.error('[play] consume failed', e));
+      const wallet = await walletSummary(db, me, settings.get().dailyBonus);
+      presence.emit(me, 'wallet', wallet);
+      return { gems: wallet.gems, granted: pack.gems, wallet };
     }),
   );
 
@@ -656,6 +724,26 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       presence.emit(id, 'wallet', wallet);
       await notify(db, presence, id, 'wallet', { amount, reason }).catch(() => {});
       return { ok: true, tx, wallet };
+    }),
+  );
+
+  /** Give or take gems by hand (support, refunds). Audited like coin adjustments. */
+  admin.post(
+    '/users/:id/gems',
+    rateLimit(30, 60_000, (req) => req.user!.id),
+    h(async (req) => {
+      const id = v.uuid(req.params.id, 'user');
+      const amount = v.int(req.body?.amount, 'Amount', -1_000_000, 1_000_000);
+      if (amount === 0) throw new HttpError(400, 'Amount cannot be zero');
+      const reason = v.str(req.body?.reason, 'Reason', 5, 300);
+      const requestId = typeof req.body?.requestId === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(req.body.requestId) ? req.body.requestId : randomUUID();
+      await db.tx(async (q) => {
+        const r2 = await applyGemTx(q, { userId: id, type: 'admin_adjustment', amount, key: `admin-gems:${requestId}`, note: reason, createdBy: req.user!.id });
+        if (!r2.duplicate) await audit(q, req.user!.id, 'gems.adjust', { amount, reason, transactionId: r2.id }, id);
+      });
+      const wallet = await walletSummary(db, id, settings.get().dailyBonus);
+      presence.emit(id, 'wallet', wallet);
+      return { ok: true, wallet };
     }),
   );
 

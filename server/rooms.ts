@@ -23,6 +23,7 @@ import {
 import type { AiLevel, Color, GameAction, GameEvent, GameState, PlayerKind } from '../shared/types';
 import { COLORS } from '../shared/types';
 import type { AuthUser } from './http';
+import { MAX_REROLLS, REROLL_COSTS } from './gems';
 import type { MatchLedger } from './ledger';
 import type { Presence } from './presence';
 import { HttpError } from './security';
@@ -73,6 +74,9 @@ interface Seat {
   connected: boolean;
   color: Color;
   graceTimer?: NodeJS.Timeout;
+  /** Gem re-rolls used this match, and the last known gem balance (null = not loaded). */
+  rerolls: number;
+  gems: number | null;
 }
 
 interface Room {
@@ -94,6 +98,10 @@ interface Room {
   waitTimer: NodeJS.Timeout | null;
   /** When the quick-play wait runs out and bots fill the empty seats (epoch ms). */
   waitUntil: number | null;
+  /** The last roll, which its (human) roller may still re-roll with gems. */
+  rerollable: { color: Color; before: GameState; seqAfter: number; until: number | null } | null;
+  /** A re-roll is being charged: hold every other action. */
+  rerollBusy: boolean;
   starting: boolean;
   lastEvents: GameEvent[];
   chat: ChatMessage[];
@@ -203,7 +211,21 @@ export class RoomManager {
   }
 
   private update(room: Room, events: GameEvent[]): GameUpdate {
-    return { state: room.game!, events, deadline: room.deadline, serverTime: Date.now() };
+    return { state: room.game!, events, deadline: room.deadline, serverTime: Date.now(), reroll: this.rerollOffer(room) };
+  }
+
+  /** What the last roll's player could pay to roll again (sent to everyone; clients show it to its owner). */
+  private rerollOffer(room: Room): GameUpdate['reroll'] {
+    const r = room.rerollable;
+    if (!r || !room.game || room.game.seq !== r.seqAfter || room.status !== 'playing') return null;
+    if (r.until !== null && Date.now() >= r.until) return null;
+    const seat = room.seats.find((s) => s.color === r.color);
+    if (!seat || !seat.playerId) return null;
+    return {
+      color: r.color,
+      nextCost: seat.rerolls < MAX_REROLLS ? REROLL_COSTS[seat.rerolls] : null,
+      msLeft: r.until === null ? null : Math.max(0, r.until - Date.now()),
+    };
   }
 
   // ---------------------------------------------------------------- session
@@ -299,6 +321,8 @@ export class RoomManager {
       socketId: socket.id,
       connected: true,
       color: this.freeColor(room),
+      rerolls: 0,
+      gems: null,
     };
   }
 
@@ -334,6 +358,8 @@ export class RoomManager {
       emptyTimer: null,
       waitTimer: null,
       waitUntil: null,
+      rerollable: null,
+      rerollBusy: false,
       starting: false,
       lastEvents: [],
       chat: [],
@@ -475,6 +501,8 @@ export class RoomManager {
       socketId: null,
       connected: true,
       color: this.freeColor(room),
+      rerolls: 0,
+      gems: null,
     };
   }
 
@@ -588,9 +616,18 @@ export class RoomManager {
     room.game = createGame(room.seats.map((s) => ({ color: s.color, name: s.name, kind: s.kind, aiLevel: s.aiLevel })));
     room.status = 'playing';
     room.lastEvents = [];
+    room.rerollable = null;
+    for (const s of room.seats) s.rerolls = 0;
     this.reschedule(room, 0);
     this.broadcastRoom(room);
     this.io.to(room.code).emit('game:update', this.update(room, []));
+    // Gem balances decide whether a roll that passed the turn is held for a re-roll.
+    for (const s of room.seats) {
+      if (s.playerId) {
+        const seat = s;
+        this.ledger.gems(seat.playerId!).then((g) => (seat.gems = g), () => {});
+      }
+    }
   }
 
   async leave(socket: ClientSocket): Promise<void> {
@@ -735,12 +772,77 @@ export class RoomManager {
     this.apply(room, { type: 'move', token });
   }
 
-  private apply(room: Room, action: GameAction): void {
-    const { state, events } = applyAction(room.game!, action);
+  /**
+   * Pay gems to roll the last roll again. Allowed until the roller moves, or — when the
+   * roll already passed the turn — during a short hold before the next player can act.
+   * The game goes back to the moment before that roll and a fresh server roll is applied.
+   */
+  async reroll(socket: ClientSocket): Promise<{ cost: number; gems: number }> {
+    const { room, seat } = this.mySeat(socket);
+    const r = room.rerollable;
+    if (!room.game || room.status !== 'playing') throw new RuleError('No match in progress');
+    if (!r || r.color !== seat.color || room.game.seq !== r.seqAfter || (r.until !== null && Date.now() >= r.until)) {
+      throw new RuleError('There is no roll to re-roll right now');
+    }
+    if (room.rerollBusy) throw new RuleError('Re-rolling…');
+    if (seat.rerolls >= MAX_REROLLS) throw new RuleError(`You can re-roll at most ${MAX_REROLLS} times per match`);
+    room.rerollBusy = true;
+    // Freeze the game while the gems are charged.
+    if (room.timer) clearTimeout(room.timer);
+    room.timer = null;
+    let charge: { attempt: number; cost: number; gems: number };
+    try {
+      charge = await this.ledger.chargeReroll(room.matchId, seat.playerId!);
+    } catch (e) {
+      room.rerollBusy = false;
+      if (this.rooms.has(room.code) && room.status === 'playing') this.reschedule(room, 0);
+      throw e;
+    }
+    room.rerollBusy = false;
+    seat.rerolls = charge.attempt;
+    seat.gems = charge.gems;
+    if (!this.rooms.has(room.code) || room.status !== 'playing' || room.game.seq !== r.seqAfter) {
+      // The game moved on while we were charging: give the gems back.
+      await this.ledger.refundReroll(room.matchId, seat.playerId!, charge.attempt, charge.cost).catch((e) => console.error('[rooms] reroll refund failed', e));
+      seat.rerolls = charge.attempt - 1;
+      throw new RuleError('Too late — the game moved on (gems refunded)');
+    }
+    const seq = room.game.seq;
+    this.apply(room, { type: 'roll', value: this.roll() }, r.before, seq + 1);
+    return { cost: charge.cost, gems: charge.gems };
+  }
+
+  /** Hold before the next player may act after a roll its owner could still re-roll. */
+  private static readonly REROLL_HOLD_MS = 2500;
+
+  /**
+   * Apply an action. `base` replaces the current state as the starting point (re-rolls
+   * go back to before the last roll) and `seq` keeps the sequence counter moving forward.
+   */
+  private apply(room: Room, action: GameAction, base?: GameState, seq?: number): void {
+    const prev = base ?? room.game!;
+    const actor = prev.players[prev.current];
+    const { state, events } = applyAction(prev, action);
+    if (seq !== undefined) state.seq = seq;
     room.game = state;
     room.lastEvents = events;
     if (state.phase === 'over') room.status = 'over';
-    this.reschedule(room, animationMs(events) * this.t.animScale);
+
+    // A human's roll can be re-rolled with gems. If the roll already handed the turn on,
+    // hold the next player briefly so the roller has time to decide.
+    room.rerollable = null;
+    let hold = 0;
+    const seat = room.seats.find((s) => s.color === actor.color);
+    if (action.type === 'roll' && seat?.playerId && actor.kind === 'human' && state.phase !== 'over') {
+      const stillMine = state.current === prev.current && state.phase === 'move';
+      const canAfford = seat.rerolls < MAX_REROLLS && (seat.gems ?? 0) >= REROLL_COSTS[seat.rerolls];
+      if (stillMine || canAfford) {
+        if (!stillMine) hold = RoomManager.REROLL_HOLD_MS;
+        const animMs = animationMs(events) * this.t.animScale;
+        room.rerollable = { color: actor.color, before: prev, seqAfter: state.seq, until: stillMine ? null : Date.now() + animMs + hold };
+      }
+    }
+    this.reschedule(room, animationMs(events) * this.t.animScale + hold);
     this.io.to(room.code).emit('game:update', this.update(room, events));
     this.scheduleBotReaction(room, events);
     if (room.status === 'over') {
@@ -826,6 +928,12 @@ export class RoomManager {
     const g = r.room.game;
     if (!g || r.room.status !== 'playing') throw new RuleError('No match in progress');
     if (g.players[g.current].color !== r.seat.color) throw new RuleError('It is not your turn');
+    if (r.room.rerollBusy) throw new RuleError('Wait a moment…');
+    // The previous player may still re-roll their last roll for a moment.
+    const rr = r.room.rerollable;
+    if (rr && rr.color !== r.seat.color && rr.until !== null && Date.now() < rr.until && g.seq === rr.seqAfter) {
+      throw new RuleError('Wait a moment…');
+    }
     return r;
   }
 

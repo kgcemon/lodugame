@@ -22,6 +22,7 @@ import {
 } from './http';
 import { MatchLedger } from './ledger';
 import { createMailer, type Mailer } from './mailer';
+import { GooglePlayVerifier, type PlayVerifier } from './googleplay';
 import { Presence } from './presence';
 import { DEFAULT_TIMINGS, RoomManager, type ClientSocket, type Timings } from './rooms';
 import { HttpError } from './security';
@@ -37,6 +38,8 @@ export interface StartOptions {
   roll?: () => number;
   /** Skip refunding matches left open by a previous run. */
   skipRecovery?: boolean;
+  /** Google Play purchase checks (tests pass a fake); default comes from the environment. */
+  playVerifier?: PlayVerifier | null;
 }
 
 export interface RunningServer {
@@ -91,7 +94,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   await settings.load();
   const mailer = createMailer(cfg.mail);
   const presence = new Presence();
-  const ctx: AppCtx = { db, cfg, mailer, settings, presence };
+  const play = opts.playVerifier !== undefined ? opts.playVerifier : GooglePlayVerifier.fromEnv(cfg.googlePlayServiceAccount, cfg.googlePlayPackage);
+  const ctx: AppCtx = { db, cfg, mailer, settings, presence, play };
   const ledger = new MatchLedger({ db, settings, presence, requireEmailVerification: cfg.requireEmailVerification });
   if (!opts.skipRecovery) {
     const rec = await ledger.recover();
@@ -163,6 +167,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     socket.on('game:roll', handler(socket, () => rooms.rollDice(socket)));
     socket.on('game:move', handler(socket, (p: { token: unknown }) => rooms.move(socket, p.token)));
     socket.on('game:rematch', handler(socket, () => rooms.rematch(socket)));
+    socket.on('game:reroll', handler(socket, () => rooms.reroll(socket)));
     socket.on('chat:send', handler(socket, (p: { text: unknown; quick?: unknown }) => rooms.chat(socket, p.text, p.quick)));
     socket.on('emote:send', handler(socket, (p: { id: unknown }) => rooms.emote(socket, p.id)));
     socket.on('disconnect', () => {

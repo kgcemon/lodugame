@@ -57,6 +57,9 @@ public class GameActivity extends BaseActivity {
 
     /** Length of the current turn timer, for the countdown bar. */
     private long deadlineTotal;
+    /** Gems for the next re-roll of my last roll (0 = no offer) and when the offer ends (0 = until I move). */
+    private int rerollCost;
+    private long rerollUntil;
 
     private LinearLayout panels;
     private TextView status, rollBtn, chatBtn, titleView, feeView, connView;
@@ -204,6 +207,15 @@ public class GameActivity extends BaseActivity {
         // A new deadline (not just the same turn re-sent) restarts the countdown bar.
         if (Math.abs(nextDeadline - deadline) > 1500) deadlineTotal = Math.max(1, nextDeadline - System.currentTimeMillis());
         deadline = nextDeadline;
+        // A re-roll offer for my own last roll (cost, and a deadline if the turn already passed).
+        JSONObject rr = u.optJSONObject("reroll");
+        if (rr != null && app.socket.myColor().equals(rr.optString("color")) && !rr.isNull("nextCost")) {
+            rerollCost = rr.optInt("nextCost");
+            rerollUntil = rr.isNull("msLeft") ? 0 : System.currentTimeMillis() + rr.optLong("msLeft");
+        } else {
+            rerollCost = 0;
+            rerollUntil = 0;
+        }
         boolean highlight = isMyTurn(next) && "move".equals(next.phase);
         gl.queueEvent(() -> {
             renderer.applyUpdate(next, events, contiguous);
@@ -303,7 +315,43 @@ public class GameActivity extends BaseActivity {
         return (float) Math.sqrt(dx * dx + dy * dy);
     }
 
+    /** True while my last roll can be re-rolled with gems. */
+    private boolean canReroll() {
+        return rerollCost > 0 && (rerollUntil == 0 || System.currentTimeMillis() < rerollUntil);
+    }
+
+    /** Pay gems to roll again (the server charges 5, 15, 45 per match and rolls a new number). */
+    private void reroll() {
+        if (busy) return;
+        busy = true;
+        renderStatus();
+        app.socket.emit("game:reroll", new JSONObject(), res -> {
+            busy = false;
+            if (res.optBoolean("ok")) {
+                app.wallet.remove("gems");
+                try {
+                    app.wallet.put("gems", res.optLong("gems"));
+                } catch (Exception ignored) {
+                    // not reachable
+                }
+            } else if ("NOT_ENOUGH_GEMS".equals(res.optString("code"))) {
+                Sfx.get().play(Sfx.S.ERROR);
+                Popup.message(this, "Not enough gems", "💎\nA re-roll costs " + rerollCost + " gems. Buy gems in the shop.",
+                        Popup.plain("Close", null),
+                        new Popup.Btn("Gem shop", "gold", () -> startActivity(new android.content.Intent(this, GemShopActivity.class))));
+            } else {
+                Sfx.get().play(Sfx.S.ERROR);
+                LudoApp.toast(res.optString("error", "Can't re-roll now"));
+            }
+            renderStatus();
+        });
+    }
+
     private void roll() {
+        if (canReroll()) {
+            reroll();
+            return;
+        }
         if (busy) return;
         busy = true;
         renderStatus();
@@ -618,8 +666,17 @@ public class GameActivity extends BaseActivity {
         float frac = deadline > 0 && deadlineTotal > 0 ? Math.max(0f, Math.min(1f, (deadline - System.currentTimeMillis()) / (float) deadlineTotal)) : 0f;
         timerBar.setScaleX(frac);
         timerBar.setBackground(Ui.round(frac < 0.25f ? Ui.DANGER : Ui.GOLD, Ui.dp(this, 2)));
-        Ui.setEnabled(rollBtn, canRoll);
-        rollBtn.setText(canRoll ? "🎲  ROLL" : busy ? "Rolling…" : isMyTurn(state) ? "Pick a token" : "Waiting…");
+        // My last roll can be re-rolled with gems: the big button becomes "RETRY".
+        boolean retry = online && state != null && !"over".equals(state.phase) && canReroll() && !busy;
+        if (retry) {
+            long secs = rerollUntil > 0 ? Math.max(0, (rerollUntil - System.currentTimeMillis() + 999) / 1000) : -1;
+            rollBtn.setText("↻ RETRY  💎" + rerollCost + (secs >= 0 ? "  (" + secs + "s)" : ""));
+            if (rerollUntil > 0) status.setText("Not happy with your roll? Retry it with gems");
+            Ui.setEnabled(rollBtn, true);
+        } else {
+            Ui.setEnabled(rollBtn, canRoll);
+            rollBtn.setText(canRoll ? "🎲  ROLL" : busy ? "Rolling…" : isMyTurn(state) ? "Pick a token" : "Waiting…");
+        }
         int unread = app.socket.unreadChat;
         chatBtn.setText(unread > 0 ? "💬" + Math.min(unread, 99) : "💬");
         chatBtn.setTextSize(unread > 0 ? 16 : 22);

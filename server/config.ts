@@ -15,6 +15,9 @@ export interface ServerConfig {
   adminEmails: string[];
   mail: { mode: 'console' | 'resend' | 'memory'; from: string; resendApiKey?: string };
   staticDir?: string | null;
+  /** Google Play: service account key (file path or JSON) and the app package name. */
+  googlePlayServiceAccount?: string;
+  googlePlayPackage: string;
   /** Per-IP limits on account endpoints. */
   authLimits: { registrationsPer10Min: number; loginsPerMin: number };
 }
@@ -45,6 +48,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       resendApiKey: env.RESEND_API_KEY,
     },
     staticDir: env.STATIC_DIR === 'none' ? null : undefined,
+    googlePlayServiceAccount: env.GOOGLE_PLAY_SERVICE_ACCOUNT || undefined,
+    googlePlayPackage: env.GOOGLE_PLAY_PACKAGE ?? 'com.ludo3d.game',
     authLimits: { registrationsPer10Min: Number(env.REGISTER_LIMIT ?? 5), loginsPerMin: Number(env.LOGIN_LIMIT ?? 10) },
   };
 }

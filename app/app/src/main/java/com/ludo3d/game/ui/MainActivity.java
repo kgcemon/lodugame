@@ -23,7 +23,7 @@ public class MainActivity extends BaseActivity {
     private FrameLayout content;
     private TextView balance;
     private TextView bell;
-    private TextView wins;
+    private TextView gems;
     private LinearLayout nav;
     private int tab = 0;
     private boolean ready;
@@ -56,7 +56,7 @@ public class MainActivity extends BaseActivity {
                         app.socket.connect();
                         ready = true;
                         buildShell();
-                        loadWins();
+                        loadConfig();
                     }
 
                     @Override
@@ -101,7 +101,7 @@ public class MainActivity extends BaseActivity {
     }
 
     /**
-     * Game-style shell: a purple 3D top bar (mail, coins, avatar, wins, settings), the
+     * Game-style shell: a purple 3D top bar (mail, coins, avatar, gems, settings), the
      * current tab, and a chunky bottom bar with Home raised in the middle.
      */
     private void buildShell() {
@@ -145,7 +145,7 @@ public class MainActivity extends BaseActivity {
         alp.rightMargin = Ui.dp(this, 4);
         top.addView(avatarWrap, alp);
 
-        wins = pill(top, "🏆", v -> selectTab(2));
+        gems = pill(top, "💎", v -> startActivity(new Intent(this, GemShopActivity.class)));
         top.addView(Fx.badge(this, "⚙️", Fx.PURPLE, 44, v -> selectTab(3)), new LinearLayout.LayoutParams(Ui.dp(this, 44), Ui.dp(this, 48)));
         outer.addView(top, Ui.lpMatchWrap());
 
@@ -232,25 +232,20 @@ public class MainActivity extends BaseActivity {
         int unread = app.prefs.getInt("unread_notifications", 0);
         bell.setText(String.valueOf(Math.min(unread, 99)));
         bell.setVisibility(unread > 0 ? View.VISIBLE : View.GONE);
-        wins.setText(winsText);
+        gems.setText(Ui.fmt(app.wallet.optLong("gems")));
     }
 
-    /** Wins shown in the top bar (loaded from /me/stats). */
-    String winsText = "–";
-
-    void loadWins() {
-        app.api.get("/me/stats", new Api.Cb(this) {
+    /** Re-read /config (gem packs and re-roll prices may change on the server). */
+    void loadConfig() {
+        app.api.get("/config", new Api.Cb(this) {
             @Override
             public void ok(JSONObject r) {
-                JSONObject s = r.optJSONObject("stats");
-                if (s == null) return;
-                winsText = Ui.fmt(s.optLong("wins")) + " wins";
-                refreshHeader();
+                app.config = r;
             }
 
             @Override
             public void err(Api.Error e) {
-                // Optional.
+                // Keep the last config.
             }
         });
     }
@@ -265,7 +260,7 @@ public class MainActivity extends BaseActivity {
         }
         app.socket.connect();
         refreshWallet();
-        loadWins();
+        loadConfig();
         refreshHeader();
         selectTab(tab);
     }
