@@ -364,6 +364,15 @@ public class MainActivity extends BaseActivity {
     }
 
     private void finishSignOut() {
+        androidx.credentials.CredentialManager.create(this).clearCredentialStateAsync(new androidx.credentials.ClearCredentialStateRequest(),
+                null, androidx.core.content.ContextCompat.getMainExecutor(this),
+                new androidx.credentials.CredentialManagerCallback<Void, androidx.credentials.exceptions.ClearCredentialException>() {
+                    @Override
+                    public void onResult(Void v) {}
+
+                    @Override
+                    public void onError(androidx.credentials.exceptions.ClearCredentialException e) {}
+                });
         app.socket.disconnect();
         app.cookies.clear();
         app.user = null;

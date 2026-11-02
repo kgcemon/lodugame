@@ -18,6 +18,8 @@ export interface ServerConfig {
   /** Google Play: service account key (file path or JSON) and the app package name. */
   googlePlayServiceAccount?: string;
   googlePlayPackage: string;
+  /** Google Sign-In: OAuth client ids an ID token may be issued for (the Web client id). */
+  googleClientIds: string[];
   /** Per-IP limits on account endpoints. */
   authLimits: { registrationsPer10Min: number; loginsPerMin: number };
 }
@@ -50,6 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     staticDir: env.STATIC_DIR === 'none' ? null : undefined,
     googlePlayServiceAccount: env.GOOGLE_PLAY_SERVICE_ACCOUNT || undefined,
     googlePlayPackage: env.GOOGLE_PLAY_PACKAGE ?? 'com.ludo3d.game',
+    googleClientIds: list(env.GOOGLE_CLIENT_IDS),
     authLimits: { registrationsPer10Min: Number(env.REGISTER_LIMIT ?? 5), loginsPerMin: Number(env.LOGIN_LIMIT ?? 10) },
   };
 }

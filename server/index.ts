@@ -22,6 +22,7 @@ import {
 } from './http';
 import { MatchLedger } from './ledger';
 import { createMailer, type Mailer } from './mailer';
+import { GoogleIdTokenVerifier, type GoogleVerifier } from './google';
 import { GooglePlayVerifier, type PlayVerifier } from './googleplay';
 import { Presence } from './presence';
 import { DEFAULT_TIMINGS, RoomManager, type ClientSocket, type Timings } from './rooms';
@@ -40,6 +41,8 @@ export interface StartOptions {
   skipRecovery?: boolean;
   /** Google Play purchase checks (tests pass a fake); default comes from the environment. */
   playVerifier?: PlayVerifier | null;
+  /** Google Sign-In token checks (tests pass a fake); default comes from GOOGLE_CLIENT_IDS. */
+  googleVerifier?: GoogleVerifier | null;
 }
 
 export interface RunningServer {
@@ -126,7 +129,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   const mailer = createMailer(cfg.mail);
   const presence = new Presence();
   const play = opts.playVerifier !== undefined ? opts.playVerifier : GooglePlayVerifier.fromEnv(cfg.googlePlayServiceAccount, cfg.googlePlayPackage);
-  const ctx: AppCtx = { db, cfg, mailer, settings, presence, play };
+  const google = opts.googleVerifier !== undefined ? opts.googleVerifier : GoogleIdTokenVerifier.fromEnv(cfg.googleClientIds);
+  const ctx: AppCtx = { db, cfg, mailer, settings, presence, play, google };
   const ledger = new MatchLedger({ db, settings, presence, requireEmailVerification: cfg.requireEmailVerification });
   if (!opts.skipRecovery) {
     const rec = await ledger.recover();

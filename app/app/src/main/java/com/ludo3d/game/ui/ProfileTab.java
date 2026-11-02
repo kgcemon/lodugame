@@ -15,7 +15,7 @@ import com.ludo3d.game.net.Api;
 
 import org.json.JSONObject;
 
-/** Profile: edit name / username / avatar colour, wallet & history links, password, sign out. */
+/** Profile: edit name / username / avatar colour, wallet & history links, sign out. */
 final class ProfileTab {
     private final MainActivity a;
     private final LudoApp app;
@@ -119,7 +119,6 @@ final class ProfileTab {
 
         col.addView(Ui.heading(a, "Security"));
         LinearLayout sec = Ui.card(a);
-        sec.addView(link("🔑  Change password", this::changePassword));
         if (!u.optBoolean("emailVerified")) {
             sec.addView(link("✉️  Resend verification email", () -> app.api.post("/auth/resend-verification", null, new Api.Cb(a) {
                 @Override
@@ -131,7 +130,7 @@ final class ProfileTab {
         sec.addView(link("🚪  Sign out", a::signOut));
         col.addView(sec);
 
-        TextView server = Ui.muted(a, "Ludo 3D " + com.ludo3d.game.BuildConfig.VERSION_NAME);
+        TextView server = Ui.muted(a, "LudoX " + com.ludo3d.game.BuildConfig.VERSION_NAME);
         server.setGravity(Gravity.CENTER);
         server.setPadding(0, Ui.dp(a, 12), 0, 0);
         col.addView(server);
@@ -153,39 +152,6 @@ final class ProfileTab {
                 LudoApp.toast(message);
                 a.recreate();
             }
-        });
-    }
-
-    private void changePassword() {
-        LinearLayout box = Ui.vbox(a);
-        int pw = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD;
-        EditText cur = Ui.input(a, "Current password", pw);
-        EditText next = Ui.input(a, "New password", pw);
-        EditText confirm = Ui.input(a, "Confirm new password", pw);
-        box.addView(cur);
-        box.addView(next);
-        box.addView(confirm);
-        box.addView(Ui.muted(a, "Other devices will be signed out."));
-        a.dialog("Change password", box, "Change", () -> {
-            JSONObject body = new JSONObject();
-            try {
-                body.put("currentPassword", cur.getText().toString())
-                        .put("password", next.getText().toString())
-                        .put("confirmPassword", confirm.getText().toString());
-            } catch (Exception ignored) {
-                return;
-            }
-            app.api.post("/auth/change-password", body, new Api.Cb(a) {
-                @Override
-                public void ok(JSONObject r) {
-                    LudoApp.toast("Password changed");
-                }
-
-                @Override
-                public void err(Api.Error e) {
-                    a.alert("Couldn't change password", e.message);
-                }
-            });
         });
     }
 }

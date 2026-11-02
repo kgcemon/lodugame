@@ -16,6 +16,9 @@ android {
         // Default game server: the live site. Players can change it on the sign-in screen (Server settings).
         // For local testing (emulator -> `npm run dev` on this PC) use http://10.0.2.2:3001
         buildConfigField 'String', 'DEFAULT_SERVER_URL', '"https://freefirediamondtopup.com"'
+        // Google Sign-In: the *Web* OAuth client id from Google Cloud Console (the server checks
+        // tokens against it; set the same id in the server's GOOGLE_CLIENT_IDS).
+        buildConfigField 'String', 'GOOGLE_WEB_CLIENT_ID', '""'
     }
 
     buildTypes {
@@ -39,6 +42,10 @@ android {
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.1'
+    // Sign in with Google through Credential Manager.
+    implementation 'androidx.credentials:credentials:1.3.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.3.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
     // Splash screen (Android 12 style on every version).
     implementation 'androidx.core:core-splashscreen:1.0.1'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'

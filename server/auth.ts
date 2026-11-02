@@ -12,12 +12,17 @@ import {
 } from './http';
 import * as v from './security';
 import { HttpError, hashToken, newPublicId, newToken } from './security';
+import { InvalidGoogleToken } from './google';
 import { applyWalletTx, walletSummary } from './wallet';
 
 /**
- * Accounts and sessions. Passwords are scrypt-hashed; sessions are random
- * tokens kept only as SHA-256 hashes, sent in an HttpOnly SameSite cookie.
+ * Accounts and sessions. Players sign in with Google (the app) or an email and password
+ * (the website, admins). Passwords are scrypt-hashed; sessions are random tokens kept only
+ * as SHA-256 hashes, sent in an HttpOnly SameSite cookie.
  */
+
+/** password_hash of an account made with Google: matches no password. */
+const NO_PASSWORD = 'google';
 
 const REMEMBER_MS = 30 * 24 * 3600_000;
 const SHORT_MS = 24 * 3600_000;
@@ -40,6 +45,38 @@ export function publicUser(u: AuthUser) {
 function usernameBase(name: string): string {
   const ascii = name.normalize('NFKD').replace(/[^A-Za-z0-9]/g, '');
   return (ascii || 'player').slice(0, 14);
+}
+
+/**
+ * A new account with its profile (unique username and public id), wallet and welcome
+ * bonus, all in the caller's transaction. Returns the user id.
+ */
+async function createAccount(
+  q: Queryable,
+  a: { email: string; fullName: string; passwordHash: string; role: string; welcomeBonus: number; googleSub?: string },
+): Promise<string> {
+  const id = randomUUID();
+  await q.query(
+    `insert into users (id, email, password_hash, role, google_sub, email_verified_at) values ($1, $2, $3, $4, $5, $6)`,
+    [id, a.email, a.passwordHash, a.role, a.googleSub ?? null, a.googleSub ? new Date() : null],
+  );
+  // Unique username/public id: retry on the rare collision.
+  for (let i = 0; ; i++) {
+    const uname = `${usernameBase(a.fullName)}${Math.floor(1000 + Math.random() * 9000)}`;
+    const ok = await q.query(
+      `insert into profiles (user_id, full_name, username, public_id) values ($1, $2, $3, $4)
+       on conflict do nothing`,
+      [id, a.fullName, uname, newPublicId()],
+    );
+    if (ok.rowCount) break;
+    if (i > 8) throw new Error('Could not allocate a username');
+  }
+  await q.query('insert into wallets (user_id) values ($1)', [id]);
+  // Welcome bonus: same transaction as the account, keyed so it can only ever be granted once.
+  if (a.welcomeBonus > 0) {
+    await applyWalletTx(q, { userId: id, type: 'welcome_bonus', amount: a.welcomeBonus, key: 'welcome_bonus', note: 'Welcome bonus' });
+  }
+  return id;
 }
 
 async function createSession(ctx: AppCtx, req: Request, res: Response, userId: string, remember: boolean): Promise<void> {
@@ -105,27 +142,7 @@ export function authRouter(ctx: AppCtx): Router {
 
       let userId: string;
       try {
-        userId = await ctx.db.tx(async (q) => {
-          const id = randomUUID();
-          await q.query(`insert into users (id, email, password_hash, role) values ($1, $2, $3, $4)`, [id, email, passwordHash, role]);
-          // Unique username/public id: retry on the rare collision.
-          for (let i = 0; ; i++) {
-            const uname = `${usernameBase(fullName)}${Math.floor(1000 + Math.random() * 9000)}`;
-            const ok = await q.query(
-              `insert into profiles (user_id, full_name, username, public_id) values ($1, $2, $3, $4)
-               on conflict do nothing`,
-              [id, fullName, uname, newPublicId()],
-            );
-            if (ok.rowCount) break;
-            if (i > 8) throw new Error('Could not allocate a username');
-          }
-          await q.query('insert into wallets (user_id) values ($1)', [id]);
-          // Welcome bonus: same transaction as the account, keyed so it can only ever be granted once.
-          if (settings.welcomeBonus > 0) {
-            await applyWalletTx(q, { userId: id, type: 'welcome_bonus', amount: settings.welcomeBonus, key: 'welcome_bonus', note: 'Welcome bonus' });
-          }
-          return id;
-        });
+        userId = await ctx.db.tx((q) => createAccount(q, { email, fullName, passwordHash, role, welcomeBonus: settings.welcomeBonus }));
       } catch (e) {
         if ((e as { code?: string }).code === '23505') throw new HttpError(409, 'An account with this email already exists');
         throw e;
@@ -159,6 +176,65 @@ export function authRouter(ctx: AppCtx): Router {
       }
       await createSession(ctx, req, res, row.id, b.remember !== false);
       return { ok: true };
+    }),
+  );
+
+  /**
+   * Sign in with Google (the app's only way in). The ID token is checked with Google's keys;
+   * the account is the one already linked to this Google account, else the one with the
+   * same (Google-verified) email, so existing players keep their coins, else a new one.
+   */
+  r.post(
+    '/google',
+    strict,
+    h(async (req, res) => {
+      if (!ctx.google) throw new HttpError(503, 'Google sign-in is not set up on this server yet');
+      const token = req.body?.idToken;
+      if (typeof token !== 'string' || !token) throw new HttpError(400, 'Missing Google token');
+      let g;
+      try {
+        g = await ctx.google.verify(token);
+      } catch (e) {
+        if (e instanceof InvalidGoogleToken) throw new HttpError(401, 'Google sign-in failed, please try again');
+        throw e;
+      }
+      const settings = ctx.settings.get();
+      const role = ctx.cfg.adminEmails.includes(g.email) ? 'admin' : 'player';
+      type Row = { id: string; suspended_at: string | null; suspended_reason: string | null; role: string; google_sub: string | null };
+      const cols = 'select id, suspended_at, suspended_reason, role, google_sub from users';
+      const find = async () => {
+        const bySub = await ctx.db.query<Row>(`${cols} where google_sub = $1`, [g.sub]);
+        if (bySub.rows.length) return bySub.rows[0];
+        return (await ctx.db.query<Row>(`${cols} where lower(email) = $1`, [g.email])).rows[0];
+      };
+      let row = await find();
+      let created = false;
+      if (row?.google_sub && row.google_sub !== g.sub) throw new HttpError(409, 'This email is linked to a different Google account');
+      if (!row) {
+        const fullName = (g.name || g.email.split('@')[0]).slice(0, 60).trim() || 'Player';
+        try {
+          await ctx.db.tx((q) =>
+            createAccount(q, { email: g.email, fullName, passwordHash: NO_PASSWORD, role, welcomeBonus: settings.welcomeBonus, googleSub: g.sub }),
+          );
+          created = true;
+        } catch (e) {
+          // Two taps at once: the other one made the account.
+          if ((e as { code?: string }).code !== '23505') throw e;
+        }
+        row = await find();
+        if (!row) throw new HttpError(500, 'Could not create the account');
+      } else if (!row.google_sub) {
+        // An email account signing in with Google for the first time: link it.
+        await ctx.db.query(
+          'update users set google_sub = $2, email_verified_at = coalesce(email_verified_at, now()), updated_at = now() where id = $1',
+          [row.id, g.sub],
+        );
+      }
+      if (row.suspended_at) throw new HttpError(403, `This account is suspended${row.suspended_reason ? `: ${row.suspended_reason}` : ''}`);
+      if (role === 'admin' && row.role !== 'admin') await ctx.db.query(`update users set role = 'admin', updated_at = now() where id = $1`, [row.id]);
+      await createSession(ctx, req, res, row.id, true);
+      if (created) res.status(201);
+      return { ok: true, created, welcomeBonus: created ? settings.welcomeBonus : 0 };
     }),
   );
 
