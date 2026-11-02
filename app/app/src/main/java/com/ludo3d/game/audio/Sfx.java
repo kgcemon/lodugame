@@ -22,7 +22,7 @@ import java.nio.ByteOrder;
  */
 public final class Sfx {
     public enum S {
-        CLICK, DICE_SHAKE, DICE_LAND, STEP, CAPTURE, HOME, TURN, EXTRA, VICTORY, DEFEAT, ERROR, MESSAGE,
+        CLICK, DICE_SHAKE, STEP, CAPTURE, HOME, TURN, EXTRA, VICTORY, DEFEAT, ERROR, MESSAGE,
         E_LAUGH, E_LOVE, E_FIRE, E_CLAP, E_WOW, E_CRY, E_PARTY, E_COOL, E_POP,
         SEARCH, TICK, MATCH_FOUND, WARNING
     }
@@ -59,6 +59,12 @@ public final class Sfx {
         new Thread(() -> {
             if (!dir.exists() && !dir.mkdirs()) return;
             for (S s : S.values()) {
+                if (s == S.DICE_SHAKE) {
+                    // A real recording: dice shaken, thrown, bouncing and settling, cut to the
+                    // length of the roll animation (res/raw/dice_roll.wav).
+                    ids[s.ordinal()] = pool.load(c, com.ludo3d.game.R.raw.dice_roll, 1);
+                    continue;
+                }
                 File f = new File(dir, s.name().toLowerCase() + ".wav");
                 try {
                     if (!f.exists() || f.length() < 100) writeWav(f, design(s));
@@ -144,7 +150,7 @@ public final class Sfx {
     private static long minGapMs(S s) {
         switch (s) {
             case DICE_SHAKE: return 1000;
-            case DICE_LAND: case CAPTURE: case HOME: case TURN: case EXTRA: return 150;
+            case CAPTURE: case HOME: case TURN: case EXTRA: return 150;
             case STEP: return 40;
             default: return 60;
         }
@@ -153,7 +159,7 @@ public final class Sfx {
     /** When SoundPool runs out of streams, game sounds win over decoration. */
     private static int priority(S s) {
         switch (s) {
-            case DICE_SHAKE: case DICE_LAND: case CAPTURE: case WARNING: case VICTORY: case DEFEAT: return 3;
+            case DICE_SHAKE: case CAPTURE: case WARNING: case VICTORY: case DEFEAT: return 3;
             case STEP: case HOME: case TURN: case EXTRA: return 2;
             default: return 1;
         }
@@ -185,29 +191,6 @@ public final class Sfx {
             case CLICK:
                 return new Synth(0.05).tone(0, 0.04, 1900, 1200, Synth.SINE, 0.6, 0.001, 3)
                         .noise(0, 0.012, 0.25, 0.9, 0.6, 0.0005, 2).render(0.45);
-            case DICE_SHAKE: {
-                // The original rattle — dice knocking about in a cup — with a little more
-                // character: the knocks come in three shakes and each has a short woody body.
-                x = new Synth(0.6);
-                for (int i = 0; i < 9; i++) {
-                    double t = (i / 3) * 0.19 + (i % 3) * 0.045 + x.random() * 0.02;
-                    x.noise(t, 0.03, 0.55, 0.55, 0, 0.001, 2.5);
-                    x.tone(t, 0.035, 1100 + x.random() * 700, 700, Synth.TRIANGLE, 0.18, 0.001, 3);
-                    x.tone(t, 0.05, 420 + x.random() * 80, 360, Synth.SINE, 0.12, 0.001, 3);
-                }
-                return x.render(0.7);
-            }
-            case DICE_LAND:
-                // The original thud and bounce, topped with a crisp click as the die settles.
-                return new Synth(0.4)
-                        .tone(0, 0.18, 190, 85, Synth.SINE, 1, 0.002, 2)
-                        .noise(0, 0.05, 0.6, 0.35, 0, 0.001, 2)
-                        .tone(0, 0.025, 2300, 1700, Synth.TRIANGLE, 0.22, 0.0005, 3)
-                        .tone(0.12, 0.12, 170, 90, Synth.SINE, 0.45, 0.002, 2.5)
-                        .noise(0.12, 0.03, 0.3, 0.4, 0, 0.001, 2)
-                        .tone(0.2, 0.08, 160, 100, Synth.SINE, 0.18, 0.002, 2.5)
-                        .tone(0.2, 0.015, 2100, 1700, Synth.TRIANGLE, 0.08, 0.0005, 3)
-                        .render(0.85);
             case STEP:
                 // A token tapping onto a wooden square.
                 return new Synth(0.09)
