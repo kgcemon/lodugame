@@ -102,7 +102,9 @@ function dispatch(action: GameAction): void {
 
 export function canRoll(): boolean {
   const s = useGame.getState();
-  return !!s.view && !s.busy && !s.rollPending && !s.paused && s.view.phase === 'roll' && isLocalTurn(s);
+  // Online, my turn can be held for a moment while the previous player may re-roll.
+  const held = s.matchKind === 'online' && (s.holdUntil ?? 0) > Date.now();
+  return !!s.view && !s.busy && !s.rollPending && !s.paused && !held && s.view.phase === 'roll' && isLocalTurn(s);
 }
 
 export function requestRoll(): void {

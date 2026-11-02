@@ -59,6 +59,7 @@ function handleUpdate(u: GameUpdate): void {
   const s = useGame.getState();
   const deadline = u.deadline ? u.deadline - u.serverTime + Date.now() : null;
   const me = s.room?.seats[s.room.you];
+  const holdUntil = u.reroll && u.reroll.color !== me?.color && u.reroll.msLeft != null ? Date.now() + u.reroll.msLeft : null;
   if (s.screen !== 'game' || s.matchKind !== 'online' || !s.game) {
     resetDirector();
     s.set({
@@ -68,6 +69,7 @@ function handleUpdate(u: GameUpdate): void {
       localColors: me ? [me.color] : [],
       viewColor: me?.color ?? 'red',
       deadline,
+      holdUntil,
       paused: false,
       lastRoll: null,
       modal: null,
@@ -80,7 +82,7 @@ function handleUpdate(u: GameUpdate): void {
   }
   const prev = s.game;
   if (u.state.seq < prev.seq) beginMatch(); // rematch started
-  s.set({ game: u.state, deadline });
+  s.set({ game: u.state, deadline, holdUntil });
   // Contiguous updates animate; anything else (rejoin, rematch, name/bot change) snaps.
   if (u.events.length && u.state.seq === prev.seq + 1) enqueue(u.state, u.events);
   else enqueue(u.state, []);

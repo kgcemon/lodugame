@@ -113,6 +113,12 @@ interface Room {
   rerollable: { color: Color; before: GameState; seqAfter: number; until: number | null } | null;
   /** A re-roll is being charged: hold every other action. */
   rerollBusy: boolean;
+  /**
+   * Players act on what they see: no roll or move is accepted until the clients have shown
+   * the last action (most of its animation), so the next player can't roll while the
+   * previous roll is still tumbling on everyone's screen.
+   */
+  readyAt: number;
   starting: boolean;
   lastEvents: GameEvent[];
   chat: ChatMessage[];
@@ -390,6 +396,7 @@ export class RoomManager {
       waitUntil: null,
       rerollable: null,
       rerollBusy: false,
+      readyAt: 0,
       starting: false,
       lastEvents: [],
       chat: [],
@@ -904,6 +911,7 @@ export class RoomManager {
         room.rerollable = { color: actor.color, before: prev, seqAfter: state.seq, until: stillMine ? null : Date.now() + animMs + hold };
       }
     }
+    room.readyAt = Date.now() + Math.round(animationMs(events) * this.t.animScale * 0.6);
     this.reschedule(room, animationMs(events) * this.t.animScale + hold);
     this.io.to(room.code).emit('game:update', this.update(room, events));
     this.scheduleBotReaction(room, events);
@@ -1006,6 +1014,7 @@ export class RoomManager {
     if (!g || r.room.status !== 'playing') throw new RuleError('No match in progress');
     if (g.players[g.current].color !== r.seat.color) throw new RuleError('It is not your turn');
     if (r.room.rerollBusy) throw new RuleError('Wait a moment…');
+    if (Date.now() < r.room.readyAt) throw new RuleError('Wait a moment…');
     // The previous player may still re-roll their last roll for a moment.
     const rr = r.room.rerollable;
     if (rr && rr.color !== r.seat.color && rr.until !== null && Date.now() < rr.until && g.seq === rr.seqAfter) {

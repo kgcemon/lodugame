@@ -30,6 +30,8 @@ interface GameStore {
   viewColor: Color;
   /** Local-clock epoch ms when the online turn auto-plays. */
   deadline: number | null;
+  /** Local-clock epoch ms until which my online turn is held (the previous roller may re-roll). */
+  holdUntil: number | null;
   room: RoomView | null;
   connection: Connection;
   toasts: Toast[];
@@ -68,6 +70,7 @@ export const useGame = create<GameStore>()((set) => ({
   localColors: [],
   viewColor: 'blue',
   deadline: null,
+  holdUntil: null,
   room: null,
   connection: 'offline',
   toasts: [],

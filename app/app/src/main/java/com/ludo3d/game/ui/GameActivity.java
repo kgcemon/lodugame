@@ -101,6 +101,13 @@ public class GameActivity extends BaseActivity {
     /** 2 vs 2: chat goes to my partner only while this is on. */
     private boolean teamChat;
     private TextView chatAllBtn, chatTeamBtn, chatTitle;
+    /**
+     * When the previous player's roll handed me the turn but they may still pay to re-roll
+     * it, the server holds my turn until this time (wall clock): my dice stays asleep.
+     */
+    private long holdUntil;
+    /** When the last update arrived (uptime): the renderer picks it up on its next frame. */
+    private long updateAt;
     /** Auto-move: the update it is waiting on, and when the board settled for it. */
     private int autoSeq = -1;
     private long autoReadyAt;
@@ -253,6 +260,7 @@ public class GameActivity extends BaseActivity {
         boolean contiguous = !resume && lastSeq >= 0 && next.seq == lastSeq + 1 && events != null && events.length() > 0;
         if (resume && next.seq == lastSeq) return;
         boolean wasMine = state != null && isMyTurn(state);
+        updateAt = android.os.SystemClock.uptimeMillis();
         lastSeq = next.seq;
         state = next;
         // Animated rolls reveal their value when the card die lands (animateRoll); a state we
@@ -272,6 +280,8 @@ public class GameActivity extends BaseActivity {
             rerollCost = 0;
             rerollUntil = 0;
         }
+        holdUntil = rr != null && !myColor().equals(rr.optString("color")) && !rr.isNull("msLeft")
+                ? System.currentTimeMillis() + rr.optLong("msLeft") : 0;
         boolean highlight = isMyTurn(next) && "move".equals(next.phase);
         onGl(() -> {
             renderer.applyUpdate(next, events, contiguous);
@@ -493,9 +503,28 @@ public class GameActivity extends BaseActivity {
         });
     }
 
+    /** The previous player may still re-roll the roll that handed me the turn. */
+    private boolean held() {
+        return local == null && System.currentTimeMillis() < holdUntil;
+    }
+
+    /**
+     * My dice may be rolled right now: my turn, roll phase, no hold for a re-roll, and the
+     * board has finished showing the last action (so I never roll while the previous roll
+     * is still tumbling).
+     */
+    private boolean canRollNow() {
+        return isMyTurn(state) && "roll".equals(state.phase) && !held() && boardSettled();
+    }
+
+    /** The board has caught up with the latest update (its animations have played). */
+    private boolean boardSettled() {
+        return renderer.isIdle() && android.os.SystemClock.uptimeMillis() - updateAt >= 300;
+    }
+
     /** A normal roll (re-rolls with gems go through the ↻ button on my card). */
     private void roll() {
-        if (busy) return;
+        if (busy || !canRollNow()) return;
         if (local != null) {
             // Let the last move finish before the next player rolls (the renderer only
             // notices a new update on its next frame, hence the short grace period too).
@@ -852,7 +881,7 @@ public class GameActivity extends BaseActivity {
         // Dice box, pointing at the avatar.
         // Not gated on `busy`: the next turn's update can arrive before the server acks my
         // move, and the arrow must still show. The ticker re-checks it (see renderStatus).
-        boolean rollReady = mine && isMyTurn(state) && "roll".equals(state.phase);
+        boolean rollReady = mine && canRollNow();
         DiceView dice = new DiceView(this, !right);
         dice.setTag("dice:" + p.color);
         Integer last = lastRolls.get(p.color);
@@ -860,7 +889,7 @@ public class GameActivity extends BaseActivity {
         if (mine) {
             dice.setContentDescription("Roll the dice");
             dice.setOnClickListener(v -> {
-                if (isMyTurn(state) && "roll".equals(state.phase)) roll();
+                if (canRollNow()) roll();
             });
         }
         int box = Ui.dp(this, size * 0.9f);
@@ -972,7 +1001,7 @@ public class GameActivity extends BaseActivity {
                         : cur.name + " rolled " + state.dice + " — tap a glowing token";
             } else if (isMyTurn(state)) {
                 if ("roll".equals(state.phase)) {
-                    text = busy ? "Rolling…" : "Your turn — tap your dice!";
+                    text = busy ? "Rolling…" : held() ? "Your turn next — wait a moment…" : "Your turn — tap your dice!";
                 } else {
                     text = "You rolled " + state.dice + " — tap a glowing token";
                 }
@@ -1005,7 +1034,7 @@ public class GameActivity extends BaseActivity {
         // Every time it's my turn to roll, my die glows and the arrow points at it.
         View myDice = root.findViewWithTag("dice:" + (local != null && state != null ? state.currentPlayer().color : app.socket.myColor()));
         if (myDice instanceof DiceView) {
-            ((DiceView) myDice).setReady(online && isMyTurn(state) && "roll".equals(state.phase) && !busy);
+            ((DiceView) myDice).setReady(online && canRollNow() && !busy);
         }
         // My last roll can be re-rolled with gems: the ↻ button on my card lights up with a countdown.
         boolean retry = online && state != null && !"over".equals(state.phase) && canReroll() && !busy;
