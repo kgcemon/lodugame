@@ -174,8 +174,21 @@ final class DiceView extends View {
     }
 
     private void removeFlyer() {
-        if (flyer != null && flyer.getParent() instanceof ViewGroup) ((ViewGroup) flyer.getParent()).removeView(flyer);
+        if (flyer != null) detachLater(flyer);
         flyer = null;
+    }
+
+    /**
+     * Take a view that lives in the window's overlay (the flying die, the arrow) off screen.
+     * It is hidden now and removed on the next loop: this also runs while the window is
+     * tearing down its views (leaving a match), and removing a sibling in the middle of that
+     * crashes Android's detach pass.
+     */
+    private static void detachLater(View v) {
+        v.setVisibility(GONE);
+        com.ludo3d.game.LudoApp.MAIN.post(() -> {
+            if (v.getParent() instanceof ViewGroup) ((ViewGroup) v.getParent()).removeView(v);
+        });
     }
 
     // ---------------------------------------------------------------- my-turn glow and arrow
@@ -247,7 +260,7 @@ final class DiceView extends View {
         if (arrow == null) return;
         Object bob = arrow.getTag();
         if (bob instanceof Animator) ((Animator) bob).cancel();
-        if (arrow.getParent() instanceof ViewGroup) ((ViewGroup) arrow.getParent()).removeView(arrow);
+        detachLater(arrow);
         arrow = null;
     }
 
