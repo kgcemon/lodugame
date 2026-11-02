@@ -122,6 +122,9 @@ public class GameActivity extends BaseActivity {
             local = new LocalGame(names);
             localUpdate = local.snapshot();
         }
+        // Nothing from the lobby (search music, countdown ticks) carries on into the match.
+        Sfx.get().stop(Sfx.S.SEARCH);
+        Sfx.get().stop(Sfx.S.TICK);
         renderer = new GameRenderer();
         // Feel it when one of your tokens is sent home.
         renderer.listener = () -> runOnUiThread(() -> gl.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS));
@@ -166,6 +169,8 @@ public class GameActivity extends BaseActivity {
         }
         String color = myColor();
         onGl(() -> renderer.setMyColor(color));
+        // Animations left over from before the pause would replay old rolls and their sounds.
+        onGl(renderer::skipAnimations);
         JSONObject last = local != null ? localUpdate : app.socket.lastUpdate;
         if (last != null) onUpdate(last, true);
         renderChips();
@@ -178,6 +183,7 @@ public class GameActivity extends BaseActivity {
         super.onPause();
         gl.onPause();
         LudoApp.MAIN.removeCallbacks(ticker);
+        Sfx.get().stopAll();
     }
 
     @Override
@@ -241,6 +247,8 @@ public class GameActivity extends BaseActivity {
         JSONObject st = u.optJSONObject("state");
         if (st == null) return;
         GameState next = GameState.parse(st);
+        // An update we already have (or an older one) must never roll the board back.
+        if (!resume && lastSeq >= 0 && next.seq <= lastSeq) return;
         JSONArray events = u.optJSONArray("events");
         boolean contiguous = !resume && lastSeq >= 0 && next.seq == lastSeq + 1 && events != null && events.length() > 0;
         if (resume && next.seq == lastSeq) return;
@@ -410,11 +418,11 @@ public class GameActivity extends BaseActivity {
     }
 
     /**
-     * Only one real choice (one token, or several on the same square): play it for me once
-     * the roll has landed. Online, if I could still re-roll, wait a little longer first.
+     * Offline: only one real choice (one token, or several on the same square) is played by
+     * itself once the roll has landed. Online the server does this, so it happens exactly once.
      */
     private void maybeAutoMove() {
-        if (state == null || busy || !isMyTurn(state) || !"move".equals(state.phase) || !renderer.isIdle()) {
+        if (local == null || state == null || busy || !isMyTurn(state) || !"move".equals(state.phase) || !renderer.isIdle()) {
             autoSeq = -1;
             return;
         }
@@ -432,8 +440,7 @@ public class GameActivity extends BaseActivity {
             autoReadyAt = now;
             return;
         }
-        long wait = local == null && canReroll() ? 2000 : 450;
-        if (now - autoReadyAt < wait) return;
+        if (now - autoReadyAt < 450) return;
         autoSeq = -1;
         int player = state.current, token = only;
         onGl(() -> renderer.setSelected(player, token));
@@ -489,9 +496,12 @@ public class GameActivity extends BaseActivity {
         }
         busy = true;
         renderStatus();
-        app.socket.emit("game:roll", new JSONObject(), res -> {
+        // The rattle starts on the tap; the server's roll (moments later) doesn't start it again.
+        Sfx.get().play(Sfx.S.DICE_SHAKE, 0.9f, 1f);
+        app.socket.emit("game:roll", PlayFlow.obj("seq", state.seq), res -> {
             busy = false;
             if (!res.optBoolean("ok")) {
+                Sfx.get().stop(Sfx.S.DICE_SHAKE);
                 Sfx.get().play(Sfx.S.ERROR);
                 LudoApp.toast(res.optString("error", "Can't roll now"));
             }
@@ -505,7 +515,7 @@ public class GameActivity extends BaseActivity {
             return;
         }
         busy = true;
-        app.socket.emit("game:move", PlayFlow.obj("token", token), res -> {
+        app.socket.emit("game:move", PlayFlow.obj("token", token, "seq", state.seq), res -> {
             busy = false;
             if (!res.optBoolean("ok")) {
                 onGl(() -> renderer.setSelected(-1, -1));

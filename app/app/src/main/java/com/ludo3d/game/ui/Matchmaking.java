@@ -340,7 +340,14 @@ final class Matchmaking {
             deadline = SystemClock.elapsedRealtime() + room.optLong("waitMsLeft");
         }
         int filled = Math.min(order.size(), slots.size());
-        if (lastFilled >= 0 && filled > lastFilled) Sfx.get().play(filled >= slots.size() ? Sfx.S.MATCH_FOUND : Sfx.S.EXTRA);
+        if (lastFilled >= 0 && filled > lastFilled) {
+            if (filled >= slots.size()) {
+                // The search music and countdown end the moment the table is full.
+                Sfx.get().stop(Sfx.S.SEARCH);
+                Sfx.get().stop(Sfx.S.TICK);
+            }
+            Sfx.get().play(filled >= slots.size() ? Sfx.S.MATCH_FOUND : Sfx.S.EXTRA);
+        }
         if (filled >= slots.size()) {
             searching.setText("MATCH FOUND! GET READY...");
             title.setText("MATCH FOUND!");
@@ -353,6 +360,8 @@ final class Matchmaking {
     void stop() {
         for (ValueAnimator v : loops) v.cancel();
         loops.clear();
+        Sfx.get().stop(Sfx.S.SEARCH);
+        Sfx.get().stop(Sfx.S.TICK);
     }
 
     private void loop(ObjectAnimator anim, long ms, boolean reverse) {

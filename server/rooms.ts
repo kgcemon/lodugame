@@ -1,7 +1,7 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import type { Server, Socket } from 'socket.io';
 import { chooseMove } from '../shared/ai';
-import { applyAction, colorsForCount, createGame, RuleError, teamOf } from '../shared/engine';
+import { applyAction, colorsForCount, createGame, distinctMoves, RuleError, teamOf } from '../shared/engine';
 import type {
   ClientToServerEvents,
   GameUpdate,
@@ -45,6 +45,10 @@ export interface Timings {
   emptyRoomMs: number;
   /** Multiplier for the estimated client animation time (0 in tests). */
   animScale: number;
+  /** Pause before the only possible move is played for a human, after the roll has landed. */
+  autoMoveMs: number;
+  /** The same, when they could still pay to re-roll that roll (time to decide). */
+  autoMoveRerollMs: number;
   /** Overrides the configured matchmaking wait (tests). */
   matchWaitMs?: number;
 }
@@ -56,7 +60,12 @@ export const DEFAULT_TIMINGS: Timings = {
   lobbyGraceMs: 30_000,
   emptyRoomMs: 120_000,
   animScale: 1,
+  autoMoveMs: 600,
+  autoMoveRerollMs: 2_000,
 };
+
+/** One JSON line per game action when GAME_LOG=1 (room, match, turn, dice, moves; no secrets). */
+const GAME_LOG = process.env.GAME_LOG === '1';
 
 interface Seat {
   id: string;
@@ -799,15 +808,22 @@ export class RoomManager {
 
   // ---------------------------------------------------------------- gameplay
 
-  rollDice(socket: ClientSocket): void {
+  /** `seq` (optional) is the state version the client acted on: a stale tap is refused. */
+  rollDice(socket: ClientSocket, seq?: unknown): void {
     const { room } = this.myTurn(socket);
+    this.checkSeq(room, seq);
     this.apply(room, { type: 'roll', value: this.roll() });
   }
 
-  move(socket: ClientSocket, token: unknown): void {
+  move(socket: ClientSocket, token: unknown, seq?: unknown): void {
     const { room } = this.myTurn(socket);
+    this.checkSeq(room, seq);
     if (typeof token !== 'number') throw new RuleError('Invalid token');
     this.apply(room, { type: 'move', token });
+  }
+
+  private checkSeq(room: Room, seq: unknown): void {
+    if (typeof seq === 'number' && room.game && seq !== room.game.seq) throw new RuleError('That turn has already moved on');
   }
 
   /**
@@ -857,11 +873,19 @@ export class RoomManager {
    * Apply an action. `base` replaces the current state as the starting point (re-rolls
    * go back to before the last roll) and `seq` keeps the sequence counter moving forward.
    */
-  private apply(room: Room, action: GameAction, base?: GameState, seq?: number): void {
+  private apply(room: Room, action: GameAction, base?: GameState, seq?: number, auto = false): void {
     const prev = base ?? room.game!;
     const actor = prev.players[prev.current];
     const { state, events } = applyAction(prev, action);
     if (seq !== undefined) state.seq = seq;
+    if (GAME_LOG) {
+      console.log(JSON.stringify({
+        t: 'game', at: new Date().toISOString(), room: room.code, match: room.matchId, seq: state.seq, turn: prev.turnNo,
+        player: actor.color, kind: actor.kind, action: action.type, auto, ...(action.type === 'move' ? { token: action.token } : {}),
+        events: events.map((e) => e.type === 'rolled' ? `rolled:${e.value}` : e.type === 'moved' ? `moved:${e.token}:${e.from}>${e.to}` : e.type),
+        next: state.phase === 'over' ? 'over' : `${state.players[state.current].color}:${state.phase}`,
+      }));
+    }
     room.game = state;
     room.lastEvents = events;
     if (state.phase === 'over') room.status = 'over';
@@ -927,6 +951,13 @@ export class RoomManager {
     let wait: number;
     if (p.kind === 'ai' || !seat) {
       wait = animMs + this.t.botThinkMs;
+    } else if (g.phase === 'move' && distinctMoves(g).length === 1) {
+      // Only one possible move: the server plays it, once, as soon as the roll has landed
+      // (a little later if they could still pay to re-roll that roll).
+      const r = room.rerollable;
+      const canReroll = r?.color === p.color && seat.rerolls < MAX_REROLLS && (seat.gems ?? 0) >= REROLL_COSTS[seat.rerolls];
+      wait = animMs + (canReroll ? this.t.autoMoveRerollMs : this.t.autoMoveMs);
+      room.deadline = Date.now() + wait;
     } else {
       wait = animMs + (seat.connected ? this.t.turnMs : this.t.disconnectedTurnMs);
       room.deadline = Date.now() + wait;
@@ -940,8 +971,13 @@ export class RoomManager {
     if (!g || g.phase === 'over' || !this.rooms.has(room.code)) return;
     const p = g.players[g.current];
     try {
-      if (g.phase === 'roll') this.apply(room, { type: 'roll', value: this.roll() });
-      else this.apply(room, { type: 'move', token: chooseMove(g, p.kind === 'ai' ? p.aiLevel : 'medium') });
+      if (g.phase === 'roll') {
+        this.apply(room, { type: 'roll', value: this.roll() }, undefined, undefined, true);
+      } else {
+        const only = distinctMoves(g);
+        const token = only.length === 1 ? only[0] : chooseMove(g, p.kind === 'ai' ? p.aiLevel : 'medium');
+        this.apply(room, { type: 'move', token }, undefined, undefined, true);
+      }
     } catch (err) {
       console.error('[rooms] autoplay failed', err);
     }

@@ -216,8 +216,8 @@ export const net = {
   kick: (seat: number) => act('room:kick', { seat }),
   start: () => act('room:start'),
   rematch: () => act('game:rematch'),
-  roll: () => act('game:roll'),
-  move: (token: number) => act('game:move', { token }),
+  roll: (seq?: number) => act('game:roll', { seq }),
+  move: (token: number, seq?: number) => act('game:move', { token, seq }),
   /** `team` sends to my 2 vs 2 partner only. */
   chat: async (text: string, quick = false, team = false) => act('chat:send', { text, quick, team }),
   emote: async (id: string) => act('emote:send', { id }),

@@ -56,7 +56,7 @@ export async function bootServer(opts: StartOptions = {}): Promise<TestServer> {
       authLimits: { registrationsPer10Min: 10_000, loginsPerMin: 10_000 },
       ...opts.config,
     },
-    timings: { turnMs: 60_000, disconnectedTurnMs: 150, botThinkMs: 5, animScale: 0, lobbyGraceMs: 200, emptyRoomMs: 500, ...opts.timings },
+    timings: { turnMs: 60_000, disconnectedTurnMs: 150, botThinkMs: 5, animScale: 0, lobbyGraceMs: 200, emptyRoomMs: 500, autoMoveMs: 60_000, autoMoveRerollMs: 60_000, ...opts.timings },
   });
   const t: TestServer = {
     server,

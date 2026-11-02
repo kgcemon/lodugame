@@ -45,6 +45,8 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
             return WindowInsetsCompat.CONSUMED;
         });
         setContentView(root);
+        // The hardware volume keys control game sounds (SoundPool plays on the media stream).
+        setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC);
     }
 
     @Override

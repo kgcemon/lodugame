@@ -111,10 +111,11 @@ export interface ClientToServerEvents {
   'room:kick': (p: { seat: number }, ack: AckFn) => void;
   'room:start': (p: Record<string, never>, ack: AckFn) => void;
   'room:leave': (p: Record<string, never>, ack: AckFn) => void;
-  'game:roll': (p: Record<string, never>, ack: AckFn) => void;
+  /** `seq`: the state version the action was made on (stale actions are refused). */
+  'game:roll': (p: { seq?: number }, ack: AckFn) => void;
   /** Pay gems to roll your last roll again (5, 15, 45 per match; at most 3). */
   'game:reroll': (p: Record<string, never>, ack: AckFn<{ cost: number; gems: number }>) => void;
-  'game:move': (p: { token: number }, ack: AckFn) => void;
+  'game:move': (p: { token: number; seq?: number }, ack: AckFn) => void;
   'game:rematch': (p: Record<string, never>, ack: AckFn) => void;
   /** `team: true` sends to your 2 vs 2 partner only. */
   'chat:send': (p: { text: string; quick?: boolean; team?: boolean }, ack: AckFn) => void;

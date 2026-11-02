@@ -12,9 +12,13 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * Game sound effects. Each sound is synthesized once (see Synth), cached as a small WAV
- * in the app's cache folder and played through SoundPool, so playback is instant and
- * several sounds can overlap. Safe to call from any thread.
+ * Game sound effects, the one place every sound goes through. Each sound is synthesized
+ * once (see Synth), cached as a small WAV in the app's cache folder and played through
+ * SoundPool, so playback is instant. Every sound keeps track of its last stream so it can
+ * be stopped (stop / stopAll), "exclusive" sounds restart instead of stacking on top of
+ * themselves, and a repeat of the same sound within its minimum gap is dropped (so a roll
+ * that already rattled on tap doesn't rattle again when the server confirms it).
+ * Safe to call from any thread.
  */
 public final class Sfx {
     public enum S {
@@ -30,7 +34,11 @@ public final class Sfx {
     private final SharedPreferences prefs;
     private final SoundPool pool;
     private final int[] ids = new int[S.values().length];
-    private final boolean[] ready = new boolean[S.values().length];
+    /** Sample ids SoundPool finished loading (the callback may beat the ids[] assignment). */
+    private final java.util.Set<Integer> loaded = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Last stream started for each sound (0 = none), and when it started. */
+    private final int[] streams = new int[S.values().length];
+    private final long[] startedAt = new long[S.values().length];
     private volatile boolean enabled;
 
     private Sfx(Context c, SharedPreferences prefs) {
@@ -44,8 +52,8 @@ public final class Sfx {
                         .build())
                 .build();
         pool.setOnLoadCompleteListener((p, sampleId, status) -> {
-            if (status != 0) return;
-            for (int i = 0; i < ids.length; i++) if (ids[i] == sampleId) ready[i] = true;
+            if (status == 0) loaded.add(sampleId);
+            else android.util.Log.w("Sfx", "sound failed to load: sample " + sampleId + " status " + status);
         });
         File dir = new File(c.getCacheDir(), "sfx_v" + VERSION);
         new Thread(() -> {
@@ -55,8 +63,9 @@ public final class Sfx {
                 try {
                     if (!f.exists() || f.length() < 100) writeWav(f, design(s));
                     ids[s.ordinal()] = pool.load(f.getPath(), 1);
-                } catch (IOException ignored) {
+                } catch (IOException e) {
                     // A missing sound just stays silent.
+                    android.util.Log.w("Sfx", "could not prepare " + s, e);
                 }
             }
         }, "sfx-init").start();
@@ -77,6 +86,7 @@ public final class Sfx {
     public void setEnabled(boolean on) {
         enabled = on;
         prefs.edit().putBoolean("sound_on", on).apply();
+        if (!on) stopAll();
     }
 
     public void play(S s) {
@@ -85,8 +95,68 @@ public final class Sfx {
 
     /** volume 0..1, rate 0.5..2 (pitch). */
     public void play(S s, float volume, float rate) {
-        if (!enabled || !ready[s.ordinal()]) return;
-        pool.play(ids[s.ordinal()], volume, volume, 1, 0, Math.max(0.5f, Math.min(2f, rate)));
+        int i = s.ordinal();
+        int id = ids[i];
+        if (!enabled || id == 0 || !loaded.contains(id)) return;
+        long now = android.os.SystemClock.uptimeMillis();
+        synchronized (streams) {
+            if (streams[i] != 0 && now - startedAt[i] < minGapMs(s)) return;
+            if (exclusive(s) && streams[i] != 0) pool.stop(streams[i]);
+            int stream = pool.play(id, volume, volume, priority(s), 0, Math.max(0.5f, Math.min(2f, rate)));
+            if (stream != 0) {
+                streams[i] = stream;
+                startedAt[i] = now;
+            }
+        }
+    }
+
+    /** Stop the latest instance of a sound (e.g. the dice rattle when a roll is refused). */
+    public void stop(S s) {
+        int i = s.ordinal();
+        synchronized (streams) {
+            if (streams[i] != 0) pool.stop(streams[i]);
+            streams[i] = 0;
+        }
+    }
+
+    /** Silence everything (leaving a match, the app going to the background, muting). */
+    public void stopAll() {
+        synchronized (streams) {
+            for (int i = 0; i < streams.length; i++) {
+                if (streams[i] != 0) pool.stop(streams[i]);
+                streams[i] = 0;
+            }
+        }
+    }
+
+    /** Sounds that restart rather than layering a second copy over themselves. */
+    private static boolean exclusive(S s) {
+        switch (s) {
+            case STEP:
+            case CLICK:
+                return false;
+            default:
+                return true;
+        }
+    }
+
+    /** A second play of the same sound sooner than this is a duplicate trigger. */
+    private static long minGapMs(S s) {
+        switch (s) {
+            case DICE_SHAKE: return 700;
+            case DICE_LAND: case CAPTURE: case HOME: case TURN: case EXTRA: return 150;
+            case STEP: return 40;
+            default: return 60;
+        }
+    }
+
+    /** When SoundPool runs out of streams, game sounds win over decoration. */
+    private static int priority(S s) {
+        switch (s) {
+            case DICE_SHAKE: case DICE_LAND: case CAPTURE: case WARNING: case VICTORY: case DEFEAT: return 3;
+            case STEP: case HOME: case TURN: case EXTRA: return 2;
+            default: return 1;
+        }
     }
 
     /** Sound for an emote effect name (shared/social.ts EmoteEffect). */

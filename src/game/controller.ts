@@ -110,7 +110,7 @@ export function requestRoll(): void {
   const s = useGame.getState();
   s.set({ rollPending: true });
   if (s.matchKind === 'online') {
-    void net.roll().then((ok) => {
+    void net.roll(s.view!.seq).then((ok) => {
       if (!ok) useGame.getState().set({ rollPending: false });
     });
   } else {
@@ -128,7 +128,7 @@ export function chooseToken(token: number): void {
   }
   if (s.matchKind === 'online') {
     s.set({ rollPending: true });
-    void net.move(token).then((ok) => {
+    void net.move(token, v.seq).then((ok) => {
       if (!ok) useGame.getState().set({ rollPending: false });
     });
   } else {
@@ -163,7 +163,8 @@ export function afterSettle(): void {
     else later(420, () => dispatch({ type: 'move', token: chooseMove(v, p.aiLevel) }));
     return;
   }
-  if (isLocalTurn(s) && v.phase === 'move' && useSettings.getState().autoMove) {
+  // Online, the server plays the only possible move itself (exactly once).
+  if (s.matchKind !== 'online' && isLocalTurn(s) && v.phase === 'move' && useSettings.getState().autoMove) {
     const d = distinctMoves(v);
     if (d.length === 1) later(350, () => chooseToken(d[0]));
   }

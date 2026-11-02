@@ -131,15 +131,16 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
      */
     public void applyUpdate(GameState next, JSONArray events, boolean contiguous) {
         boolean first = state == null;
+        // Still playing an older update (a stalled frame, network bunching): finish it at
+        // once and quietly, so the board and its sounds never fall behind the server.
+        if (!first && contiguous && events != null && pendingMs(SystemClock.uptimeMillis()) > 300) {
+            dropAnimations();
+            snap();
+        }
         state = next;
         selPlayer = selToken = -1;
         if (first || !contiguous || events == null) {
-            queue.clear();
-            cur = null;
-            animPlayer = -1;
-            // An interrupted roll must not leave the die hanging in the air.
-            rollT = -1;
-            diceOwner = -1;
+            dropAnimations();
             snap();
             if (next.dice > 0) diceValue = next.dice;
             return;
@@ -176,6 +177,32 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             }
         }
         if (queue.isEmpty() && cur == null) snap();
+    }
+
+    /** Animation time still to play (the current step's rest plus everything queued). */
+    private long pendingMs(long now) {
+        long ms = cur != null ? Math.max(0, cur.dur - (now - curStart)) : 0;
+        for (Anim a : queue) ms += a.dur;
+        return ms;
+    }
+
+    /** Forget queued and running animations, and silence the dice rattle they started. */
+    private void dropAnimations() {
+        queue.clear();
+        cur = null;
+        animPlayer = -1;
+        // An interrupted roll must not leave the die hanging in the air.
+        rollT = -1;
+        diceOwner = -1;
+        idle = true;
+        Sfx x = Sfx.get();
+        if (x != null) x.stop(Sfx.S.DICE_SHAKE);
+    }
+
+    /** Jump to the current state with no animation (back from the background). */
+    public void skipAnimations() {
+        dropAnimations();
+        snap();
     }
 
     public void setHighlight(boolean on) {

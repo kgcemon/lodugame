@@ -139,9 +139,11 @@ final class PlayFlow {
         return modeName.toLowerCase().endsWith("room") ? modeName : modeName + " room";
     }
 
-    static JSONObject obj(String k, Object v) {
+    static JSONObject obj(Object... kv) {
         try {
-            return new JSONObject().put(k, v);
+            JSONObject o = new JSONObject();
+            for (int i = 0; i + 1 < kv.length; i += 2) o.put((String) kv[i], kv[i + 1]);
+            return o;
         } catch (Exception e) {
             return new JSONObject();
         }
