@@ -91,7 +91,7 @@ final class FriendsTab {
         row.addView(Ui.avatar(a, f, f.optString("username"), 40));
         LinearLayout t = Ui.vbox(a);
         t.setPadding(Ui.dp(a, 12), 0, Ui.dp(a, 8), 0);
-        t.addView(Ui.bold(Ui.text(a, f.optString("username"), 15, Ui.INK)));
+        t.addView(Ui.bold(Ui.text(a, Flags.named(f, f.optString("username")), 15, Ui.INK)));
         JSONObject room = f.optJSONObject("room");
         String status = !f.optBoolean("online") ? "Offline"
                 : room != null ? "In " + room.optString("modeName") + " (" + room.optInt("players") + "/" + room.optInt("maxPlayers") + ")"
@@ -115,7 +115,7 @@ final class FriendsTab {
             if (p == null) continue;
             LinearLayout row = Ui.row(a);
             row.addView(Ui.avatar(a, p, p.optString("username"), 36));
-            TextView name = Ui.bold(Ui.text(a, p.optString("username"), 15, Ui.INK));
+            TextView name = Ui.bold(Ui.text(a, Flags.named(p, p.optString("username")), 15, Ui.INK));
             name.setPadding(Ui.dp(a, 12), 0, 0, 0);
             row.addView(name, Ui.weight(1));
             String id = r.optString("id");
@@ -175,7 +175,7 @@ final class FriendsTab {
                     row.addView(Ui.avatar(a, p, p.optString("username"), 34));
                     LinearLayout t = Ui.vbox(a);
                     t.setPadding(Ui.dp(a, 10), 0, 0, 0);
-                    t.addView(Ui.bold(Ui.text(a, p.optString("username"), 15, Ui.INK)));
+                    t.addView(Ui.bold(Ui.text(a, Flags.named(p, p.optString("username")), 15, Ui.INK)));
                     t.addView(Ui.text(a, "ID " + p.optString("publicId") + (p.optBoolean("online") ? " · 🟢 online" : ""), 12, Ui.MUTED));
                     row.addView(t, Ui.weight(1));
                     if (p.optBoolean("isFriend")) row.addView(Ui.tag(a, "FRIEND", Ui.SUCCESS));

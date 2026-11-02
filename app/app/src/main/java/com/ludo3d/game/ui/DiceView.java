@@ -5,6 +5,7 @@ import android.animation.AnimatorListenerAdapter;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
@@ -386,6 +387,15 @@ final class DiceView extends View {
         paint.setShader(new LinearGradient(0, y, 0, y + s, top, bottom, Shader.TileMode.CLAMP));
         canvas.drawRoundRect(x + in, y + in, x + s - in, y + s - in * 1.6f, r * 0.85f, r * 0.85f, paint);
         paint.setShader(null);
+        if (skin.flag != null) {
+            // Flag dice: the flag fills the face inside the rim.
+            path.reset();
+            path.addRoundRect(x + in, y + in, x + s - in, y + s - in * 1.6f, r * 0.85f, r * 0.85f, Path.Direction.CW);
+            canvas.save();
+            canvas.clipPath(path);
+            canvas.drawBitmap(Flags.bitmap(skin.flag), null, new android.graphics.RectF(x + in, y + in, x + s - in, y + s - in * 1.6f), flagPaint(lit ? 1f : 0.72f));
+            canvas.restore();
+        }
         // A soft highlight across the upper part of the face.
         paint.setColor(0x33ffffff);
         canvas.drawRoundRect(x + s * 0.12f, y + s * 0.08f, x + s * 0.88f, y + s * 0.4f, r * 0.6f, r * 0.6f, paint);
@@ -396,9 +406,23 @@ final class DiceView extends View {
             float cx = x + s * AT[p[0]], cy = y + s * AT[p[1]];
             paint.setColor(0x55ffffff);
             canvas.drawCircle(cx, cy + pr * 0.28f, pr, paint);
+            if (skin.flag != null) {
+                // A dark ring keeps white pips readable on any flag.
+                paint.setColor(0xaa000000);
+                canvas.drawCircle(cx, cy, pr * 1.3f, paint);
+            }
             paint.setColor(value == 1 ? skin.shade(skin.one, lit) : pip);
             canvas.drawCircle(cx, cy, pr, paint);
         }
+    }
+
+    private static final Paint FLAG_PAINT = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+
+    /** Paint for a flag face, darkened by `light` (1 = as is). Drawing happens on the UI thread. */
+    private static Paint flagPaint(float light) {
+        int k = Math.round(255 * Math.max(0f, Math.min(1f, light)));
+        FLAG_PAINT.setColorFilter(new android.graphics.LightingColorFilter(Color.rgb(k, k, k), 0));
+        return FLAG_PAINT;
     }
 
     // ---------------------------------------------------------------- the 3D cube
@@ -490,6 +514,25 @@ final class DiceView extends View {
                 paint.setColor(col);
                 c.drawPath(path, paint);
                 paint.setStyle(Paint.Style.FILL);
+                if (skin.flag != null) {
+                    // Map the flag picture onto the face (corners: top-left, top-right, bottom-right, bottom-left).
+                    Bitmap flag = Flags.bitmap(skin.flag);
+                    float[] dst = new float[8];
+                    float[][] fc = {{-1, 1}, {1, 1}, {1, -1}, {-1, -1}};
+                    for (int i = 0; i < 4; i++) {
+                        project(n, u, v, fc[i][0] * 0.94f, fc[i][1] * 0.94f, 1.001f, cx, cy, half, persp, p);
+                        dst[i * 2] = p[0];
+                        dst[i * 2 + 1] = p[1];
+                    }
+                    float fw = flag.getWidth(), fh = flag.getHeight();
+                    android.graphics.Matrix mx = new android.graphics.Matrix();
+                    mx.setPolyToPoly(new float[]{0, 0, fw, 0, fw, fh, 0, fh}, 0, dst, 0, 4);
+                    c.save();
+                    c.clipPath(path);
+                    c.concat(mx);
+                    c.drawBitmap(flag, 0, 0, flagPaint(lit ? shade : shade * 0.72f));
+                    c.restore();
+                }
 
                 // Pips, foreshortened with the face.
                 int value = VAL[f];
@@ -504,6 +547,13 @@ final class DiceView extends View {
                         else path.lineTo(p[0], p[1]);
                     }
                     path.close();
+                    if (skin.flag != null) {
+                        paint.setStyle(Paint.Style.STROKE);
+                        paint.setStrokeWidth(half * 0.06f);
+                        paint.setColor(0xaa000000);
+                        c.drawPath(path, paint);
+                        paint.setStyle(Paint.Style.FILL);
+                    }
                     paint.setColor(value == 1 ? skin.shade(skin.one, lit) : pipColor);
                     c.drawPath(path, paint);
                 }
@@ -617,13 +667,16 @@ final class DiceView extends View {
      * rim, pips and the single pip of the 1. Unlit dice (not this player's turn) are dimmed.
      */
     static final class Skin {
-        static final Skin CLASSIC = new Skin("classic", "Classic", 0, 0xffffffff, 0xffe4e1ee, 0xffc9c5d8, 0xff23202e, 0xffd62839);
+        static final Skin CLASSIC = new Skin("classic", "Classic", 0, 0xffffffff, 0xffe4e1ee, 0xffc9c5d8, 0xff23202e, 0xffd62839, null);
         private static final java.util.Map<String, Skin> CACHE = new java.util.HashMap<>();
 
         final String id, name;
         final int price, face, faceBottom, rim, pip, one;
+        /** Country whose flag covers the faces (flag dice), or null. */
+        final String flag;
 
-        Skin(String id, String name, int price, int face, int faceBottom, int rim, int pip, int one) {
+        Skin(String id, String name, int price, int face, int faceBottom, int rim, int pip, int one, String flag) {
+            this.flag = flag;
             this.id = id;
             this.name = name;
             this.price = price;
@@ -642,7 +695,8 @@ final class DiceView extends View {
             try {
                 return new Skin(o.getString("id"), o.optString("name", o.getString("id")), o.optInt("price"),
                         Color.parseColor(o.getString("face")), Color.parseColor(o.getString("faceBottom")),
-                        Color.parseColor(o.getString("rim")), Color.parseColor(o.getString("pip")), Color.parseColor(o.getString("one")));
+                        Color.parseColor(o.getString("rim")), Color.parseColor(o.getString("pip")), Color.parseColor(o.getString("one")),
+                        o.isNull("flag") ? null : o.optString("flag", null));
             } catch (Exception e) {
                 return null;
             }

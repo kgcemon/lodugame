@@ -39,7 +39,10 @@ import org.json.JSONObject;
  * creates) the player's account. Offline pass-and-play needs no account.
  */
 public class AuthActivity extends BaseActivity {
+    /** Intent extra: a guest is linking their account to Google (keeps their progress). */
+    static final String EXTRA_LINK = "link";
     private LinearLayout col;
+    private boolean link;
     private TextView googleLabel;
     private View googleButton;
     private boolean busy;
@@ -48,6 +51,7 @@ public class AuthActivity extends BaseActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         root.setBackground(Fx.background(this));
+        link = getIntent().getBooleanExtra(EXTRA_LINK, false);
         col = Ui.scrollPage(this, root);
         render();
     }
@@ -81,7 +85,9 @@ public class AuthActivity extends BaseActivity {
         }
         col.addView(logo, new LinearLayout.LayoutParams(Ui.dp(this, 210), Ui.dp(this, 210)));
 
-        TextView sub = Ui.muted(this, "Sign in with your Google account to play online.\nYour coins, diamonds and dice stay safe on any phone.");
+        TextView sub = Ui.muted(this, link
+                ? "Link your guest account to Google.\nYour coins, diamonds, dice, friends and history stay, and you can sign in on any phone."
+                : "Sign in with your Google account to play online.\nYour coins, diamonds and dice stay safe on any phone.");
         sub.setGravity(Gravity.CENTER);
         sub.setPadding(0, Ui.dp(this, 22), 0, Ui.dp(this, 28));
         col.addView(sub, Ui.lpMatchWrap());
@@ -89,7 +95,29 @@ public class AuthActivity extends BaseActivity {
         googleButton = googleButton();
         col.addView(googleButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 66)));
 
-        TextView terms = Ui.muted(this, "New players get free welcome coins.");
+        if (link) {
+            TextView back = Ui.button(this, "Not now", "ghost", v -> finish());
+            LinearLayout.LayoutParams blp = Ui.lpMatchWrap();
+            blp.topMargin = Ui.dp(this, 18);
+            col.addView(back, blp);
+            return;
+        }
+
+        // Or play straight away as a guest, and link Google later from the profile.
+        Fx.Tile guest = new Fx.Tile(this, Fx.PURPLE, 18, 6);
+        LinearLayout grow = Ui.hbox(this);
+        grow.setGravity(Gravity.CENTER);
+        grow.addView(Ui.text(this, "👤", 24, 0xffffffff));
+        Fx.GoldText gl = Fx.GoldText.label(this, "PLAY AS GUEST", 18, 0xff3b0d8c);
+        gl.setPadding(Ui.dp(this, 10), 0, 0, 0);
+        grow.addView(gl);
+        guest.addView(grow, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        guest.setOnClickListener(v -> playAsGuest());
+        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 62));
+        glp.topMargin = Ui.dp(this, 14);
+        col.addView(guest, glp);
+
+        TextView terms = Ui.muted(this, "New players get free welcome coins. Guests can link Google later and keep everything.");
         terms.setGravity(Gravity.CENTER);
         terms.setPadding(0, Ui.dp(this, 10), 0, 0);
         col.addView(terms, Ui.lpMatchWrap());
@@ -113,7 +141,7 @@ public class AuthActivity extends BaseActivity {
         mark.setImageResource(R.drawable.ic_google_g);
         g.addView(mark, new FrameLayout.LayoutParams(Ui.dp(this, 22), Ui.dp(this, 22), Gravity.CENTER));
         row.addView(g, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36)));
-        googleLabel = Ui.bold(Ui.text(this, "Sign in with Google", 18, 0xff1f1f1f));
+        googleLabel = Ui.bold(Ui.text(this, link ? "Link Google account" : "Sign in with Google", 18, 0xff1f1f1f));
         googleLabel.setPadding(Ui.dp(this, 12), 0, 0, 0);
         googleLabel.setShadowLayer(Ui.dp(this, 1), 0, Ui.dp(this, 1), 0x99ffffff);
         row.addView(googleLabel);
@@ -126,7 +154,7 @@ public class AuthActivity extends BaseActivity {
 
     private void setBusy(boolean on) {
         busy = on;
-        googleLabel.setText(on ? "Signing in…" : "Sign in with Google");
+        googleLabel.setText(on ? "Signing in…" : link ? "Link Google account" : "Sign in with Google");
         googleButton.setAlpha(on ? 0.7f : 1f);
     }
 
@@ -183,18 +211,45 @@ public class AuthActivity extends BaseActivity {
         app.api.post("/auth/google", body, new Api.Cb(this) {
             @Override
             public void ok(JSONObject r) {
-                if (r.optBoolean("created") && r.optLong("welcomeBonus") > 0) {
+                if (r.optBoolean("linked")) {
+                    LudoApp.toast("Saved! Your guest account is now linked to Google");
+                } else if (link) {
+                    LudoApp.toast("This Google account already had a player: signed in to it");
+                } else if (r.optBoolean("created") && r.optLong("welcomeBonus") > 0) {
                     LudoApp.toast("Welcome! You received " + Ui.fmt(r.optLong("welcomeBonus")) + " coins");
                 }
-                Intent i = new Intent(AuthActivity.this, MainActivity.class);
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                startActivity(i);
+                home();
             }
 
             @Override
             public void err(Api.Error e) {
                 setBusy(false);
                 alert("Couldn't sign in", e.message);
+            }
+        });
+    }
+
+    private void home() {
+        Intent i = new Intent(AuthActivity.this, MainActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(i);
+    }
+
+    /** A new guest account, kept on this phone by its session. */
+    private void playAsGuest() {
+        if (busy) return;
+        setBusy(true);
+        app.api.post("/auth/guest", null, new Api.Cb(this) {
+            @Override
+            public void ok(JSONObject r) {
+                if (r.optLong("welcomeBonus") > 0) LudoApp.toast("Welcome! You received " + Ui.fmt(r.optLong("welcomeBonus")) + " coins");
+                home();
+            }
+
+            @Override
+            public void err(Api.Error e) {
+                setBusy(false);
+                alert("Couldn't start a guest game", e.message);
             }
         });
     }

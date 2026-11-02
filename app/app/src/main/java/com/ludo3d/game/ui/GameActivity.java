@@ -822,7 +822,7 @@ public class GameActivity extends BaseActivity {
         wrap.setTag("chip:" + p.color);
 
         boolean partner = teams() && !p.color.equals(app.socket.myColor()) && teamOf(p.color) == teamOf(app.socket.myColor());
-        TextView name = Ui.bold(Ui.text(this, (p.rank == 1 ? "🏆 " : p.rank > 1 ? "#" + p.rank + " " : "") + (partner ? "🤝 " : "") + p.name, compact ? 11 : 12, Ui.INK));
+        TextView name = Ui.bold(Ui.text(this, (p.rank == 1 ? "🏆 " : p.rank > 1 ? "#" + p.rank + " " : "") + (partner ? "🤝 " : "") + (seat != null && !bot ? Flags.of(seat) + " " : "") + p.name, compact ? 11 : 12, Ui.INK));
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.END);
         name.setMaxWidth(Ui.dp(this, size * 2.6f));

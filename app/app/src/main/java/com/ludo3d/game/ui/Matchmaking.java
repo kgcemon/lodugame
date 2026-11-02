@@ -97,7 +97,8 @@ final class Matchmaking {
             String n = seat.optString("name");
             face.setText(bot ? "🤖" : n.isEmpty() ? "?" : n.substring(0, n.offsetByCodePoints(0, 1)).toUpperCase());
             face.setBackground(Ui.round(bot ? Fx.blend(col, Color.BLACK, 0.2f) : Color.HSVToColor(new float[]{seat.optInt("avatarHue", 210), 0.6f, 0.8f}), Ui.dp(a, 14)));
-            name.setText(me ? n + " (you)" : n);
+            String shown = bot ? n : Flags.of(seat) + " " + n;
+            name.setText(me ? shown + " (you)" : shown);
             if (!was) {
                 // Pop in when the seat is taken.
                 frame.setScaleX(0.6f);

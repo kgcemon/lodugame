@@ -146,7 +146,7 @@ public class RoomActivity extends BaseActivity {
                     : Ui.avatar(this, s, s.optString("name"), 38));
             LinearLayout t = Ui.vbox(this);
             t.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 6), 0);
-            t.addView(Ui.bold(Ui.text(this, s.optString("name") + (i == you ? " (you)" : ""), 15, Ui.INK)));
+            t.addView(Ui.bold(Ui.text(this, ("ai".equals(s.optString("kind")) ? "" : Flags.of(s) + " ") + s.optString("name") + (i == you ? " (you)" : ""), 15, Ui.INK)));
             LinearLayout tags = Ui.hbox(this);
             tags.addView(colorDot(s.optString("color")));
             if (teams && !s.isNull("team")) {

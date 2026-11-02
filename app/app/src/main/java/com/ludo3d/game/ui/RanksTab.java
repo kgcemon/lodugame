@@ -104,7 +104,7 @@ final class RanksTab {
         row.addView(Ui.avatar(a, x, x.optString("username"), 34));
         LinearLayout t = Ui.vbox(a);
         t.setPadding(Ui.dp(a, 10), 0, 0, 0);
-        t.addView(Ui.bold(Ui.text(a, x.optString("username") + (x.optBoolean("isYou") ? " (you)" : ""), 15, x.optBoolean("isYou") ? Ui.GOLD : Ui.INK)));
+        t.addView(Ui.bold(Ui.text(a, Flags.named(x, x.optString("username")) + (x.optBoolean("isYou") ? " (you)" : ""), 15, x.optBoolean("isYou") ? Ui.GOLD : Ui.INK)));
         t.addView(Ui.text(a, x.optInt("matches") + " matches · " + x.optDouble("winRate") + "% wins", 12, Ui.MUTED));
         row.addView(t, Ui.weight(1));
         String value = "winrate".equals(sort) ? x.optDouble("winRate") + "%" : "season".equals(sort) ? x.optInt("seasonPoints") + " pts" : x.optInt("wins") + " wins";

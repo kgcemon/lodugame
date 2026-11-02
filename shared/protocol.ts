@@ -17,6 +17,8 @@ export interface SeatView {
   avatarUrl: string | null;
   /** Profile frame (shared/frames.ts) around the picture, or null. */
   frame: string | null;
+  /** Two-letter country of the player; null for bots and unknown (a globe). */
+  country: string | null;
   ready: boolean;
   connected: boolean;
   isHost: boolean;

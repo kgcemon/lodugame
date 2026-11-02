@@ -13,6 +13,7 @@ import {
 import * as v from './security';
 import { HttpError, hashToken, newPublicId, newToken } from './security';
 import { InvalidGoogleToken } from './google';
+import { countryForIp } from './country';
 import { applyWalletTx, walletSummary } from './wallet';
 
 /**
@@ -23,11 +24,15 @@ import { applyWalletTx, walletSummary } from './wallet';
 
 /** password_hash of an account made with Google: matches no password. */
 const NO_PASSWORD = 'google';
+/** password_hash of a guest account: matches no password either. */
+const GUEST_PASSWORD = 'guest';
 
 const REMEMBER_MS = 30 * 24 * 3600_000;
 const SHORT_MS = 24 * 3600_000;
 const VERIFY_MS = 48 * 3600_000;
 const RESET_MS = 3600_000;
+/** A guest has no other way back in, so their session lasts (about) forever. */
+const GUEST_MS = 10 * 365 * 24 * 3600_000;
 
 export function publicUser(u: AuthUser) {
   return {
@@ -40,6 +45,8 @@ export function publicUser(u: AuthUser) {
     publicId: u.publicId,
     avatarHue: u.avatarHue,
     avatarUrl: u.avatarUrl,
+    country: u.country,
+    guest: u.isGuest,
   };
 }
 
@@ -54,12 +61,12 @@ function usernameBase(name: string): string {
  */
 async function createAccount(
   q: Queryable,
-  a: { email: string; fullName: string; passwordHash: string; role: string; welcomeBonus: number; googleSub?: string },
+  a: { email: string; fullName: string; passwordHash: string; role: string; welcomeBonus: number; googleSub?: string; guest?: boolean },
 ): Promise<string> {
   const id = randomUUID();
   await q.query(
-    `insert into users (id, email, password_hash, role, google_sub, email_verified_at) values ($1, $2, $3, $4, $5, $6)`,
-    [id, a.email, a.passwordHash, a.role, a.googleSub ?? null, a.googleSub ? new Date() : null],
+    `insert into users (id, email, password_hash, role, google_sub, email_verified_at, is_guest) values ($1, $2, $3, $4, $5, $6, $7)`,
+    [id, a.email, a.passwordHash, a.role, a.googleSub ?? null, a.googleSub ? new Date() : null, !!a.guest],
   );
   // Unique username/public id: retry on the rare collision.
   for (let i = 0; ; i++) {
@@ -80,14 +87,21 @@ async function createAccount(
   return id;
 }
 
-async function createSession(ctx: AppCtx, req: Request, res: Response, userId: string, remember: boolean): Promise<void> {
+/** Keep the player's country in step with the IP they play from (unknown IPs change nothing). */
+export async function refreshCountry(q: Queryable, userId: string, ip: string | undefined, current?: string | null): Promise<void> {
+  const country = countryForIp(ip);
+  if (!country || country === current) return;
+  await q.query('update profiles set country = $2 where user_id = $1', [userId, country]);
+}
+
+async function createSession(ctx: AppCtx, req: Request, res: Response, userId: string, remember: boolean, ms = remember ? REMEMBER_MS : SHORT_MS): Promise<void> {
   const token = newToken();
-  const ms = remember ? REMEMBER_MS : SHORT_MS;
   await ctx.db.query(
     `insert into sessions (user_id, token_hash, expires_at, ip, user_agent) values ($1, $2, $3, $4, $5)`,
     [userId, hashToken(token), new Date(Date.now() + ms), req.ip ?? null, (req.get('user-agent') ?? '').slice(0, 300)],
   );
   setSessionCookie(res, ctx.cfg, token, remember ? ms : null);
+  await refreshCountry(ctx.db, userId, req.ip).catch((e) => console.error('[country] lookup failed', e));
 }
 
 async function issueToken(q: Queryable, userId: string, kind: 'verify_email' | 'reset_password', ms: number): Promise<string> {
@@ -211,6 +225,28 @@ export function authRouter(ctx: AppCtx): Router {
       let row = await find();
       let created = false;
       if (row?.google_sub && row.google_sub !== g.sub) throw new HttpError(409, 'This email is linked to a different Google account');
+      const guest = req.user?.isGuest ? req.user : null;
+      let linked = false;
+      if (!row && guest) {
+        // A guest saving their account: the guest becomes this Google account (coins, diamonds,
+        // friends and history stay). If the Google account already exists, it is used instead.
+        const fullName = (g.name || g.email.split('@')[0]).slice(0, 60).trim() || guest.fullName;
+        try {
+          await ctx.db.tx(async (q) => {
+            await q.query(
+              `update users set email = $2, google_sub = $3, is_guest = false, email_verified_at = now(), role = $4, updated_at = now()
+               where id = $1 and is_guest = true`,
+              [guest.id, g.email, g.sub, role],
+            );
+            await q.query('update profiles set full_name = $2, updated_at = now() where user_id = $1', [guest.id, fullName]);
+          });
+        } catch (e) {
+          if ((e as { code?: string }).code !== '23505') throw e;
+        }
+        row = await find();
+        if (!row) throw new HttpError(500, 'Could not save the account');
+        linked = row.id === guest.id;
+      }
       if (!row) {
         const fullName = (g.name || g.email.split('@')[0]).slice(0, 60).trim() || 'Player';
         try {
@@ -237,7 +273,32 @@ export function authRouter(ctx: AppCtx): Router {
       if (role === 'admin' && row.role !== 'admin') await ctx.db.query(`update users set role = 'admin', updated_at = now() where id = $1`, [row.id]);
       await createSession(ctx, req, res, row.id, true);
       if (created) res.status(201);
-      return { ok: true, created, welcomeBonus: created ? settings.welcomeBonus : 0 };
+      return { ok: true, created, linked, welcomeBonus: created ? settings.welcomeBonus : 0 };
+    }),
+  );
+
+  /**
+   * Play as a guest: a new account with no sign-in of its own, kept on this device by its
+   * long-lived session. Signing in with Google later keeps everything (see /google).
+   */
+  r.post(
+    '/guest',
+    rateLimit(10, 60 * 60_000),
+    h(async (req, res) => {
+      const settings = ctx.settings.get();
+      const userId = await ctx.db.tx((q) =>
+        createAccount(q, {
+          email: `guest-${randomUUID()}@guest.invalid`,
+          fullName: 'Guest',
+          passwordHash: GUEST_PASSWORD,
+          role: 'player',
+          welcomeBonus: settings.welcomeBonus,
+          guest: true,
+        }),
+      );
+      await createSession(ctx, req, res, userId, true, GUEST_MS);
+      res.status(201);
+      return { ok: true, created: true, welcomeBonus: settings.welcomeBonus };
     }),
   );
 
@@ -254,6 +315,8 @@ export function authRouter(ctx: AppCtx): Router {
     '/me',
     h(async (req) => {
       if (!req.user) return { ok: true, user: null };
+      // A player who travels (or was signed in before countries existed) gets theirs here.
+      await refreshCountry(ctx.db, req.user.id, req.ip, req.user.country).catch(() => {});
       const wallet = await walletSummary(ctx.db, req.user.id, ctx.settings.get().dailyBonus);
       return { ok: true, user: publicUser(req.user), wallet, requireEmailVerification: ctx.cfg.requireEmailVerification };
     }),

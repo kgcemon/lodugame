@@ -251,7 +251,7 @@ public class ShopActivity extends BaseActivity {
         box.setPadding(Ui.dp(this, 6), Ui.dp(this, 10), Ui.dp(this, 6), Ui.dp(this, 12));
         int size = k.skin != null ? 56 : 66;
         box.addView(preview(k, size), new LinearLayout.LayoutParams(Ui.dp(this, size), Ui.dp(this, size)));
-        TextView n = Ui.bold(Ui.text(this, k.name, 13, picked ? 0xff4a2600 : Ui.INK));
+        TextView n = Ui.bold(Ui.text(this, k.skin != null && k.skin.flag != null ? Flags.emoji(k.skin.flag) + " " + k.name : k.name, 13, picked ? 0xff4a2600 : Ui.INK));
         n.setGravity(Gravity.CENTER);
         n.setSingleLine(true);
         n.setPadding(0, Ui.dp(this, 6), 0, 0);

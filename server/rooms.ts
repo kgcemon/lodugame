@@ -91,6 +91,7 @@ interface Seat {
   diceSkin: string;
   avatarUrl: string | null;
   frame: string | null;
+  country: string | null;
 }
 
 interface Room {
@@ -209,6 +210,7 @@ export class RoomManager {
         diceSkin: s.diceSkin,
         avatarUrl: s.avatarUrl,
         frame: s.frame,
+        country: s.country,
       })),
     };
   }
@@ -369,6 +371,7 @@ export class RoomManager {
       diceSkin: DEFAULT_DICE_SKIN,
       avatarUrl: u.avatarUrl,
       frame: null,
+      country: u.country,
     };
   }
 
@@ -585,6 +588,7 @@ export class RoomManager {
       diceSkin: DEFAULT_DICE_SKIN,
       avatarUrl: null,
       frame: null,
+      country: null,
     };
   }
 

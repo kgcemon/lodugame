@@ -171,7 +171,7 @@ final class PlayerProfile {
         head.addView(avf, new LinearLayout.LayoutParams(Ui.dp(a, av), Ui.dp(a, av)));
         LinearLayout who = Ui.vbox(a);
         who.setPadding(Ui.dp(a, 10), 0, Ui.dp(a, 6), 0);
-        TextView nm = Ui.bold(Ui.text(a, name, 17, Color.WHITE));
+        TextView nm = Ui.bold(Ui.text(a, (seat != null && !bot ? Flags.of(seat) + " " : "") + name, 17, Color.WHITE));
         nm.setSingleLine(true);
         nm.setEllipsize(TextUtils.TruncateAt.END);
         who.addView(nm);

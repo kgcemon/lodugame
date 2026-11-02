@@ -33,18 +33,33 @@ final class ProfileTab {
         head.setGravity(Gravity.CENTER_HORIZONTAL);
         TextView av = Ui.avatar(a, u, u.optString("username"), 84);
         head.addView(av);
-        TextView name = Ui.title(a, u.optString("fullName"));
+        TextView name = Ui.title(a, Flags.named(u, u.optString("fullName")));
         name.setGravity(Gravity.CENTER);
         name.setPadding(0, Ui.dp(a, 10), 0, 0);
         head.addView(name);
         TextView sub = Ui.muted(a, "@" + u.optString("username") + " · ID " + u.optString("publicId"));
         sub.setGravity(Gravity.CENTER);
         head.addView(sub);
-        TextView mail = Ui.muted(a, u.optString("email") + (u.optBoolean("emailVerified") ? " ✓" : " (not verified)"));
-        mail.setGravity(Gravity.CENTER);
-        head.addView(mail);
+        boolean guest = u.optBoolean("guest");
+        if (!guest) {
+            TextView mail = Ui.muted(a, u.optString("email") + (u.optBoolean("emailVerified") ? " ✓" : " (not verified)"));
+            mail.setGravity(Gravity.CENTER);
+            head.addView(mail);
+        }
         Ui.margins(head, a, 0, 4, 0, 12);
         col.addView(head);
+
+        if (guest) {
+            // A guest's progress lives only on this phone until they link Google.
+            LinearLayout save = Ui.card(a);
+            save.addView(Ui.bold(Ui.text(a, "👤 You're playing as a guest", 16, Ui.GOLD)));
+            save.addView(Ui.muted(a, "Link your Google account to keep your coins, diamonds, dice and friends safe, and to sign in on another phone."));
+            TextView linkBtn = Ui.button(a, "🔗 Link Google account", "primary",
+                    v -> a.startActivity(new android.content.Intent(a, AuthActivity.class).putExtra(AuthActivity.EXTRA_LINK, true)));
+            Ui.margins(linkBtn, a, 0, 12, 0, 0);
+            save.addView(linkBtn);
+            col.addView(save);
+        }
 
         LinearLayout links = Ui.card(a);
         links.addView(link("🪙  Wallet & transactions", () -> a.open(WalletActivity.class).onClick(null)));
@@ -119,7 +134,7 @@ final class ProfileTab {
 
         col.addView(Ui.heading(a, "Security"));
         LinearLayout sec = Ui.card(a);
-        if (!u.optBoolean("emailVerified")) {
+        if (!guest && !u.optBoolean("emailVerified")) {
             sec.addView(link("✉️  Resend verification email", () -> app.api.post("/auth/resend-verification", null, new Api.Cb(a) {
                 @Override
                 public void ok(JSONObject r) {
@@ -127,7 +142,15 @@ final class ProfileTab {
                 }
             })));
         }
-        sec.addView(link("🚪  Sign out", a::signOut));
+        sec.addView(link("🚪  Sign out", () -> {
+            if (!guest) {
+                a.signOut();
+                return;
+            }
+            Popup.message(a, "Sign out of the guest account?",
+                    "A guest account can't be opened again after signing out: its coins, diamonds and dice are lost. Link Google first to keep them.",
+                    Popup.plain("Cancel", null), Popup.danger("Sign out", a::signOut));
+        }));
         col.addView(sec);
 
         TextView server = Ui.muted(a, "LudoX " + com.ludo3d.game.BuildConfig.VERSION_NAME);

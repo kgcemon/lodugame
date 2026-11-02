@@ -3,6 +3,8 @@
  * owns the catalogue (prices are checked there); clients draw a die with these colours.
  * Colours are #rrggbb: `face` is the top of the face, `faceBottom` the bottom of its
  * gradient, `rim` the darker edge, `pip` the dots and `one` the single dot of the 1.
+ * A flag die (`flag`, an ISO country code) shows that country's flag on every face; its
+ * colours are the flag's main colours, for clients that draw plain dice.
  */
 export interface DiceSkin {
   id: string;
@@ -14,6 +16,8 @@ export interface DiceSkin {
   rim: string;
   pip: string;
   one: string;
+  /** Two-letter country whose flag covers the faces (flag dice only). */
+  flag?: string;
 }
 
 export const DEFAULT_DICE_SKIN = 'classic';
@@ -28,6 +32,14 @@ export const DICE_SKINS: DiceSkin[] = [
   { id: 'candy', name: 'Candy', price: 120, face: '#ffd6ef', faceBottom: '#ff7ac2', rim: '#b33c86', pip: '#7a1f5c', one: '#ffffff' },
   { id: 'neon', name: 'Neon', price: 150, face: '#1d2350', faceBottom: '#070a24', rim: '#39ffd6', pip: '#39ffd6', one: '#ff3df2' },
   { id: 'diamond', name: 'Diamond', price: 250, face: '#f2fdff', faceBottom: '#86e1ff', rim: '#2fb8ea', pip: '#0b4f8a', one: '#0b4f8a' },
+  // Country flags.
+  { id: 'flag_bd', name: 'Bangladesh', price: 60, flag: 'BD', face: '#0b8a5f', faceBottom: '#006a4e', rim: '#00412f', pip: '#ffffff', one: '#ffffff' },
+  { id: 'flag_in', name: 'India', price: 60, flag: 'IN', face: '#ffffff', faceBottom: '#f2f2f2', rim: '#138808', pip: '#ffffff', one: '#ffffff' },
+  { id: 'flag_pk', name: 'Pakistan', price: 60, flag: 'PK', face: '#0b6b3a', faceBottom: '#01411c', rim: '#012a12', pip: '#ffffff', one: '#ffffff' },
+  { id: 'flag_np', name: 'Nepal', price: 60, flag: 'NP', face: '#f04060', faceBottom: '#dc143c', rim: '#003893', pip: '#ffffff', one: '#ffffff' },
+  { id: 'flag_lk', name: 'Sri Lanka', price: 60, flag: 'LK', face: '#ffcf4a', faceBottom: '#ffbe29', rim: '#8d153a', pip: '#ffffff', one: '#ffffff' },
+  { id: 'flag_ae', name: 'UAE', price: 60, flag: 'AE', face: '#ffffff', faceBottom: '#e8e8e8', rim: '#00732f', pip: '#ffffff', one: '#ffffff' },
+  { id: 'flag_sa', name: 'Saudi Arabia', price: 60, flag: 'SA', face: '#1a8a4c', faceBottom: '#006c35', rim: '#00431f', pip: '#ffffff', one: '#ffffff' },
 ];
 
 export function diceSkin(id: string | null | undefined): DiceSkin | undefined {

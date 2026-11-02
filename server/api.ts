@@ -77,7 +77,7 @@ const statsCte = (season: string) => `
     group by mp.user_id
   ),
   ranked as (
-    select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, w.balance,
+    select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, p.country, w.balance,
            coalesce(s.matches, 0) as matches, coalesce(s.wins, 0) as wins,
            coalesce(s.season_wins, 0) * 3 + coalesce(s.season_matches, 0) as season_points,
            case when coalesce(s.matches, 0) = 0 then 0 else round(100.0 * s.wins / s.matches, 1) end as win_rate,
@@ -95,6 +95,7 @@ interface StatsRow {
   avatar_hue: number;
   avatar_url: string | null;
   frame: string | null;
+  country: string | null;
   balance: number;
   matches: number;
   wins: number;
@@ -117,8 +118,15 @@ async function statsFor(q: Queryable, userId: string) {
   };
 }
 
-function profileOut(r: { username: string; public_id: string; avatar_hue: number; avatar_url?: string | null; frame?: string | null }) {
-  return { username: r.username, publicId: r.public_id, avatarHue: r.avatar_hue, avatarUrl: r.avatar_url ?? null, frame: r.frame ?? null };
+function profileOut(r: { username: string; public_id: string; avatar_hue: number; avatar_url?: string | null; frame?: string | null; country?: string | null }) {
+  return {
+    username: r.username,
+    publicId: r.public_id,
+    avatarHue: r.avatar_hue,
+    avatarUrl: r.avatar_url ?? null,
+    frame: r.frame ?? null,
+    country: r.country ?? null,
+  };
 }
 
 export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
@@ -198,8 +206,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       if (q.length < 2 || q.length > 20) return { ok: true, players: [] };
       const me = req.user!.id;
       const rows = (
-        await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; friend: boolean; pending: string | null }>(
-          `select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame,
+        await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; country: string | null; friend: boolean; pending: string | null }>(
+          `select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, p.country,
                   exists (select 1 from friendships f where f.user_a = least($1::uuid, p.user_id) and f.user_b = greatest($1::uuid, p.user_id)) as friend,
                   (select case when fr.from_user = $1 then 'outgoing' else 'incoming' end from friend_requests fr
                     where fr.status = 'pending' and least(fr.from_user, fr.to_user) = least($1::uuid, p.user_id)
@@ -221,8 +229,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   r.get(
     '/players/:publicId',
     h(async (req) => {
-      const p = await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; created_at: string }>(
-        `select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, p.created_at from profiles p join users u on u.id = p.user_id
+      const p = await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; country: string | null; created_at: string }>(
+        `select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, p.country, p.created_at from profiles p join users u on u.id = p.user_id
          where p.public_id = $1 and u.suspended_at is null`,
         [String(req.params.publicId).toUpperCase()],
       );
@@ -520,8 +528,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
     h(async (req) => {
       const me = req.user!.id;
       const rows = (
-        await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; since: string }>(
-          `select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, f.created_at as since
+        await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; country: string | null; since: string }>(
+          `select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, p.country, f.created_at as since
            from friendships f join profiles p on p.user_id = case when f.user_a = $1 then f.user_b else f.user_a end
            where f.user_a = $1 or f.user_b = $1 order by p.username`,
           [me],
@@ -552,7 +560,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const me = req.user!.id;
       const rows = (
         await db.query<{ id: string; from_user: string; created_at: string; username: string; public_id: string; avatar_hue: number }>(
-          `select fr.id, fr.from_user, fr.created_at, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame
+          `select fr.id, fr.from_user, fr.created_at, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, p.country
            from friend_requests fr join profiles p on p.user_id = case when fr.from_user = $1 then fr.to_user else fr.from_user end
            where fr.status = 'pending' and (fr.from_user = $1 or fr.to_user = $1) order by fr.created_at desc`,
           [me],
@@ -757,7 +765,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const rows = (
         await db.query(
           `select u.id, u.email, u.role, u.suspended_at, u.suspended_reason, u.email_verified_at, u.created_at,
-                  p.full_name, p.username, p.public_id, p.avatar_url, p.avatar_hue, p.frame, w.balance, w.gems,
+                  p.full_name, p.username, p.public_id, p.avatar_url, p.avatar_hue, p.frame, p.country, w.balance, w.gems,
                   (select count(*)::int from match_players mp where mp.user_id = u.id) as matches
            from users u join profiles p on p.user_id = u.id join wallets w on w.user_id = u.id
            ${where} order by u.created_at desc limit $1 offset $2`,
