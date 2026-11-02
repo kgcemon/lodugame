@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Splash screen logo (288dp canvas; the art stays inside the central 192dp circle the
+     system keeps visible): the Ludo colours with a gold rim and the white die. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="288"
+    android:viewportHeight="288">
+    <!-- soft glow -->
+    <path android:fillColor="#26ffffff" android:pathData="M144,50a94,94 0 1,0 0.01,0z" />
+    <path android:fillColor="#e53945" android:pathData="M144,144 L84.6,84.6 A84,84 0 0,1 203.4,84.6 Z" />
+    <path android:fillColor="#22b46b" android:pathData="M144,144 L203.4,84.6 A84,84 0 0,1 203.4,203.4 Z" />
+    <path android:fillColor="#f6bf26" android:pathData="M144,144 L203.4,203.4 A84,84 0 0,1 84.6,203.4 Z" />
+    <path android:fillColor="#2f7cf0" android:pathData="M144,144 L84.6,203.4 A84,84 0 0,1 84.6,84.6 Z" />
+    <!-- gold rim -->
+    <path android:strokeColor="#ffc94a" android:strokeWidth="6" android:fillColor="#00000000"
+        android:pathData="M144,59a85,85 0 1,0 0.01,0z" />
+    <!-- die shadow, die with gold edge, pips -->
+    <path android:fillColor="#552a0b63" android:pathData="M115,103h66a16,16 0 0,1 16,16v66a16,16 0 0,1 -16,16h-66a16,16 0 0,1 -16,-16v-66a16,16 0 0,1 16,-16z" />
+    <path android:fillColor="#ffffff" android:strokeColor="#ffc94a" android:strokeWidth="3"
+        android:pathData="M112,96h64a16,16 0 0,1 16,16v64a16,16 0 0,1 -16,16h-64a16,16 0 0,1 -16,-16v-64a16,16 0 0,1 16,-16z" />
+    <path android:fillColor="#2a0b63" android:pathData="M121,121m-9,0a9,9 0 1,0 18,0a9,9 0 1,0 -18,0" />
+    <path android:fillColor="#2a0b63" android:pathData="M144,144m-9,0a9,9 0 1,0 18,0a9,9 0 1,0 -18,0" />
+    <path android:fillColor="#2a0b63" android:pathData="M167,167m-9,0a9,9 0 1,0 18,0a9,9 0 1,0 -18,0" />
+</vector>

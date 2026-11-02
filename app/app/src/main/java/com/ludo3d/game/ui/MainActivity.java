@@ -11,13 +11,18 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import androidx.core.splashscreen.SplashScreen;
+
+import com.ludo3d.game.LudoApp;
+
 import com.ludo3d.game.net.Api;
 
 import org.json.JSONObject;
 
 /**
  * Signed-in home with four tabs (Home, Friends, Ranks, Profile). On launch it restores
- * the session from the saved cookie, or sends the player to sign-in.
+ * the session from the saved cookie, or sends the player to sign-in — all while the splash
+ * screen is up, so the first thing after the logo is the finished home screen.
  */
 public class MainActivity extends BaseActivity {
     private FrameLayout content;
@@ -27,59 +32,94 @@ public class MainActivity extends BaseActivity {
     private LinearLayout nav;
     private int tab = 0;
     private boolean ready;
+    /** The splash screen stays up until the first real screen is ready (or the time limit). */
+    private boolean launched;
+    /** The longest the splash may hold the app before the loading spinner takes over. */
+    private static final long SPLASH_MAX_MS = 6000;
     PlayFlow play;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        SplashScreen splash = SplashScreen.installSplashScreen(this);
         super.onCreate(savedInstanceState);
+        splash.setKeepOnScreenCondition(() -> !launched);
+        splash.setOnExitAnimationListener(provider -> {
+            // The logo swells and fades as the home screen shows through.
+            View icon = provider.getIconView();
+            icon.animate().scaleX(1.35f).scaleY(1.35f).alpha(0f).setDuration(320)
+                    .setInterpolator(new android.view.animation.AccelerateInterpolator()).start();
+            provider.getView().animate().alpha(0f).setStartDelay(120).setDuration(300)
+                    .withEndAction(provider::remove).start();
+        });
+        LudoApp.MAIN.postDelayed(() -> launched = true, SPLASH_MAX_MS);
         play = new PlayFlow(this);
         root.addView(Ui.spinner(this), new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         loadSession();
     }
 
+    /** Session and config load side by side; the home screen is built once both are in. */
     private void loadSession() {
+        final JSONObject[] me = new JSONObject[1];
+        final JSONObject[] cfg = new JSONObject[1];
+        final boolean[] failed = {false};
+        Runnable both = () -> {
+            if (failed[0] || me[0] == null || cfg[0] == null) return;
+            app.config = cfg[0];
+            app.socket.connect();
+            ready = true;
+            buildShell();
+            loadConfig();
+            launched = true;
+        };
         app.api.get("/auth/me", new Api.Cb(this) {
             @Override
             public void ok(JSONObject r) {
+                if (failed[0]) return;
                 JSONObject user = r.optJSONObject("user");
                 if (user == null) {
+                    failed[0] = true;
                     toAuth();
                     return;
                 }
                 app.user = user;
                 app.mergeWallet(r.optJSONObject("wallet"));
                 app.requireEmailVerification = r.optBoolean("requireEmailVerification");
-                app.api.get("/config", new Api.Cb(MainActivity.this) {
-                    @Override
-                    public void ok(JSONObject c) {
-                        app.config = c;
-                        app.socket.connect();
-                        ready = true;
-                        buildShell();
-                        loadConfig();
-                    }
-
-                    @Override
-                    public void err(Api.Error e) {
-                        showRetry(e.message);
-                    }
-                });
+                me[0] = r;
+                both.run();
             }
 
             @Override
             public void err(Api.Error e) {
+                if (failed[0]) return;
+                failed[0] = true;
                 if (e.status == 401) toAuth();
                 else showRetry(e.message);
+            }
+        });
+        app.api.get("/config", new Api.Cb(this) {
+            @Override
+            public void ok(JSONObject c) {
+                cfg[0] = c;
+                both.run();
+            }
+
+            @Override
+            public void err(Api.Error e) {
+                if (failed[0]) return;
+                failed[0] = true;
+                showRetry(e.message);
             }
         });
     }
 
     private void toAuth() {
+        launched = true;
         startActivity(new Intent(this, AuthActivity.class));
         finish();
     }
 
     private void showRetry(String message) {
+        launched = true;
         root.removeAllViews();
         LinearLayout l = Ui.vbox(this);
         l.setGravity(Gravity.CENTER);

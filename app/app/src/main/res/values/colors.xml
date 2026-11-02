@@ -2,4 +2,6 @@
 <resources>
     <color name="bg">#0b0e2a</color>
     <color name="icon_bg">#141a4a</color>
+    <!-- The app's purple (between Fx.BG_TOP and BG_BOTTOM), so the splash flows into the home screen. -->
+    <color name="splash_bg">#4316a0</color>
 </resources>

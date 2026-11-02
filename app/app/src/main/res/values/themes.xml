@@ -13,6 +13,17 @@
         <item name="alertDialogTheme">@style/DialogTheme</item>
     </style>
 
+    <!-- Launch theme: the splash screen (AndroidX SplashScreen, same look on Android 7 to 16),
+         shown until MainActivity has the session and config, then AppTheme. -->
+    <style name="SplashTheme" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <item name="windowSplashScreenAnimationDuration">300</item>
+        <item name="postSplashScreenTheme">@style/AppTheme</item>
+        <item name="android:statusBarColor">@color/splash_bg</item>
+        <item name="android:navigationBarColor">@color/splash_bg</item>
+    </style>
+
     <style name="DialogTheme" parent="Theme.AppCompat.Dialog.Alert">
         <item name="colorAccent">#ffb547</item>
         <item name="android:background">#1a1f4a</item>
