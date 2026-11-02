@@ -459,6 +459,120 @@ public final class Fx {
         }
     }
 
+    /**
+     * Two smiling friends sitting behind a small Ludo board, with an invite bubble ("+")
+     * between them: the art for "play with friends".
+     */
+    public static class Friends extends View {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        public Friends(Context c) {
+            super(c);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            float w = getWidth(), h = getHeight();
+            float s = Math.min(w, h * 1.25f);
+            float cx = w / 2f;
+            float top = (h - s / 1.25f) / 2f;
+            // Friends first (the board sits in front of them).
+            friend(canvas, cx - s * 0.22f, top + s * 0.28f, s * 0.3f, 0xff2f7cf0, 0xff5b3417, false);
+            friend(canvas, cx + s * 0.22f, top + s * 0.28f, s * 0.3f, 0xffe53945, 0xff1b1f3b, true);
+            board(canvas, cx, top + s * 0.62f, s * 0.36f, s * 0.13f);
+            bubble(canvas, cx, top + s * 0.1f, s * 0.11f);
+        }
+
+        /** A friend: shoulders in a shirt colour, a round smiling face and hair. */
+        private void friend(Canvas c, float cx, float headY, float size, int shirt, int hair, boolean bow) {
+            float r = size * 0.36f;
+            int light = blend(shirt, Color.WHITE, 0.4f), dark = blend(shirt, Color.BLACK, 0.4f);
+            // Shoulders.
+            RectF body = new RectF(cx - size * 0.62f, headY + r * 0.75f, cx + size * 0.62f, headY + r * 0.75f + size * 1.1f);
+            p.setShader(new LinearGradient(body.left, 0, body.right, 0, new int[]{light, shirt, dark}, new float[]{0, 0.45f, 1}, Shader.TileMode.CLAMP));
+            c.drawRoundRect(body, size * 0.5f, size * 0.5f, p);
+            // Collar.
+            p.setShader(null);
+            p.setColor(0xffffffff);
+            Path v = new Path();
+            v.moveTo(cx - r * 0.5f, headY + r * 0.8f);
+            v.lineTo(cx, headY + r * 1.35f);
+            v.lineTo(cx + r * 0.5f, headY + r * 0.8f);
+            v.close();
+            c.drawPath(v, p);
+            // Face.
+            p.setShader(new RadialGradient(cx - r * 0.3f, headY - r * 0.35f, r * 1.4f, new int[]{0xffffe3c8, 0xfff5c08f, 0xffc98a55}, new float[]{0, 0.6f, 1}, Shader.TileMode.CLAMP));
+            c.drawCircle(cx, headY, r, p);
+            p.setShader(null);
+            // Hair: a cap over the top of the head.
+            p.setColor(hair);
+            c.drawArc(new RectF(cx - r * 1.04f, headY - r * 1.08f, cx + r * 1.04f, headY + r * 0.6f), 180, 180, true, p);
+            if (bow) {
+                p.setColor(0xffff4d9d);
+                c.drawCircle(cx + r * 0.75f, headY - r * 0.7f, r * 0.24f, p);
+                c.drawCircle(cx + r * 1.05f, headY - r * 0.55f, r * 0.24f, p);
+            }
+            // Eyes and a big smile.
+            p.setColor(0xff2b1a10);
+            c.drawCircle(cx - r * 0.33f, headY + r * 0.05f, r * 0.11f, p);
+            c.drawCircle(cx + r * 0.33f, headY + r * 0.05f, r * 0.11f, p);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(r * 0.12f);
+            p.setStrokeCap(Paint.Cap.ROUND);
+            c.drawArc(new RectF(cx - r * 0.42f, headY - r * 0.05f, cx + r * 0.42f, headY + r * 0.6f), 20, 140, false, p);
+            p.setStyle(Paint.Style.FILL);
+            // Rosy cheeks.
+            p.setColor(0x55ff6b6b);
+            c.drawCircle(cx - r * 0.6f, headY + r * 0.3f, r * 0.16f, p);
+            c.drawCircle(cx + r * 0.6f, headY + r * 0.3f, r * 0.16f, p);
+        }
+
+        /** The board between them, seen at an angle, with a die on it. */
+        private void board(Canvas c, float cx, float cy, float rx, float ry) {
+            float depth = ry * 0.35f;
+            p.setColor(0x55000000);
+            c.drawOval(new RectF(cx - rx, cy + ry * 0.4f, cx + rx, cy + ry + depth * 1.6f), p);
+            p.setShader(new LinearGradient(0, cy, 0, cy + ry + depth, 0xffffc94a, 0xffb36b00, Shader.TileMode.CLAMP));
+            c.drawPath(MiniBoard.diamond(cx, cy + depth, rx, ry), p);
+            p.setShader(null);
+            p.setColor(0xffffd969);
+            c.drawPath(MiniBoard.diamond(cx, cy, rx, ry), p);
+            float k = 0.84f;
+            int[] cols = {0xffe53945, 0xff22b46b, 0xfff6bf26, 0xff2f7cf0};
+            float[][] pts = {{cx, cy - ry * k}, {cx + rx * k, cy}, {cx, cy + ry * k}, {cx - rx * k, cy}};
+            for (int i = 0; i < 4; i++) {
+                Path q = new Path();
+                q.moveTo(cx, cy);
+                q.lineTo(pts[i][0], pts[i][1]);
+                q.lineTo(pts[(i + 1) % 4][0], pts[(i + 1) % 4][1]);
+                q.close();
+                p.setColor(cols[i]);
+                c.drawPath(q, p);
+            }
+            // A white die in the middle.
+            float d = ry * 0.42f;
+            p.setColor(0xffffffff);
+            c.drawRoundRect(new RectF(cx - d, cy - d * 1.1f, cx + d, cy + d * 0.9f), d * 0.35f, d * 0.35f, p);
+            p.setColor(0xff1b1f3b);
+            c.drawCircle(cx - d * 0.45f, cy - d * 0.55f, d * 0.18f, p);
+            c.drawCircle(cx, cy - d * 0.1f, d * 0.18f, p);
+            c.drawCircle(cx + d * 0.45f, cy + d * 0.35f, d * 0.18f, p);
+        }
+
+        /** A green "+" bubble: invite a friend. */
+        private void bubble(Canvas c, float cx, float cy, float r) {
+            p.setColor(0x55000000);
+            c.drawCircle(cx, cy + r * 0.15f, r * 1.05f, p);
+            p.setShader(new RadialGradient(cx - r * 0.3f, cy - r * 0.4f, r * 1.4f, new int[]{0xffb8ff8a, 0xff36a914, 0xff1f6d0a}, new float[]{0, 0.6f, 1}, Shader.TileMode.CLAMP));
+            c.drawCircle(cx, cy, r, p);
+            p.setShader(null);
+            p.setColor(0xffffffff);
+            float t = r * 0.22f, l = r * 0.58f;
+            c.drawRoundRect(new RectF(cx - l, cy - t, cx + l, cy + t), t, t, p);
+            c.drawRoundRect(new RectF(cx - t, cy - l, cx + t, cy + l), t, t, p);
+        }
+    }
+
     /** A small board seen from above at an angle: four coloured quarters on a gold rim. */
     public static class MiniBoard extends View {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);

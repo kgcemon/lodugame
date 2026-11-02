@@ -48,7 +48,7 @@ final class HomeTab {
         // Three smaller tiles.
         LinearLayout small = Ui.hbox(a);
         Ui.margins(small, a, 0, 14, 0, 0);
-        View board = new Fx.MiniBoard(a);
+        View board = new Fx.Friends(a);
         small.addView(artTile(Fx.ORANGE, "PLAY WITH\nFRIENDS", 0xff9c3410, board, v -> createRoom()), tileLp(1, 150, 0, 5));
         small.addView(artTile(Fx.BLUE, "JOIN\nROOM", 0xff0b5a9e, new Fx.Die(a), v -> joinRoom()), tileLp(1, 150, 5, 5));
         small.addView(artTile(Fx.YELLOW, "PLAY\nONLINE", 0xffa66f00, emoji("🌍", 44), v -> pickMode(0)), tileLp(1, 150, 5, 0));
@@ -157,10 +157,9 @@ final class HomeTab {
 
         LinearLayout left = Ui.vbox(a);
         left.addView(freeBonus());
-        left.addView(sideButton("🏆", "RANKS", v -> a.selectTab(2)));
+        left.addView(spinButton());
         hero.addView(left, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.START | Gravity.TOP));
         LinearLayout right = Ui.vbox(a);
-        right.addView(spinButton());
         right.addView(sideButton("❓", "RULES", v -> rules()));
         right.addView(sideButton("👥", "FRIENDS", v -> a.selectTab(1)));
         hero.addView(right, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END | Gravity.TOP));
