@@ -145,6 +145,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   app.use(securityHeaders(cfg));
   legalPages(app);
   app.get('/healthz', (_req, res) => res.json({ ok: true, db: db!.kind, rooms: rooms.roomCount }));
+  // Announcements may carry an uploaded picture; the parser below then sees a parsed body.
+  app.use('/api/admin/announcements', express.json({ limit: '3mb' }));
   app.use('/api', express.json({ limit: '16kb' }), csrfGuard(cfg), sessionMiddleware(ctx));
   app.use('/api/auth', authRouter(ctx));
   app.use('/api', apiRouter(ctx, () => rooms));

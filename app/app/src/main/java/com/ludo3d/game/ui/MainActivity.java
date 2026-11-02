@@ -37,6 +37,12 @@ public class MainActivity extends BaseActivity {
     /** The longest the splash may hold the app before the loading spinner takes over. */
     private static final long SPLASH_MAX_MS = 6000;
     PlayFlow play;
+    /** Today's daily spin from the server (available, prizes); null until loaded. */
+    JSONObject spinState;
+    /** A daily popup (spin or announcement) is loading or open. */
+    private boolean popupBusy;
+    /** This screen is on top (popups never open over another screen). */
+    private boolean foreground;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -77,6 +83,8 @@ public class MainActivity extends BaseActivity {
             buildShell();
             loadConfig();
             launched = true;
+            // Let the splash fade and the home screen settle before the popups fly in.
+            LudoApp.MAIN.postDelayed(this::dailyPopups, 700);
         };
         app.api.get("/auth/me", new Api.Cb(this) {
             @Override
@@ -303,6 +311,7 @@ public class MainActivity extends BaseActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        foreground = true;
         if (!ready) return;
         if (app.user == null) {
             toAuth();
@@ -313,6 +322,78 @@ public class MainActivity extends BaseActivity {
         loadConfig();
         refreshHeader();
         selectTab(tab);
+        dailyPopups();
+    }
+
+    /**
+     * On reaching home: the daily spin pops up by itself once a day (while it is still
+     * unspun), then the newest announcement from the administrators if this phone hasn't
+     * shown it yet.
+     */
+    void dailyPopups() {
+        if (popupBusy || !ready || isFinishing()) return;
+        popupBusy = true;
+        app.api.get("/daily-spin", new Api.Cb(this) {
+            @Override
+            public void ok(JSONObject r) {
+                JSONObject s = r.optJSONObject("spin");
+                boolean changed = spinState == null || s == null || spinState.optBoolean("available") != s.optBoolean("available");
+                spinState = s;
+                if (changed && tab == 0) selectTab(0);
+                if (s != null && s.optBoolean("available") && !DailySpin.shownToday() && foreground) {
+                    DailySpin.show(MainActivity.this, s, () -> {
+                        selectTab(tab);
+                        announcement();
+                    });
+                } else {
+                    announcement();
+                }
+            }
+
+            @Override
+            public void err(Api.Error e) {
+                announcement();
+            }
+        });
+    }
+
+    private void announcement() {
+        app.api.get("/announcements/current", new Api.Cb(this) {
+            @Override
+            public void ok(JSONObject r) {
+                JSONObject ann = r.optJSONObject("announcement");
+                if (ann != null && !Announcement.seen(ann) && foreground) {
+                    Announcement d = Announcement.create(MainActivity.this, ann);
+                    d.setOnDismissListener(x -> {
+                        popupBusy = false;
+                        selectTab(tab);
+                    });
+                    d.show();
+                } else {
+                    popupBusy = false;
+                }
+            }
+
+            @Override
+            public void err(Api.Error e) {
+                popupBusy = false;
+            }
+        });
+    }
+
+    /** Open the daily spin from the home screen's SPIN button. */
+    void openSpin() {
+        if (spinState == null || !spinState.optBoolean("available")) {
+            LudoApp.toast("You already spun today — come back tomorrow!");
+            return;
+        }
+        DailySpin.show(this, spinState, () -> selectTab(tab));
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        foreground = false;
     }
 
     void refreshWallet() {

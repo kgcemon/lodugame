@@ -160,6 +160,7 @@ final class HomeTab {
         left.addView(sideButton("🏆", "RANKS", v -> a.selectTab(2)));
         hero.addView(left, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.START | Gravity.TOP));
         LinearLayout right = Ui.vbox(a);
+        right.addView(spinButton());
         right.addView(sideButton("❓", "RULES", v -> rules()));
         right.addView(sideButton("👥", "FRIENDS", v -> a.selectTab(1)));
         hero.addView(right, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END | Gravity.TOP));
@@ -190,6 +191,25 @@ final class HomeTab {
             bounce.setRepeatCount(android.animation.ValueAnimator.INFINITE);
             bounce.setStartDelay(300);
             bounce.start();
+        }
+        Ui.margins(c, a, 0, 4, 0, 6);
+        return c;
+    }
+
+    /** The daily spin wheel: a spinning, bouncing gold badge while today's spin is unused. */
+    private View spinButton() {
+        boolean available = a.spinState != null && a.spinState.optBoolean("available");
+        LinearLayout c = Ui.vbox(a);
+        c.setGravity(Gravity.CENTER_HORIZONTAL);
+        Fx.Tile wheel = Fx.badge(a, "🎡", available ? Fx.YELLOW : Fx.PURPLE_DARK, 50, v -> a.openSpin());
+        c.addView(wheel, new LinearLayout.LayoutParams(Ui.dp(a, 50), Ui.dp(a, 54)));
+        c.addView(available ? new Fx.GoldText(a, "SPIN", 13) : Fx.GoldText.label(a, "DONE ✓", 10, 0xff3b0d8c));
+        if (available) {
+            android.animation.ObjectAnimator wiggle = android.animation.ObjectAnimator.ofFloat(wheel, "rotation", 0, -12, 12, -6, 0);
+            wiggle.setDuration(1000);
+            wiggle.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            wiggle.setStartDelay(500);
+            wiggle.start();
         }
         Ui.margins(c, a, 0, 4, 0, 6);
         return c;

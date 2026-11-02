@@ -12,6 +12,7 @@ import { buyItem, equipItem, shopState, type ShopKind } from './skins';
 import { DICE_SKINS } from '../shared/skins';
 import { PROFILE_FRAMES } from '../shared/frames';
 import { payoutPolicy } from './settings';
+import { spin, spinState } from './spin';
 import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type TxType } from './wallet';
 
 /** Player-facing and administrator REST API (everything under /api except auth). */
@@ -19,6 +20,35 @@ import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type T
 const PAGE = 20;
 const TX_TYPES: TxType[] = ['welcome_bonus', 'match_entry', 'match_reward', 'match_refund', 'daily_bonus', 'referral_reward', 'admin_adjustment'];
 const MIN_WINRATE_MATCHES = 5;
+/** Pictures an administrator may upload for an announcement (decoded size limit 2 MB). */
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+
+interface AnnouncementRow {
+  id: string;
+  title: string;
+  body: string;
+  image_url: string | null;
+  has_image: boolean | number;
+  button_text: string;
+  active: boolean | number;
+  created_at: string;
+}
+
+const ANNOUNCEMENT_COLS = 'id, title, body, image_url, image_data is not null as has_image, button_text, active, created_at';
+
+function announcementOut(a: AnnouncementRow) {
+  return {
+    id: a.id,
+    title: a.title,
+    body: a.body,
+    // An uploaded picture is served by the API; a link is shown as it is.
+    imageUrl: a.has_image ? `/api/announcements/${a.id}/image` : a.image_url,
+    buttonText: a.button_text,
+    active: !!a.active,
+    createdAt: a.created_at,
+  };
+}
 
 function page(q: unknown): { limit: number; offset: number; page: number } {
   const p = Math.min(1000, Math.max(1, Number.parseInt(String(q ?? '1'), 10) || 1));
@@ -121,6 +151,20 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
     }),
   );
 
+  /** An announcement's uploaded picture (public, so the app's image loader needs no cookie). */
+  r.get('/announcements/:id/image', async (req, res, next) => {
+    try {
+      const id = v.uuid(req.params.id, 'announcement');
+      const a = await db.query<{ image_type: string; image_data: string }>('select image_type, image_data from announcements where id = $1 and image_data is not null', [id]);
+      if (!a.rows.length) throw new HttpError(404, 'Picture not found');
+      res.setHeader('Content-Type', a.rows[0].image_type);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.send(Buffer.from(a.rows[0].image_data, 'base64'));
+    } catch (e) {
+      next(e);
+    }
+  });
+
   r.use(requireUser);
 
   // ---------------------------------------------------------------- profile & players
@@ -210,6 +254,30 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
       presence.emit(req.user!.id, 'wallet', wallet);
       return { ok: true, tx, wallet };
+    }),
+  );
+
+  // ---------------------------------------------------------------- daily spin & announcements
+
+  r.get('/daily-spin', h(async (req) => ({ ok: true, spin: await spinState(db, req.user!.id) })));
+
+  r.post(
+    '/daily-spin',
+    rateLimit(5, 60_000, (req) => req.user!.id),
+    h(async (req) => {
+      const result = await spin(db, req.user!.id);
+      const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
+      presence.emit(req.user!.id, 'wallet', wallet);
+      return { ok: true, ...result, spin: await spinState(db, req.user!.id), wallet };
+    }),
+  );
+
+  /** The newest active announcement (the app shows each one once). */
+  r.get(
+    '/announcements/current',
+    h(async () => {
+      const a = await db.query<AnnouncementRow>(`select ${ANNOUNCEMENT_COLS} from announcements where active = true order by created_at desc limit 1`);
+      return { ok: true, announcement: a.rows.length ? announcementOut(a.rows[0]) : null };
     }),
   );
 
@@ -904,6 +972,74 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         )
       ).rows.map((l) => ({ ...l, details: jsonValue(l.details) }));
       return { ok: true, page: pg.page, items: rows };
+    }),
+  );
+
+  admin.get(
+    '/announcements',
+    h(async () => {
+      const rows = (await db.query<AnnouncementRow>(`select ${ANNOUNCEMENT_COLS} from announcements order by created_at desc limit 50`)).rows;
+      return { ok: true, items: rows.map(announcementOut) };
+    }),
+  );
+
+  /** A new popup for every player: title, text, and a picture (uploaded as a data URL, or a link). */
+  admin.post(
+    '/announcements',
+    rateLimit(20, 60_000, (req) => req.user!.id),
+    h(async (req) => {
+      const b = req.body ?? {};
+      const title = v.str(b.title, 'Title', 1, 80);
+      const body = b.body == null || b.body === '' ? '' : v.str(b.body, 'Text', 0, 1000);
+      const buttonText = b.buttonText == null || b.buttonText === '' ? 'OK' : v.str(b.buttonText, 'Button text', 1, 30);
+      let imageUrl: string | null = null;
+      let imageType: string | null = null;
+      let imageData: string | null = null;
+      if (typeof b.image === 'string' && b.image) {
+        const m = /^data:([a-z/]+);base64,([A-Za-z0-9+/=]+)$/.exec(b.image);
+        if (!m || !IMAGE_TYPES.includes(m[1])) throw new HttpError(400, 'The picture must be a PNG, JPEG, WebP or GIF');
+        if (Buffer.byteLength(m[2], 'base64') > MAX_IMAGE_BYTES) throw new HttpError(400, 'The picture must be 2 MB or smaller');
+        imageType = m[1];
+        imageData = m[2];
+      } else if (typeof b.imageUrl === 'string' && b.imageUrl.trim()) {
+        imageUrl = v.str(b.imageUrl, 'Picture link', 10, 1000);
+        if (!/^https:\/\/\S+$/.test(imageUrl)) throw new HttpError(400, 'The picture link must start with https://');
+      }
+      if (!body && !imageUrl && !imageData) throw new HttpError(400, 'Add some text or a picture');
+      const id = randomUUID();
+      await db.tx(async (q) => {
+        await q.query(
+          `insert into announcements (id, title, body, image_url, image_type, image_data, button_text, active, created_by)
+           values ($1, $2, $3, $4, $5, $6, $7, true, $8)`,
+          [id, title, body, imageUrl, imageType, imageData, buttonText, req.user!.id],
+        );
+        await audit(q, req.user!.id, 'announcement.create', { id, title });
+      });
+      const a = await db.query<AnnouncementRow>(`select ${ANNOUNCEMENT_COLS} from announcements where id = $1`, [id]);
+      return { ok: true, announcement: announcementOut(a.rows[0]) };
+    }),
+  );
+
+  admin.post(
+    '/announcements/:id/active',
+    h(async (req) => {
+      const id = v.uuid(req.params.id, 'announcement');
+      const active = req.body?.active === true;
+      const u = await db.query('update announcements set active = $2 where id = $1', [id, active]);
+      if (!u.rowCount) throw new HttpError(404, 'Announcement not found');
+      await audit(db, req.user!.id, active ? 'announcement.show' : 'announcement.hide', { id });
+      return { ok: true };
+    }),
+  );
+
+  admin.delete(
+    '/announcements/:id',
+    h(async (req) => {
+      const id = v.uuid(req.params.id, 'announcement');
+      const d = await db.query('delete from announcements where id = $1', [id]);
+      if (!d.rowCount) throw new HttpError(404, 'Announcement not found');
+      await audit(db, req.user!.id, 'announcement.delete', { id });
+      return { ok: true };
     }),
   );
 

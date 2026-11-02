@@ -8,7 +8,7 @@ import { Card, Confirm, Empty, ErrorNote, PageTitle, Spinner, useFetch } from '.
 
 /** Administrator tools. Every endpoint re-checks the admin role on the server. */
 
-type Tab = 'overview' | 'users' | 'transactions' | 'matches' | 'disputes' | 'settings' | 'audit';
+type Tab = 'overview' | 'users' | 'transactions' | 'matches' | 'disputes' | 'popups' | 'settings' | 'audit';
 
 type Row = Record<string, string | number | boolean | null>;
 
@@ -403,6 +403,205 @@ function Disputes() {
   );
 }
 
+interface AnnouncementItem {
+  id: string;
+  title: string;
+  body: string;
+  imageUrl: string | null;
+  buttonText: string;
+  active: boolean;
+  createdAt: string;
+}
+
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+
+/** Read a picture as a data URL, shrinking big photos (wider than 1200 px or near 2 MB) to a JPEG. */
+async function pictureDataUrl(file: File): Promise<string> {
+  const raw = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error('Could not read the picture'));
+    r.readAsDataURL(file);
+  });
+  if (file.type === 'image/gif') {
+    if (file.size > MAX_IMAGE_BYTES) throw new Error('GIFs must be 2 MB or smaller');
+    return raw;
+  }
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error('That file is not a picture'));
+    i.src = raw;
+  });
+  if (img.naturalWidth <= 1200 && file.size <= MAX_IMAGE_BYTES * 0.9) return raw;
+  const scale = Math.min(1, 1200 / img.naturalWidth);
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.naturalWidth * scale);
+  c.height = Math.round(img.naturalHeight * scale);
+  c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.86);
+}
+
+/** How the popup looks in the app (purple card, gold title, green button). */
+function PopupPreview({ title, body, image, buttonText }: { title: string; body: string; image: string | null; buttonText: string }) {
+  return (
+    <div className="ann-preview" aria-label="Preview">
+      <div className="ann-card">
+        {image && <img src={image} alt="" />}
+        <div className="ann-text">
+          <h3>{title || 'Title'}</h3>
+          {body && <p>{body}</p>}
+          <span className="ann-btn">{(buttonText || 'OK').toUpperCase()}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Popups shown on the app's home screen: text, a picture, or both. Each shows once per phone. */
+function Popups() {
+  const list = useFetch(() => get<{ items: AnnouncementItem[] }>('/admin/announcements'), []);
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [buttonText, setButtonText] = useState('OK');
+  const [image, setImage] = useState<string | null>(null);
+  const [imageUrl, setImageUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [remove, setRemove] = useState<AnnouncementItem | null>(null);
+  /** Bumped to clear the file picker after publishing or removing the picture. */
+  const [fileKey, setFileKey] = useState(0);
+
+  const pick = async (file: File | undefined) => {
+    setError(null);
+    if (!file) return;
+    try {
+      setImage(await pictureDataUrl(file));
+      setImageUrl('');
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const publish = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await post('/admin/announcements', { title, body, buttonText, image: image ?? undefined, imageUrl: image ? undefined : imageUrl || undefined });
+      toast('Popup published: players see it the next time they open the app');
+      setTitle('');
+      setBody('');
+      setButtonText('OK');
+      setImage(null);
+      setImageUrl('');
+      setFileKey((k) => k + 1);
+      list.reload();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const setActive = async (a: AnnouncementItem, active: boolean) => {
+    try {
+      await post(`/admin/announcements/${a.id}/active`, { active });
+      toast(active ? 'Popup is live again' : 'Popup hidden');
+      list.reload();
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  };
+  const doRemove = async () => {
+    try {
+      await api('DELETE', `/admin/announcements/${remove!.id}`);
+      toast('Popup deleted');
+      setRemove(null);
+      list.reload();
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  };
+
+  return (
+    <>
+      <Card title="New popup">
+        <div className="ann-editor">
+          <div className="stack">
+            <label className="label">
+              Title
+              <input className="input" maxLength={80} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Weekend event!" />
+            </label>
+            <label className="label">
+              Text
+              <textarea className="input" rows={4} maxLength={1000} value={body} onChange={(e) => setBody(e.target.value)} placeholder="What players should know (optional with a picture)" />
+            </label>
+            <label className="label">
+              Picture (PNG, JPEG, WebP or GIF)
+              <input key={fileKey} className="input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(e) => pick(e.target.files?.[0])} />
+            </label>
+            {!image && (
+              <label className="label">
+                …or a picture link
+                <input className="input" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="https://…" />
+              </label>
+            )}
+            {image && (
+              <Button size="sm" variant="ghost" onClick={() => {
+                  setImage(null);
+                  setFileKey((k) => k + 1);
+                }}>
+                Remove picture
+              </Button>
+            )}
+            <label className="label">
+              Button text
+              <input className="input" maxLength={30} value={buttonText} onChange={(e) => setButtonText(e.target.value)} />
+            </label>
+            <ErrorNote error={error} />
+            <Button variant="primary" onClick={publish} disabled={busy || !title.trim() || (!body.trim() && !image && !imageUrl.trim())}>
+              {busy ? 'Publishing…' : 'Publish popup'}
+            </Button>
+            <p className="hint">The newest live popup opens once on every player's home screen, after the daily spin.</p>
+          </div>
+          <PopupPreview title={title} body={body} image={image ?? (imageUrl.startsWith('https://') ? imageUrl : null)} buttonText={buttonText} />
+        </div>
+      </Card>
+      <Card title="Published popups">
+        {list.loading && !list.data ? (
+          <Spinner />
+        ) : list.data?.items.length ? (
+          <ul className="dispute-list">
+            {list.data.items.map((a) => (
+              <li key={a.id} className="glass ann-row">
+                {a.imageUrl && <img src={a.imageUrl} alt="" className="ann-thumb" />}
+                <div>
+                  <b>{a.title}</b> <span className={`ann-status ${a.active ? 'live' : ''}`}>{a.active ? 'Live' : 'Hidden'}</span>
+                  {a.body && <p>{a.body}</p>}
+                  <small className="muted">{d(a.createdAt)}</small>
+                </div>
+                <div className="row gap-s">
+                  <Button size="sm" onClick={() => setActive(a, !a.active)}>
+                    {a.active ? 'Hide' : 'Show again'}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setRemove(a)}>
+                    Delete
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <Empty title="No popups yet" />
+        )}
+      </Card>
+      {remove && (
+        <Confirm title="Delete this popup?" confirmLabel="Delete" onConfirm={doRemove} onClose={() => setRemove(null)}>
+          <p>"{remove.title}" will be removed for everyone.</p>
+        </Confirm>
+      )}
+    </>
+  );
+}
+
 interface AdminSettings {
   welcomeBonus: number;
   dailyBonus: number;
@@ -568,6 +767,7 @@ export function AdminPage() {
             { value: 'transactions', label: 'Transactions' },
             { value: 'matches', label: 'Matches' },
             { value: 'disputes', label: 'Disputes' },
+            { value: 'popups', label: 'Popups' },
             { value: 'settings', label: 'Settings' },
             { value: 'audit', label: 'Audit log' },
           ]}
@@ -579,6 +779,7 @@ export function AdminPage() {
       {tab === 'transactions' && <Transactions />}
       {tab === 'matches' && <Matches />}
       {tab === 'disputes' && <Disputes />}
+      {tab === 'popups' && <Popups />}
       {tab === 'settings' && <SettingsTab />}
       {tab === 'audit' && <Audit />}
     </div>
