@@ -4,3 +4,9 @@ dist
 *.log
 .DS_Store
 data/
+
+# App signing keys and release builds: never in git.
+*.jks
+*.keystore
+appjks
+app/app/release/

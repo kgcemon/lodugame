@@ -129,6 +129,10 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
             case "friend:cancelled":
                 FriendPopups.cancelled((JSONObject) data);
                 break;
+            case "friend:online":
+                // Not over a running match's board, unless it's the best friend.
+                if (!(this instanceof GameActivity) || ((JSONObject) data).optBoolean("best")) OnlineToast.show(this, (JSONObject) data);
+                break;
             case "room:closed":
                 if (!(this instanceof GameActivity) && !(this instanceof RoomActivity)) LudoApp.toast(String.valueOf(data));
                 break;

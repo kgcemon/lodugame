@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "3D Ludo platform: accounts, coin wallet, paid matches, friends, chat — with a server-authoritative Socket.IO game.",
+  "description": "3D Ludo platform: accounts, coin wallet, paid matches, friends, chat \u2014 with a server-authoritative Socket.IO game.",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:client": "vite",
@@ -44,5 +44,8 @@
     "typescript": "5.6.3",
     "vite": "5.4.10",
     "vitest": "2.1.4"
+  },
+  "overrides": {
+    "ip-address": "10.7.4"
   }
 }

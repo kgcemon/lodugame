@@ -179,6 +179,7 @@ public final class GameSocket {
         s.on("friend:accepted", a -> fire("friend:accepted", obj(a)));
         s.on("friend:rejected", a -> fire("friend:rejected", obj(a)));
         s.on("friend:cancelled", a -> fire("friend:cancelled", obj(a)));
+        s.on("friend:online", a -> fire("friend:online", obj(a)));
         // A friend's voice: straight to the voice engine (it has its own threads).
         s.on("voice:frame", a -> {
             if (a.length >= 2 && a[1] instanceof byte[]) com.ludo3d.game.audio.VoiceChat.get().onPacket(String.valueOf(a[0]), (byte[]) a[1]);

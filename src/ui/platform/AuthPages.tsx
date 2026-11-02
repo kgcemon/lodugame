@@ -11,7 +11,7 @@ import { CoinIcon, ErrorNote, Field } from './kit';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 export function safeNext(v: string | null): string {
-  return v && /^\/(?![/\\])[^\s]*$/.test(v) ? v : '/';
+  return v && /^\/(?![/\\])[^\s\\]*$/.test(v) ? v : '/';
 }
 
 export function passwordIssue(pw: string): string | null {

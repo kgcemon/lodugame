@@ -14,6 +14,7 @@ import {
   csrfGuard,
   errorHandler,
   parseCookies,
+  requireAdmin,
   securityHeaders,
   SESSION_COOKIE,
   sessionMiddleware,
@@ -27,6 +28,10 @@ import { GoogleIdTokenVerifier, type GoogleVerifier } from './google';
 import { GooglePlayVerifier, type PlayVerifier } from './googleplay';
 import { Presence } from './presence';
 import { VoiceRelay } from './voice';
+import { announceOnline } from './online';
+
+/** Away at least this long before friends are told you came online. */
+const ONLINE_ALERT_AWAY_MS = 2 * 60_000;
 import { DEFAULT_TIMINGS, RoomManager, type ClientSocket, type Timings } from './rooms';
 import { HttpError } from './security';
 import { Settings } from './settings';
@@ -146,8 +151,9 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   app.use(securityHeaders(cfg));
   legalPages(app);
   app.get('/healthz', (_req, res) => res.json({ ok: true, db: db!.kind, rooms: rooms.roomCount }));
-  // Announcements may carry an uploaded picture; the parser below then sees a parsed body.
-  app.use('/api/admin/announcements', express.json({ limit: '3mb' }));
+  // Announcements may carry an uploaded picture: the big body is only read for a signed-in
+  // administrator (the parser below then sees it already parsed).
+  app.use('/api/admin/announcements', csrfGuard(cfg), sessionMiddleware(ctx), requireAdmin, express.json({ limit: '3mb' }));
   app.use('/api', express.json({ limit: '16kb' }), csrfGuard(cfg), sessionMiddleware(ctx));
   app.use('/api/auth', authRouter(ctx));
   app.use('/api', apiRouter(ctx, () => rooms));
@@ -197,7 +203,10 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   io.on('connection', (socket: ClientSocket) => {
     const user = socket.data.user!;
     socket.join(`user:${user.id}`);
+    const cameOnline = presence.comingOnline(user.id, ONLINE_ALERT_AWAY_MS);
     presence.connect(user.id, socket.id);
+    // Tell online friends (a live alert in their app).
+    if (cameOnline) announceOnline(db!, presence, user.id).catch((e: unknown) => console.error('[online] alert failed', e));
     socket.on('session:hello', handler(socket, () => ({ room: rooms.hello(socket) })));
     socket.on('room:create', handler(socket, async (p: { modeId: unknown; maxPlayers: unknown; teams?: unknown }) => ({ room: await rooms.create(socket, p.modeId, p.maxPlayers, p.teams) })));
     socket.on('room:join', handler(socket, async (p: { code: unknown }) => ({ room: await rooms.join(socket, p.code) })));

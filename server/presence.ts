@@ -10,6 +10,8 @@ export class Presence {
   private io: Server | null = null;
   private sockets = new Map<string, Set<string>>();
   private rooms = new Map<string, string>();
+  /** When each player last went fully offline (to skip "online" alerts for quick reconnects). */
+  private offlineAt = new Map<string, number>();
 
   attach(io: Server): void {
     this.io = io;
@@ -25,7 +27,21 @@ export class Presence {
     const s = this.sockets.get(userId);
     if (!s) return;
     s.delete(socketId);
-    if (!s.size) this.sockets.delete(userId);
+    if (!s.size) {
+      this.sockets.delete(userId);
+      this.offlineAt.set(userId, Date.now());
+      if (this.offlineAt.size > 50_000) this.offlineAt.clear();
+    }
+  }
+
+  /**
+   * Call before connect(): true when this socket brings the player online after being away
+   * for at least `awayMs` (a dropped connection that comes straight back doesn't count).
+   */
+  comingOnline(userId: string, awayMs: number): boolean {
+    if (this.sockets.has(userId)) return false;
+    const off = this.offlineAt.get(userId);
+    return off === undefined || Date.now() - off >= awayMs;
   }
 
   isOnline(userId: string): boolean {

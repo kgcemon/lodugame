@@ -153,7 +153,8 @@ export function authRouter(ctx: AppCtx): Router {
       if (b.confirmPassword !== b.password) throw new HttpError(400, 'Passwords do not match');
       const passwordHash = await v.hashPassword(password);
       const settings = ctx.settings.get();
-      const role = ctx.cfg.adminEmails.includes(email) ? 'admin' : 'player';
+      // An admin address is only trusted once verified (see adminNeedsVerifiedEmail).
+      const role = ctx.cfg.adminEmails.includes(email) && !ctx.cfg.adminNeedsVerifiedEmail ? 'admin' : 'player';
 
       let userId: string;
       try {
@@ -178,15 +179,15 @@ export function authRouter(ctx: AppCtx): Router {
       const b = req.body ?? {};
       const email = v.email(b.email);
       if (typeof b.password !== 'string' || !b.password) throw new HttpError(400, 'Password is required');
-      const u = await ctx.db.query<{ id: string; password_hash: string; suspended_at: string | null; suspended_reason: string | null; role: string }>(
-        'select id, password_hash, suspended_at, suspended_reason, role from users where lower(email) = $1',
+      const u = await ctx.db.query<{ id: string; password_hash: string; suspended_at: string | null; suspended_reason: string | null; role: string; email_verified_at: string | null }>(
+        'select id, password_hash, suspended_at, suspended_reason, role, email_verified_at from users where lower(email) = $1',
         [email],
       );
       const row = u.rows[0];
       const ok = await v.verifyPassword(b.password, row?.password_hash ?? (await v.dummyPasswordHash()));
       if (!row || !ok) throw new HttpError(401, 'Incorrect email or password');
       if (row.suspended_at) throw new HttpError(403, `This account is suspended${row.suspended_reason ? `: ${row.suspended_reason}` : ''}`);
-      if (ctx.cfg.adminEmails.includes(email) && row.role !== 'admin') {
+      if (ctx.cfg.adminEmails.includes(email) && row.role !== 'admin' && (row.email_verified_at || !ctx.cfg.adminNeedsVerifiedEmail)) {
         await ctx.db.query(`update users set role = 'admin', updated_at = now() where id = $1`, [row.id]);
       }
       await createSession(ctx, req, res, row.id, b.remember !== false);
@@ -283,7 +284,7 @@ export function authRouter(ctx: AppCtx): Router {
    */
   r.post(
     '/guest',
-    rateLimit(10, 60 * 60_000),
+    rateLimit(20, 60 * 60_000),
     h(async (req, res) => {
       const settings = ctx.settings.get();
       const userId = await ctx.db.tx((q) =>
@@ -329,6 +330,11 @@ export function authRouter(ctx: AppCtx): Router {
       await ctx.db.tx(async (q) => {
         const userId = await consumeToken(q, req.body?.token, 'verify_email');
         await q.query('update users set email_verified_at = coalesce(email_verified_at, now()), updated_at = now() where id = $1', [userId]);
+        // A verified admin address gets its admin role now.
+        const u = await q.query<{ email: string }>('select email from users where id = $1', [userId]);
+        if (u.rows.length && ctx.cfg.adminEmails.includes(u.rows[0].email.toLowerCase())) {
+          await q.query(`update users set role = 'admin', updated_at = now() where id = $1`, [userId]);
+        }
       });
       return { ok: true };
     }),

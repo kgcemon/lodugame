@@ -13,6 +13,11 @@ export interface ServerConfig {
   requireEmailVerification: boolean;
   /** Emails that become administrators when they register (or on next login). */
   adminEmails: string[];
+  /**
+   * An ADMIN_EMAILS address becomes admin only once that email is verified (Google, or the
+   * verification link), so nobody can claim it by registering first. On in production.
+   */
+  adminNeedsVerifiedEmail: boolean;
   mail: { mode: 'console' | 'resend' | 'memory'; from: string; resendApiKey?: string };
   staticDir?: string | null;
   /** Google Play: service account key (file path or JSON) and the app package name. */
@@ -44,6 +49,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     secureCookies: env.COOKIE_SECURE ? env.COOKIE_SECURE === 'true' : production,
     requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION === 'true',
     adminEmails: list(env.ADMIN_EMAILS).map((e) => e.toLowerCase()),
+    adminNeedsVerifiedEmail: env.ADMIN_NEEDS_VERIFIED_EMAIL ? env.ADMIN_NEEDS_VERIFIED_EMAIL === 'true' : production,
     mail: {
       mode: env.RESEND_API_KEY ? 'resend' : 'console',
       from: env.MAIL_FROM ?? 'Ludo 3D <no-reply@localhost>',

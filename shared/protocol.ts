@@ -152,6 +152,8 @@ export interface ServerToClientEvents {
   'friend:rejected': (r: { id: string; player: FriendCard }) => void;
   /** A request to you was withdrawn: close its popup. */
   'friend:cancelled': (r: { id: string }) => void;
+  /** A friend came online; `best`: the friend you play with most. */
+  'friend:online': (r: { player: FriendCard; played: number; best: boolean }) => void;
   /** A friend's voice packet, from their seat in your room. */
   'voice:frame': (seatId: string, data: ArrayBuffer | Uint8Array) => void;
 }

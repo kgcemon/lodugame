@@ -22,7 +22,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // A debug build may use a plain-http test server on your PC (npm run dev).
+            manifestPlaceholders = [cleartext: 'true']
+        }
         release {
+            // Players' builds talk to the server over HTTPS only.
+            manifestPlaceholders = [cleartext: 'false']
             // R8: strips unused code and resources and optimizes the rest (much smaller APK).
             minifyEnabled true
             shrinkResources true
