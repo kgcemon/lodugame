@@ -418,6 +418,21 @@ public class GameActivity extends BaseActivity {
     }
 
     /**
+     * The token to play when this roll leaves only one real choice (one token, or several on
+     * the same square); -1 when there is nothing to move or a real choice to make.
+     */
+    private int onlyMove() {
+        if (state == null || !"move".equals(state.phase)) return -1;
+        int[] t = state.currentPlayer().tokens;
+        int only = -1;
+        for (int k : state.movableTokens()) {
+            if (only < 0) only = k;
+            else if (t[k] != t[only]) return -1;
+        }
+        return only;
+    }
+
+    /**
      * Offline: only one real choice (one token, or several on the same square) is played by
      * itself once the roll has landed. Online the server does this, so it happens exactly once.
      */
@@ -426,13 +441,7 @@ public class GameActivity extends BaseActivity {
             autoSeq = -1;
             return;
         }
-        List<Integer> movable = state.movableTokens();
-        int[] t = state.currentPlayer().tokens;
-        int only = -1;
-        for (int k : movable) {
-            if (only < 0) only = k;
-            else if (t[k] != t[only]) return;
-        }
+        int only = onlyMove();
         if (only < 0) return;
         long now = android.os.SystemClock.uptimeMillis();
         if (autoSeq != state.seq) {
@@ -972,8 +981,9 @@ public class GameActivity extends BaseActivity {
             }
         }
         if (left >= 0) text += "  ⏱ " + left + "s";
-        // Warning beep in the last 3 seconds of my own turn.
-        if (online && isMyTurn(state) && left >= 1 && left <= 3) {
+        // Warning beep in the last 3 seconds of my own turn — not when the server is about
+        // to play my only possible move for me (nothing for me to hurry up and do).
+        if (online && isMyTurn(state) && left >= 1 && left <= 3 && onlyMove() < 0) {
             if (left != warnedAt) {
                 warnedAt = left;
                 Sfx.get().play(Sfx.S.WARNING);
