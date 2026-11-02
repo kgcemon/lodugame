@@ -291,8 +291,9 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         RollAnim(int player, int value) {
             this.player = player;
             this.value = value;
-            // The classic view's card die needs a little longer for its out-and-back throw.
-            dur = classic ? 950 : 700;
+            // Timed to the dice recording: its hits run from 0.3 s to 0.8 s, so the die
+            // comes down through them and lands just as the dice settle.
+            dur = 850;
         }
 
         @Override
@@ -300,7 +301,9 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             diceOwner = player;
             diceValue = value;
             diceYaw = rng.nextFloat() * 360f;
-            sfx(Sfx.S.DICE_SHAKE, 0.9f, 0.95f + rng.nextFloat() * 0.1f);
+            // Started with the throw itself (not on the tap), so sound and picture stay together
+            // however long the server takes; only a hint of pitch change keeps the timing.
+            sfx(Sfx.S.DICE_SHAKE, 0.9f, 0.98f + rng.nextFloat() * 0.04f);
             RollListener l = rollListener;
             if (l != null) l.onRoll(player, value, (long) dur);
         }

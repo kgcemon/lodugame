@@ -149,7 +149,7 @@ public final class Sfx {
     /** A second play of the same sound sooner than this is a duplicate trigger. */
     private static long minGapMs(S s) {
         switch (s) {
-            case DICE_SHAKE: return 1000;
+            case DICE_SHAKE: return 500;
             case CAPTURE: case HOME: case TURN: case EXTRA: return 150;
             case STEP: return 40;
             default: return 60;
