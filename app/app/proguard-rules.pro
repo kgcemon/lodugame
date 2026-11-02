@@ -12,6 +12,9 @@
 # Credential Manager finds its Play services provider by reflection.
 -if class androidx.credentials.CredentialManager
 -keep class androidx.credentials.playservices.** { *; }
+# Sign in with Google: options and credentials travel through Play services as named types.
+-keep class com.google.android.libraries.identity.googleid.** { *; }
+-keep class com.google.android.gms.auth.api.identity.** { *; }
 
 # Readable crash reports.
 -keepattributes SourceFile,LineNumberTable

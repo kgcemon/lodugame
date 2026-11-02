@@ -132,36 +132,45 @@ public class AuthActivity extends BaseActivity {
             return;
         }
         setBusy(true);
-        GetSignInWithGoogleOption google = new GetSignInWithGoogleOption.Builder(BuildConfig.GOOGLE_WEB_CLIENT_ID).build();
-        GetCredentialRequest request = new GetCredentialRequest.Builder().addCredentialOption(google).build();
-        CredentialManager.create(this).getCredentialAsync(this, request, new CancellationSignal(), ContextCompat.getMainExecutor(this),
-                new CredentialManagerCallback<GetCredentialResponse, GetCredentialException>() {
-                    @Override
-                    public void onResult(GetCredentialResponse response) {
-                        Credential c = response.getCredential();
-                        if (c instanceof CustomCredential && GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL.equals(c.getType())) {
+        // Google's side runs in Play services, which varies by phone: nothing in it may take the app down.
+        try {
+            GetSignInWithGoogleOption google = new GetSignInWithGoogleOption.Builder(BuildConfig.GOOGLE_WEB_CLIENT_ID).build();
+            GetCredentialRequest request = new GetCredentialRequest.Builder().addCredentialOption(google).build();
+            CredentialManager.create(this).getCredentialAsync(this, request, new CancellationSignal(), ContextCompat.getMainExecutor(this),
+                    new CredentialManagerCallback<GetCredentialResponse, GetCredentialException>() {
+                        @Override
+                        public void onResult(GetCredentialResponse response) {
+                            if (isFinishing() || isDestroyed()) return;
                             try {
-                                sendToServer(GoogleIdTokenCredential.createFrom(c.getData()).getIdToken());
-                                return;
-                            } catch (Exception e) {
+                                Credential c = response.getCredential();
+                                if (c instanceof CustomCredential && GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL.equals(c.getType())) {
+                                    sendToServer(GoogleIdTokenCredential.createFrom(c.getData()).getIdToken());
+                                    return;
+                                }
+                            } catch (Throwable e) {
                                 android.util.Log.w("Auth", "bad Google credential", e);
                             }
+                            setBusy(false);
+                            alert("Couldn't sign in", "Google didn't return an account. Please try again.");
                         }
-                        setBusy(false);
-                        alert("Couldn't sign in", "Google didn't return an account. Please try again.");
-                    }
 
-                    @Override
-                    public void onError(GetCredentialException e) {
-                        setBusy(false);
-                        // Closing the account picker is not an error.
-                        if (e instanceof GetCredentialCancellationException) return;
-                        android.util.Log.w("Auth", "Google sign-in failed", e);
-                        alert("Couldn't sign in", e instanceof NoCredentialException
-                                ? "Add a Google account to this phone (Settings → Accounts), then try again."
-                                : "Google sign-in didn't work. Check your connection and try again.");
-                    }
-                });
+                        @Override
+                        public void onError(GetCredentialException e) {
+                            if (isFinishing() || isDestroyed()) return;
+                            setBusy(false);
+                            // Closing the account picker is not an error.
+                            if (e instanceof GetCredentialCancellationException) return;
+                            android.util.Log.w("Auth", "Google sign-in failed", e);
+                            alert("Couldn't sign in", e instanceof NoCredentialException
+                                    ? "Add a Google account to this phone (Settings → Accounts), then try again."
+                                    : "Google sign-in didn't work. Check your connection and try again.");
+                        }
+                    });
+        } catch (Throwable e) {
+            android.util.Log.w("Auth", "Google sign-in couldn't start", e);
+            setBusy(false);
+            alert("Couldn't sign in", "Google sign-in isn't available on this phone. Update Google Play services and try again.");
+        }
     }
 
     private void sendToServer(String idToken) {

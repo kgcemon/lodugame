@@ -44,10 +44,17 @@ public class MainActivity extends BaseActivity {
         super.onCreate(savedInstanceState);
         splash.setKeepOnScreenCondition(() -> !launched);
         splash.setOnExitAnimationListener(provider -> {
-            // The logo swells and fades as the home screen shows through.
-            View icon = provider.getIconView();
-            icon.animate().scaleX(1.35f).scaleY(1.35f).alpha(0f).setDuration(320)
-                    .setInterpolator(new android.view.animation.AccelerateInterpolator()).start();
+            // The logo swells and fades as the home screen shows through. A splash shown when
+            // another screen opens this one (after sign-in) has no icon: Android 12/13 then throws.
+            View icon = null;
+            try {
+                icon = provider.getIconView();
+            } catch (RuntimeException ignored) {
+            }
+            if (icon != null) {
+                icon.animate().scaleX(1.35f).scaleY(1.35f).alpha(0f).setDuration(320)
+                        .setInterpolator(new android.view.animation.AccelerateInterpolator()).start();
+            }
             provider.getView().animate().alpha(0f).setStartDelay(120).setDuration(300)
                     .withEndAction(provider::remove).start();
         });
@@ -364,15 +371,19 @@ public class MainActivity extends BaseActivity {
     }
 
     private void finishSignOut() {
-        androidx.credentials.CredentialManager.create(this).clearCredentialStateAsync(new androidx.credentials.ClearCredentialStateRequest(),
-                null, androidx.core.content.ContextCompat.getMainExecutor(this),
-                new androidx.credentials.CredentialManagerCallback<Void, androidx.credentials.exceptions.ClearCredentialException>() {
-                    @Override
-                    public void onResult(Void v) {}
+        try {
+            androidx.credentials.CredentialManager.create(this).clearCredentialStateAsync(new androidx.credentials.ClearCredentialStateRequest(),
+                    null, androidx.core.content.ContextCompat.getMainExecutor(this),
+                    new androidx.credentials.CredentialManagerCallback<Void, androidx.credentials.exceptions.ClearCredentialException>() {
+                        @Override
+                        public void onResult(Void v) {}
 
-                    @Override
-                    public void onError(androidx.credentials.exceptions.ClearCredentialException e) {}
-                });
+                        @Override
+                        public void onError(androidx.credentials.exceptions.ClearCredentialException e) {}
+                    });
+        } catch (Throwable e) {
+            android.util.Log.w("Auth", "couldn't clear Google sign-in", e);
+        }
         app.socket.disconnect();
         app.cookies.clear();
         app.user = null;
