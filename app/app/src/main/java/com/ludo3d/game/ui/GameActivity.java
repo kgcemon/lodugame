@@ -101,11 +101,15 @@ public class GameActivity extends BaseActivity {
     /** 2 vs 2: chat goes to my partner only while this is on. */
     private boolean teamChat;
     private TextView chatAllBtn, chatTeamBtn, chatTitle;
+    /** Auto-move: the update it is waiting on, and when the board settled for it. */
+    private int autoSeq = -1;
+    private long autoReadyAt;
 
     private final Runnable ticker = new Runnable() {
         @Override
         public void run() {
             renderStatus();
+            maybeAutoMove();
             LudoApp.MAIN.postDelayed(this, 250);
         }
     };
@@ -402,6 +406,37 @@ public class GameActivity extends BaseActivity {
         int player = state.current, token = best;
         onGl(() -> renderer.setSelected(player, token));
         gl.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+        move(token);
+    }
+
+    /**
+     * Only one real choice (one token, or several on the same square): play it for me once
+     * the roll has landed. Online, if I could still re-roll, wait a little longer first.
+     */
+    private void maybeAutoMove() {
+        if (state == null || busy || !isMyTurn(state) || !"move".equals(state.phase) || !renderer.isIdle()) {
+            autoSeq = -1;
+            return;
+        }
+        List<Integer> movable = state.movableTokens();
+        int[] t = state.currentPlayer().tokens;
+        int only = -1;
+        for (int k : movable) {
+            if (only < 0) only = k;
+            else if (t[k] != t[only]) return;
+        }
+        if (only < 0) return;
+        long now = android.os.SystemClock.uptimeMillis();
+        if (autoSeq != state.seq) {
+            autoSeq = state.seq;
+            autoReadyAt = now;
+            return;
+        }
+        long wait = local == null && canReroll() ? 2000 : 450;
+        if (now - autoReadyAt < wait) return;
+        autoSeq = -1;
+        int player = state.current, token = only;
+        onGl(() -> renderer.setSelected(player, token));
         move(token);
     }
 

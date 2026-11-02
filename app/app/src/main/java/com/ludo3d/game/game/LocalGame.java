@@ -95,13 +95,21 @@ public final class LocalGame {
         if (to < 0) return null;
         JSONArray events = new JSONArray();
 
-        // Opponents on the landing square go home, unless it is a safe square.
+        // A lone opponent token on the landing square goes home, unless it is a safe square.
+        // Two or more of one player's tokens there make a pair (jora) that can't be captured.
         List<int[]> victims = new ArrayList<>();
         int at = to < Board.HOME_START ? Board.absIndex(ci(pi), to) : -1;
         if (at >= 0 && !Board.isSafe(at)) {
             for (int oi = 0; oi < colors.length; oi++) {
                 if (oi == pi) continue;
-                for (int k = 0; k < 4; k++) if (Board.absIndex(ci(oi), tokens[oi][k]) == at) victims.add(new int[]{oi, k});
+                int found = -1, count = 0;
+                for (int k = 0; k < 4; k++) {
+                    if (Board.absIndex(ci(oi), tokens[oi][k]) == at) {
+                        found = k;
+                        count++;
+                    }
+                }
+                if (count == 1) victims.add(new int[]{oi, found});
             }
         }
         tokens[pi][ti] = to;

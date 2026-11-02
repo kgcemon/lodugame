@@ -101,12 +101,27 @@ describe('rules engine', () => {
     expect(r.state.current).toBe(0);
   });
 
-  it('captures every opposing token on the square', () => {
+  it('cannot capture a pair (jora) with a single token: they share the square', () => {
     const s = game();
     withTokens(s, 0, [12, -1, -1, -1]);
     withTokens(s, 1, [2, 2, -1, -1]);
     const r = applyAction(roll(s, 3).state, { type: 'move', token: 0 });
-    expect(r.state.players[1].tokens).toEqual([-1, -1, -1, -1]);
+    expect(r.state.players[1].tokens).toEqual([2, 2, -1, -1]);
+    expect(r.state.players[0].tokens[0]).toBe(15);
+    expect(r.events.some((e) => e.type === 'captured')).toBe(false);
+    expect(r.state.current).toBe(1);
+  });
+
+  it('captures a lone token even when another player has a pair on the square', () => {
+    const s = game();
+    withTokens(s, 0, [12, -1, -1, -1]);
+    withTokens(s, 1, [2, 2, -1, -1]);
+    // yellow progress 41 => absolute 15 as well.
+    expect(absIndex('yellow', 41)).toBe(absIndex('red', 15));
+    withTokens(s, 2, [41, -1, -1, -1]);
+    const r = applyAction(roll(s, 3).state, { type: 'move', token: 0 });
+    expect(r.state.players[1].tokens).toEqual([2, 2, -1, -1]);
+    expect(r.state.players[2].tokens[0]).toBe(-1);
   });
 
   it('does not capture on safe squares', () => {

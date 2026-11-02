@@ -121,9 +121,13 @@ export function captureVictims(
   const victims: { player: number; token: number }[] = [];
   state.players.forEach((op, oi) => {
     if (oi === playerIdx || areTeammates(state, playerIdx, oi)) return;
+    const here: number[] = [];
     op.tokens.forEach((prog, ti) => {
-      if (absIndex(op.color, prog) === at) victims.push({ player: oi, token: ti });
+      if (absIndex(op.color, prog) === at) here.push(ti);
     });
+    // Two or more of one player's tokens on a square make a pair (jora): a single token
+    // can't capture it, and simply shares the square.
+    if (here.length === 1) victims.push({ player: oi, token: here[0] });
   });
   return victims;
 }
