@@ -18,6 +18,8 @@ export interface SeatView {
   isHost: boolean;
   /** 2 vs 2 team (0 = red + yellow, 1 = green + blue); null outside team rooms. */
   team: 0 | 1 | null;
+  /** The dice skin this player shows (shared/skins.ts). */
+  diceSkin: string;
 }
 
 export interface RoomView {

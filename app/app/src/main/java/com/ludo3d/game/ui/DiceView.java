@@ -17,6 +17,9 @@ import android.view.animation.LinearInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.util.Random;
 
 /**
@@ -33,6 +36,8 @@ final class DiceView extends View {
     /** The pointer sits on the side facing the avatar. */
     private final boolean pointLeft;
 
+    /** The look of this player's die (bought in the dice shop). */
+    private Skin skin = Skin.CLASSIC;
     /** Face shown (the last roll; 1 before anyone has rolled). */
     private int value = 1;
     /** Current player's box: bright gold rim and a white die; otherwise dimmed. */
@@ -52,6 +57,11 @@ final class DiceView extends View {
         super(c);
         this.pointLeft = pointLeft;
         setLayerType(LAYER_TYPE_SOFTWARE, null);
+    }
+
+    void setSkin(Skin skin) {
+        this.skin = skin != null ? skin : Skin.CLASSIC;
+        invalidate();
     }
 
     void set(int value, boolean active, boolean ready) {
@@ -113,7 +123,7 @@ final class DiceView extends View {
         float cx = loc[0] - oloc[0] + boxLeft() + box / 2f;
         float cy = loc[1] - oloc[1] + getHeight() / 2f;
 
-        Die d = new Die(getContext(), result, rng);
+        Die d = new Die(getContext(), result, rng, skin);
         // Placed with margins: translation and scale belong to the throw.
         FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams((int) size, (int) size);
         dlp.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
@@ -337,7 +347,7 @@ final class DiceView extends View {
 
         if (out) return;
         float d = box * 0.64f;
-        drawDie(canvas, paint, path, x0 + (box - d) / 2f, y0 + (box - d) / 2f - box * 0.02f, d, value, active || ready);
+        drawDie(canvas, paint, path, x0 + (box - d) / 2f, y0 + (box - d) / 2f - box * 0.02f, d, value, active || ready, skin);
     }
 
     private static final float[] AT = {0.27f, 0.5f, 0.73f};
@@ -357,6 +367,10 @@ final class DiceView extends View {
      * pips. Its outline matches the last frame of the 3D throw, so the landing is seamless.
      */
     static void drawDie(Canvas canvas, Paint paint, Path path, float x, float y, float s, int value, boolean lit) {
+        drawDie(canvas, paint, path, x, y, s, value, lit, Skin.CLASSIC);
+    }
+
+    static void drawDie(Canvas canvas, Paint paint, Path path, float x, float y, float s, int value, boolean lit, Skin skin) {
         float r = s * 0.22f;
         paint.setShader(null);
         paint.setStyle(Paint.Style.FILL);
@@ -364,9 +378,9 @@ final class DiceView extends View {
         paint.setColor(0x40000000);
         canvas.drawRoundRect(x + s * 0.03f, y + s * 0.07f, x + s * 1.03f, y + s * 1.07f, r, r, paint);
         // Rim, then the face.
-        int top = lit ? 0xffffffff : 0xffd9d6e4;
-        int bottom = lit ? 0xffe4e1ee : 0xffaaa6bb;
-        paint.setColor(lit ? 0xffc9c5d8 : 0xff8f8aa3);
+        int top = skin.shade(skin.face, lit);
+        int bottom = skin.shade(skin.faceBottom, lit);
+        paint.setColor(skin.shade(skin.rim, lit));
         canvas.drawRoundRect(x, y, x + s, y + s, r, r, paint);
         float in = s * 0.035f;
         paint.setShader(new LinearGradient(0, y, 0, y + s, top, bottom, Shader.TileMode.CLAMP));
@@ -377,12 +391,12 @@ final class DiceView extends View {
         canvas.drawRoundRect(x + s * 0.12f, y + s * 0.08f, x + s * 0.88f, y + s * 0.4f, r * 0.6f, r * 0.6f, paint);
         if (value < 1 || value > 6) return;
         float pr = s * (value == 1 ? 0.12f : 0.088f);
-        int pip = lit ? 0xff23202e : 0xff57536a;
+        int pip = skin.shade(skin.pip, lit);
         for (int[] p : FACE_PIPS[value]) {
             float cx = x + s * AT[p[0]], cy = y + s * AT[p[1]];
             paint.setColor(0x55ffffff);
             canvas.drawCircle(cx, cy + pr * 0.28f, pr, paint);
-            paint.setColor(value == 1 && lit ? 0xffd62839 : pip);
+            paint.setColor(value == 1 ? skin.shade(skin.one, lit) : pip);
             canvas.drawCircle(cx, cy, pr, paint);
         }
     }
@@ -427,7 +441,7 @@ final class DiceView extends View {
             }
         }
 
-        static void draw(Canvas c, Paint paint, Path path, float cx, float cy, float half, float[] m, boolean lit) {
+        static void draw(Canvas c, Paint paint, Path path, float cx, float cy, float half, float[] m, boolean lit, Skin skin) {
             float persp = 9f;
             // Order the visible faces far to near.
             int[] order = new int[6];
@@ -450,8 +464,8 @@ final class DiceView extends View {
                     order[j - 1] = to;
                 }
             }
-            int base = lit ? 0xfffdfcff : 0xffbdb9cc;
-            int pipColor = lit ? 0xff1f1c2b : 0xff4a4658;
+            int base = skin.shade(skin.face, lit);
+            int pipColor = skin.shade(skin.pip, lit);
             float[] p = new float[2];
             for (int k = 0; k < count; k++) {
                 int f = order[k];
@@ -490,7 +504,7 @@ final class DiceView extends View {
                         else path.lineTo(p[0], p[1]);
                     }
                     path.close();
-                    paint.setColor(value == 1 && lit ? 0xffd62839 : pipColor);
+                    paint.setColor(value == 1 ? skin.shade(skin.one, lit) : pipColor);
                     c.drawPath(path, paint);
                 }
             }
@@ -560,11 +574,13 @@ final class DiceView extends View {
         private final float[] axis;
         private final float turns;
         private final int result;
+        private final Skin skin;
         private float[] m;
         private float t;
 
-        Die(Context c, int result, Random rng) {
+        Die(Context c, int result, Random rng, Skin skin) {
             super(c);
+            this.skin = skin;
             setLayerType(LAYER_TYPE_SOFTWARE, null);
             setElevation(40);
             this.result = result;
@@ -589,10 +605,72 @@ final class DiceView extends View {
             if (t > 0.95f) {
                 // Settled: the same face-on die the box shows, so the hand-over is invisible.
                 float d = s * 0.64f;
-                drawDie(canvas, paint, path, (getWidth() - d) / 2f, (getHeight() - d) / 2f, d, result, true);
+                drawDie(canvas, paint, path, (getWidth() - d) / 2f, (getHeight() - d) / 2f, d, result, true, skin);
                 return;
             }
-            Cube.draw(canvas, paint, path, getWidth() / 2f, getHeight() / 2f, s * 0.3f, m, true);
+            Cube.draw(canvas, paint, path, getWidth() / 2f, getHeight() / 2f, s * 0.3f, m, true, skin);
+        }
+    }
+
+    /**
+     * A dice skin's colours (shared/skins.ts, sent in /config as diceSkins): face gradient,
+     * rim, pips and the single pip of the 1. Unlit dice (not this player's turn) are dimmed.
+     */
+    static final class Skin {
+        static final Skin CLASSIC = new Skin("classic", "Classic", 0, 0xffffffff, 0xffe4e1ee, 0xffc9c5d8, 0xff23202e, 0xffd62839);
+        private static final java.util.Map<String, Skin> CACHE = new java.util.HashMap<>();
+
+        final String id, name;
+        final int price, face, faceBottom, rim, pip, one;
+
+        Skin(String id, String name, int price, int face, int faceBottom, int rim, int pip, int one) {
+            this.id = id;
+            this.name = name;
+            this.price = price;
+            this.face = face;
+            this.faceBottom = faceBottom;
+            this.rim = rim;
+            this.pip = pip;
+            this.one = one;
+        }
+
+        int shade(int color, boolean lit) {
+            return lit ? color : Fx.blend(color, 0xff5f5b75, 0.4f);
+        }
+
+        static Skin from(JSONObject o) {
+            try {
+                return new Skin(o.getString("id"), o.optString("name", o.getString("id")), o.optInt("price"),
+                        Color.parseColor(o.getString("face")), Color.parseColor(o.getString("faceBottom")),
+                        Color.parseColor(o.getString("rim")), Color.parseColor(o.getString("pip")), Color.parseColor(o.getString("one")));
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        /** Every skin the server sells, in catalogue order. */
+        static java.util.List<Skin> all() {
+            java.util.List<Skin> out = new java.util.ArrayList<>();
+            JSONObject cfg = com.ludo3d.game.LudoApp.get().config;
+            JSONArray arr = cfg != null ? cfg.optJSONArray("diceSkins") : null;
+            for (int i = 0; arr != null && i < arr.length(); i++) {
+                Skin k = from(arr.optJSONObject(i) != null ? arr.optJSONObject(i) : new JSONObject());
+                if (k != null) out.add(k);
+            }
+            if (out.isEmpty()) out.add(CLASSIC);
+            return out;
+        }
+
+        /** The skin with this id, or the classic one for unknown ids (an older catalogue). */
+        static Skin byId(String id) {
+            if (id == null || id.isEmpty() || CLASSIC.id.equals(id)) return CLASSIC;
+            synchronized (CACHE) {
+                Skin k = CACHE.get(id);
+                if (k != null) return k;
+                for (Skin x : all()) CACHE.put(x.id, x);
+                k = CACHE.get(id);
+                return k != null ? k : CLASSIC;
+            }
         }
     }
 

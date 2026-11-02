@@ -9,7 +9,7 @@ import { HttpError } from './security';
  * and writes the ledger row. Retrying with the same key never moves gems twice.
  */
 
-export type GemTxType = 'purchase' | 'reroll' | 'reroll_refund' | 'admin_adjustment';
+export type GemTxType = 'purchase' | 'reroll' | 'reroll_refund' | 'admin_adjustment' | 'skin_purchase';
 
 /** Re-roll prices within one match: the first costs 5, then 15, then 45. */
 export const REROLL_COSTS = [5, 15, 45];

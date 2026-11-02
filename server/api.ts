@@ -8,6 +8,8 @@ import type { RoomManager } from './rooms';
 import * as v from './security';
 import { HttpError } from './security';
 import { GEM_PACKS, REROLL_COSTS, applyGemTx } from './gems';
+import { buySkin, equipSkin, skinState } from './skins';
+import { DICE_SKINS } from '../shared/skins';
 import { payoutPolicy } from './settings';
 import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type TxType } from './wallet';
 
@@ -107,6 +109,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         gemPacks: GEM_PACKS,
         rerollCosts: REROLL_COSTS,
         purchasesEnabled: !!ctx.play,
+        diceSkins: DICE_SKINS,
       };
     }),
   );
@@ -200,6 +203,33 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
       presence.emit(req.user!.id, 'wallet', wallet);
       return { ok: true, tx, wallet };
+    }),
+  );
+
+  // ---------------------------------------------------------------- dice skins (diamonds)
+
+  r.get('/skins', h(async (req) => ({ ok: true, skins: DICE_SKINS, ...(await skinState(db, req.user!.id)) })));
+
+  /** Buy (once) and put on a dice skin; the price comes from the server's catalogue. */
+  r.post(
+    '/skins/:id/buy',
+    rateLimit(20, 60_000, (req) => req.user!.id),
+    h(async (req) => {
+      const state = await buySkin(db, req.user!.id, String(req.params.id));
+      const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
+      presence.emit(req.user!.id, 'wallet', wallet);
+      rooms().setDiceSkin(req.user!.id, state.equipped);
+      return { ok: true, ...state, wallet };
+    }),
+  );
+
+  r.post(
+    '/skins/:id/equip',
+    rateLimit(60, 60_000, (req) => req.user!.id),
+    h(async (req) => {
+      const state = await equipSkin(db, req.user!.id, String(req.params.id));
+      rooms().setDiceSkin(req.user!.id, state.equipped);
+      return { ok: true, ...state };
     }),
   );
 

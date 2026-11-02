@@ -534,12 +534,9 @@ public class GameActivity extends BaseActivity {
         }
         busy = true;
         renderStatus();
-        // The rattle starts on the tap; the server's roll (moments later) doesn't start it again.
-        Sfx.get().play(Sfx.S.DICE_SHAKE, 0.9f, 1f);
         app.socket.emit("game:roll", PlayFlow.obj("seq", state.seq), res -> {
             busy = false;
             if (!res.optBoolean("ok")) {
-                Sfx.get().stop(Sfx.S.DICE_SHAKE);
                 Sfx.get().play(Sfx.S.ERROR);
                 LudoApp.toast(res.optString("error", "Can't roll now"));
             }
@@ -884,6 +881,8 @@ public class GameActivity extends BaseActivity {
         boolean rollReady = mine && canRollNow();
         DiceView dice = new DiceView(this, !right);
         dice.setTag("dice:" + p.color);
+        // Each player's own dice skin (offline matches use the classic one).
+        dice.setSkin(DiceView.Skin.byId(seat != null ? seat.optString("diceSkin") : null));
         Integer last = lastRolls.get(p.color);
         dice.set(last != null ? last : 1, current, rollReady);
         if (mine) {

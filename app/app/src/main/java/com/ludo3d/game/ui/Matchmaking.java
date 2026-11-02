@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * The "searching for players" screen for quick-play rooms: the LUDO 3D logo, the mode
+ * The "searching for players" screen for quick-play rooms: the LudoX logo, the mode
  * and entry fee, you VS the open seats (whose avatars shuffle until someone joins), a
  * search timer and a Cancel button. The server starts the match by itself.
  */
@@ -145,7 +145,7 @@ final class Matchmaking {
         topRow.addView(sound, new FrameLayout.LayoutParams(Ui.dp(a, 44), Ui.dp(a, 48), Gravity.END));
         col.addView(topRow, Ui.lpMatchWrap());
 
-        // Logo: crown, gold LUDO 3D, a little board with the die — floating gently.
+        // Logo: crown, gold LUDO X, a little board with the die — floating gently.
         LinearLayout logo = Ui.vbox(a);
         logo.setGravity(Gravity.CENTER_HORIZONTAL);
         TextView crown = Ui.text(a, "👑", 30, Color.WHITE);
@@ -154,7 +154,7 @@ final class Matchmaking {
         LinearLayout word = Ui.hbox(a);
         word.setGravity(Gravity.CENTER);
         word.addView(new Fx.GoldText(a, "LUDO", 46));
-        word.addView(new Fx.GoldText(a, "3D", 20, new int[]{0xffffffff, 0xffe0d4ff, 0xffb69cff}, 0xff3b0d8c));
+        word.addView(new Fx.GoldText(a, "X", 50));
         logo.addView(word);
         FrameLayout stage = new FrameLayout(a);
         stage.addView(new Fx.MiniBoard(a), new FrameLayout.LayoutParams(Ui.dp(a, 170), Ui.dp(a, 60), Gravity.CENTER));

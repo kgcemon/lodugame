@@ -17,7 +17,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Home, game style: the LUDO 3D logo with side buttons (free daily bonus, ranks, rules,
+ * Home, game style: the LudoX logo with side buttons (free daily bonus, ranks, rules,
  * friends), big 3D tiles for two- and four-player matches, friends, join and online play.
  */
 final class HomeTab {
@@ -54,6 +54,7 @@ final class HomeTab {
         small.addView(artTile(Fx.YELLOW, "PLAY\nONLINE", 0xffa66f00, emoji("🌍", 44), v -> pickMode(0)), tileLp(1, 150, 5, 0));
         col.addView(small);
 
+        diceShopBanner();
         offlineBanner();
         banner();
         onlineFriends();
@@ -81,6 +82,27 @@ final class HomeTab {
             if (bonus) claimBonus(d, true);
             else a.startActivity(new android.content.Intent(a, HistoryActivity.class));
         });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 78));
+        lp.topMargin = Ui.dp(a, 14);
+        col.addView(t, lp);
+    }
+
+    /** A wide 3D banner into the dice shop (dice skins bought with diamonds). */
+    private void diceShopBanner() {
+        Fx.Tile t = new Fx.Tile(a, Fx.BLUE, 18, 6);
+        LinearLayout row = Ui.hbox(a);
+        row.setPadding(Ui.dp(a, 16), 0, Ui.dp(a, 16), 0);
+        row.addView(new Fx.Die(a), new LinearLayout.LayoutParams(Ui.dp(a, 38), Ui.dp(a, 38)));
+        LinearLayout txt = Ui.vbox(a);
+        txt.setPadding(Ui.dp(a, 12), 0, 0, 0);
+        txt.addView(Fx.GoldText.label(a, "DICE SHOP", 17, 0xff0b5a9e));
+        TextView sub = Ui.bold(Ui.text(a, "New dice looks for 💎 diamonds", 12, 0xffe0f0ff));
+        sub.setPadding(Ui.dp(a, 4), 0, 0, 0);
+        txt.addView(sub);
+        row.addView(txt, Ui.weight(1));
+        row.addView(Fx.GoldText.label(a, "▶", 20, 0xff0b5a9e));
+        t.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        t.setOnClickListener(v -> a.startActivity(new android.content.Intent(a, DiceShopActivity.class)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 78));
         lp.topMargin = Ui.dp(a, 14);
         col.addView(t, lp);
@@ -119,10 +141,11 @@ final class HomeTab {
         LinearLayout title = Ui.hbox(a);
         title.setGravity(Gravity.CENTER);
         title.addView(new Fx.GoldText(a, "LUDO", 54));
-        Fx.GoldText three = new Fx.GoldText(a, "3D", 24, new int[]{0xffffffff, 0xffe0d4ff, 0xffb69cff}, 0xff3b0d8c);
+        // The X in gold, as big as LUDO (like the app icon).
+        Fx.GoldText x = new Fx.GoldText(a, "X", 58);
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        tlp.gravity = Gravity.TOP;
-        title.addView(three, tlp);
+        tlp.gravity = Gravity.CENTER_VERTICAL;
+        title.addView(x, tlp);
         logo.addView(title);
         FrameLayout stage = new FrameLayout(a);
         stage.addView(new Fx.MiniBoard(a), new FrameLayout.LayoutParams(Ui.dp(a, 190), Ui.dp(a, 70), Gravity.CENTER));

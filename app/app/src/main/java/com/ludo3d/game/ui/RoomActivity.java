@@ -269,7 +269,7 @@ public class RoomActivity extends BaseActivity {
     private void share(String code, String modeName) {
         Intent i = new Intent(Intent.ACTION_SEND);
         i.setType("text/plain");
-        i.putExtra(Intent.EXTRA_TEXT, "Join my " + modeName + " room in Ludo 3D! Room code: " + code);
+        i.putExtra(Intent.EXTRA_TEXT, "Join my " + modeName + " room in LudoX! Room code: " + code);
         startActivity(Intent.createChooser(i, "Share room code"));
     }
 

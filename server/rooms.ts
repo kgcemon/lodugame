@@ -22,6 +22,7 @@ import {
 } from '../shared/social';
 import type { AiLevel, Color, GameAction, GameEvent, GameState, PlayerKind } from '../shared/types';
 import { COLORS } from '../shared/types';
+import { DEFAULT_DICE_SKIN } from '../shared/skins';
 import type { AuthUser } from './http';
 import { MAX_REROLLS, REROLL_COSTS } from './gems';
 import type { MatchLedger } from './ledger';
@@ -86,6 +87,8 @@ interface Seat {
   /** Gem re-rolls used this match, and the last known gem balance (null = not loaded). */
   rerolls: number;
   gems: number | null;
+  /** Dice skin shown for this seat. */
+  diceSkin: string;
 }
 
 interface Room {
@@ -201,6 +204,7 @@ export class RoomManager {
         connected: s.kind === 'ai' || (s.connected && !s.pending),
         isHost: s.playerId !== null && s.playerId === room.hostPid,
         team: room.teams ? this.teamOfSeat(room, s, i) : null,
+        diceSkin: s.diceSkin,
       })),
     };
   }
@@ -358,7 +362,30 @@ export class RoomManager {
       color: this.freeColor(room),
       rerolls: 0,
       gems: null,
+      diceSkin: DEFAULT_DICE_SKIN,
     };
+  }
+
+  /** Look up the dice skin a newly seated player shows, then tell the room. */
+  private loadDiceSkin(room: Room, seat: Seat): void {
+    if (!seat.playerId) return;
+    this.ledger.diceSkin(seat.playerId).then(
+      (skin) => {
+        if (seat.diceSkin === skin) return;
+        seat.diceSkin = skin;
+        if (this.rooms.has(room.code)) this.broadcastRoom(room);
+      },
+      () => {},
+    );
+  }
+
+  /** A player put on another dice skin: show it at once if they are seated somewhere. */
+  setDiceSkin(userId: string, skin: string): void {
+    const room = this.roomOf(userId);
+    const seat = room?.seats.find((s) => s.playerId === userId);
+    if (!room || !seat || seat.diceSkin === skin) return;
+    seat.diceSkin = skin;
+    this.broadcastRoom(room);
   }
 
   private track(pid: string, room: Room | null): void {
@@ -407,6 +434,7 @@ export class RoomManager {
     const seat = this.seatFor(socket, room);
     room.seats.push(seat);
     this.rooms.set(code, room);
+    this.loadDiceSkin(room, seat);
     this.track(u.id, room);
     try {
       await this.ledger.join(room.matchId, u.id);
@@ -450,6 +478,7 @@ export class RoomManager {
     const seat = this.seatFor(socket, room);
     room.seats.push(seat);
     this.track(u.id, room);
+    this.loadDiceSkin(room, seat);
     this.broadcastRoom(room);
     try {
       await this.ledger.join(room.matchId, u.id);
@@ -542,6 +571,7 @@ export class RoomManager {
       color: this.freeColor(room),
       rerolls: 0,
       gems: null,
+      diceSkin: DEFAULT_DICE_SKIN,
     };
   }
 
