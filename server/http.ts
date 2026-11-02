@@ -20,6 +20,8 @@ export interface AppCtx {
   play: PlayVerifier | null;
   /** Google Sign-In token checks; null when not configured. */
   google: GoogleVerifier | null;
+  /** The voice relay, told when friendships change (set once sockets are up). */
+  voice?: { forget(...userIds: string[]): void };
 }
 
 export interface AuthUser {

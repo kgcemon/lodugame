@@ -543,7 +543,11 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   // ---------------------------------------------------------------- friends
 
   const pair = (a: string, b: string) => (a < b ? [a, b] : [b, a]);
-  const touchFriends = (...ids: string[]) => ids.forEach((id) => presence.emit(id, 'friends:changed', null));
+  const touchFriends = (...ids: string[]) => {
+    // New friends can talk at once (mid-match too); removed ones stop being heard.
+    ctx.voice?.forget(...ids);
+    ids.forEach((id) => presence.emit(id, 'friends:changed', null));
+  };
   /** A player's public card (for the live friend popups). */
   const card = async (userId: string) => {
     const r = await db.query<{ username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; country: string | null }>(

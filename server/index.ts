@@ -180,6 +180,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   presence.attach(io as unknown as Server);
   const rooms = new RoomManager(io, ledger, settings, presence, { ...DEFAULT_TIMINGS, ...opts.timings }, opts.roll);
   const voice = new VoiceRelay(db, io, rooms);
+  ctx.voice = voice;
 
   // Every socket belongs to a signed-in, non-suspended user.
   io.use((socket, next) => {

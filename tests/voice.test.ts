@@ -49,4 +49,29 @@ describe('voice chat', () => {
     await tick(150);
     expect(gotB).toHaveLength(1);
   });
+
+  it('strangers who become friends mid-match can talk at once', async () => {
+    const ua = await registerUser(t, 'Random One');
+    const ub = await registerUser(t, 'Random Two');
+    const [a, b] = await Promise.all([socketFor(t, ua.cookie), socketFor(t, ub.cookie)]);
+    const created = await emit<{ room: RoomView }>(a, 'room:create', { modeId: 'friendly', maxPlayers: 2 });
+    await emit(b, 'room:join', { code: created.ok ? created.room.code : '' });
+    const gotB = heard(b);
+
+    a.emit('voice:frame', Buffer.from([9, 9, 9, 9]));
+    await tick(150);
+    expect(gotB).toEqual([]);
+
+    const r = await ua.call<{ requestId: string }>('POST', '/friends/requests', { player: ub.publicId });
+    await ub.call('POST', `/friends/requests/${r.body.requestId}/accept`);
+    a.emit('voice:frame', Buffer.from([7, 7, 7, 7]));
+    await tick(150);
+    expect(gotB.map((x) => x.bytes)).toEqual([[7, 7, 7, 7]]);
+
+    // Unfriended: silence again straight away.
+    await ub.call('DELETE', `/friends/${ua.publicId}`);
+    a.emit('voice:frame', Buffer.from([5, 5, 5, 5]));
+    await tick(150);
+    expect(gotB).toHaveLength(1);
+  });
 });

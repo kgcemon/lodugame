@@ -170,7 +170,11 @@ public final class GameSocket {
             });
         });
         s.on("notify", a -> fire("notify", obj(a)));
-        s.on("friends:changed", a -> fire("friends:changed", null));
+        s.on("friends:changed", a -> {
+            // A new friend in my room can talk with me straight away (mid-match too).
+            if (room != null) com.ludo3d.game.audio.VoiceChat.get().refreshFriends();
+            fire("friends:changed", null);
+        });
         s.on("friend:request", a -> fire("friend:request", obj(a)));
         s.on("friend:accepted", a -> fire("friend:accepted", obj(a)));
         s.on("friend:rejected", a -> fire("friend:rejected", obj(a)));
