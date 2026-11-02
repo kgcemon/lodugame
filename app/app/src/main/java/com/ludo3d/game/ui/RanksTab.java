@@ -101,7 +101,7 @@ final class RanksTab {
         TextView p = Ui.bold(Ui.text(a, medal, pos <= 3 ? 20 : 14, Ui.MUTED));
         p.setMinWidth(Ui.dp(a, 40));
         row.addView(p);
-        row.addView(Ui.avatar(a, x.optString("username"), x.optInt("avatarHue", 210), 34));
+        row.addView(Ui.avatar(a, x, x.optString("username"), 34));
         LinearLayout t = Ui.vbox(a);
         t.setPadding(Ui.dp(a, 10), 0, 0, 0);
         t.addView(Ui.bold(Ui.text(a, x.optString("username") + (x.optBoolean("isYou") ? " (you)" : ""), 15, x.optBoolean("isYou") ? Ui.GOLD : Ui.INK)));

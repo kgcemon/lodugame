@@ -1,5 +1,7 @@
 import { jsonValue, type Db, type Queryable } from './db';
 import { HttpError } from './security';
+import { DICE_SKINS } from '../shared/skins';
+import { PROFILE_FRAMES } from '../shared/frames';
 
 /** Trusted game configuration, stored in game_settings and editable by administrators. */
 
@@ -23,6 +25,26 @@ export interface GameSettings {
   matchmakingWaitSeconds: number;
   suspiciousAmount: number;
   modes: MatchMode[];
+  /** Diamond price of each shop item, keyed `dice:<id>` / `frame:<id>` (0 = free). */
+  shopPrices: Record<string, number>;
+}
+
+/** Every shop item at its catalogue price: what the shop costs until an administrator changes it. */
+export function defaultShopPrices(): Record<string, number> {
+  return Object.fromEntries([
+    ...DICE_SKINS.map((d) => [`dice:${d.id}`, d.price] as const),
+    ...PROFILE_FRAMES.map((f) => [`frame:${f.id}`, f.price] as const),
+  ]);
+}
+
+function validateShopPrices(v: unknown, current: Record<string, number>): Record<string, number> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new HttpError(400, 'shopPrices must be an object');
+  const out = { ...current };
+  for (const [k, price] of Object.entries(v as Record<string, unknown>)) {
+    if (!(k in out)) throw new HttpError(400, `Unknown shop item ${k}`);
+    out[k] = intIn(price, `Price of ${k}`, 0, 100_000);
+  }
+  return out;
 }
 
 const KEYS: Record<keyof GameSettings, string> = {
@@ -32,6 +54,7 @@ const KEYS: Record<keyof GameSettings, string> = {
   matchmakingWaitSeconds: 'matchmaking_wait_seconds',
   suspiciousAmount: 'suspicious_amount',
   modes: 'match_modes',
+  shopPrices: 'shop_prices',
 };
 
 export function payoutPolicy(s: Pick<GameSettings, 'payoutMultiplier'>): string {
@@ -91,6 +114,8 @@ export class Settings {
       matchmakingWaitSeconds: Number(get('matchmakingWaitSeconds')),
       suspiciousAmount: Number(get('suspiciousAmount')),
       modes: get('modes'),
+      // Stored prices over the catalogue's, so items added later start at their default.
+      shopPrices: { ...defaultShopPrices(), ...((get('shopPrices') as Record<string, number> | undefined) ?? {}) },
     };
     return this.cache;
   }
@@ -98,6 +123,11 @@ export class Settings {
   get(): GameSettings {
     if (!this.cache) throw new Error('Settings not loaded');
     return this.cache;
+  }
+
+  /** What a shop item costs now, in diamonds. */
+  price(kind: 'dice' | 'frame', id: string): number {
+    return this.get().shopPrices[`${kind}:${id}`] ?? 0;
   }
 
   mode(id: unknown): MatchMode {
@@ -123,6 +153,7 @@ export class Settings {
       next.payoutMultiplier = m;
     }
     if (patch.modes !== undefined) next.modes = validateModes(patch.modes, cur.modes);
+    if (patch.shopPrices !== undefined) next.shopPrices = validateShopPrices(patch.shopPrices, cur.shopPrices);
 
     await this.db.tx(async (q: Queryable) => {
       for (const k of Object.keys(KEYS) as (keyof GameSettings)[]) {

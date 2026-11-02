@@ -88,7 +88,7 @@ final class FriendsTab {
     /** A friend with online state; when they're in a joinable room, a Join button. */
     static LinearLayout friendRow(MainActivity a, JSONObject f) {
         LinearLayout row = Ui.row(a);
-        row.addView(Ui.avatar(a, f.optString("username"), f.optInt("avatarHue", 210), 40));
+        row.addView(Ui.avatar(a, f, f.optString("username"), 40));
         LinearLayout t = Ui.vbox(a);
         t.setPadding(Ui.dp(a, 12), 0, Ui.dp(a, 8), 0);
         t.addView(Ui.bold(Ui.text(a, f.optString("username"), 15, Ui.INK)));
@@ -114,7 +114,7 @@ final class FriendsTab {
             JSONObject p = r.optJSONObject("player");
             if (p == null) continue;
             LinearLayout row = Ui.row(a);
-            row.addView(Ui.avatar(a, p.optString("username"), p.optInt("avatarHue", 210), 36));
+            row.addView(Ui.avatar(a, p, p.optString("username"), 36));
             TextView name = Ui.bold(Ui.text(a, p.optString("username"), 15, Ui.INK));
             name.setPadding(Ui.dp(a, 12), 0, 0, 0);
             row.addView(name, Ui.weight(1));
@@ -172,7 +172,7 @@ final class FriendsTab {
                 for (int i = 0; i < ps.length(); i++) {
                     JSONObject p = ps.optJSONObject(i);
                     LinearLayout row = Ui.row(a);
-                    row.addView(Ui.avatar(a, p.optString("username"), p.optInt("avatarHue", 210), 34));
+                    row.addView(Ui.avatar(a, p, p.optString("username"), 34));
                     LinearLayout t = Ui.vbox(a);
                     t.setPadding(Ui.dp(a, 10), 0, 0, 0);
                     t.addView(Ui.bold(Ui.text(a, p.optString("username"), 15, Ui.INK)));

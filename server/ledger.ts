@@ -5,7 +5,7 @@ import { HttpError } from './security';
 import type { MatchMode, Settings } from './settings';
 import { applyWalletTx, walletSummary } from './wallet';
 import { MAX_REROLLS, REROLL_COSTS, applyGemTx, gemBalance, rerollsUsed } from './gems';
-import { skinState } from './skins';
+import { cosmetics } from './skins';
 
 /**
  * Money side of a match. Each step is one database transaction that locks the
@@ -269,9 +269,9 @@ export class MatchLedger {
     if (refund && ids.length) await this.pushWallet(ids);
   }
 
-  /** The dice skin a player shows in matches. */
-  async diceSkin(userId: string): Promise<string> {
-    return (await skinState(this.ctx.db, userId)).equipped;
+  /** The dice skin and profile frame a player shows in matches. */
+  async cosmetics(userId: string): Promise<{ diceSkin: string; frame: string | null }> {
+    return cosmetics(this.ctx.db, userId);
   }
 
   /** Current gem balance (0 for unknown users). */

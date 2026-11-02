@@ -87,3 +87,48 @@ describe('dice skin shop', () => {
     expect((await changed).seats[0].diceSkin).toBe('classic');
   });
 });
+
+type Frames = { frames: { id: string; price: number }[]; owned: string[]; equipped: string | null; wallet?: { gems: number } };
+
+describe('profile frames and shop prices', () => {
+  it('sells frames at the price the administrator sets, and shows the frame at the table', async () => {
+    const admin = await registerUser(t, 'Admin', 'admin@example.com');
+    const set = await admin.call<{ settings: { shopPrices: Record<string, number> } }>('PUT', '/admin/settings', { shopPrices: { 'frame:fire': 40, 'dice:ruby': 10 } });
+    expect(set.status).toBe(200);
+    expect(set.body.settings.shopPrices['frame:fire']).toBe(40);
+    expect((await admin.call('PUT', '/admin/settings', { shopPrices: { 'frame:nope': 1 } })).status).toBe(400);
+    expect((await admin.call('PUT', '/admin/settings', { shopPrices: { 'frame:fire': -5 } })).status).toBe(400);
+
+    const u = await registerUser(t, 'Framed');
+    const list = await u.call<Frames>('GET', '/frames');
+    expect(list.body.frames.find((f) => f.id === 'fire')?.price).toBe(40);
+    expect(list.body.owned).toEqual([]);
+    expect(list.body.equipped).toBeNull();
+    const cfg = await u.call<{ diceSkins: { id: string; price: number }[] }>('GET', '/config');
+    expect(cfg.body.diceSkins.find((d) => d.id === 'ruby')?.price).toBe(10);
+
+    await u.call('POST', '/gems/purchase', { productId: 'gems_50', purchaseToken: `ok:${u.id}:4444444444` });
+    const bought = await u.call<Frames>('POST', '/frames/fire/buy');
+    expect(bought.status).toBe(200);
+    expect(bought.body.equipped).toBe('fire');
+    expect(bought.body.wallet?.gems).toBe(10);
+    expect((await u.call<Frames>('POST', '/frames/fire/buy')).body.wallet?.gems).toBe(10);
+    expect((await u.call('POST', '/frames/hearts/equip')).status).toBe(403);
+
+    const me = await u.call<{ player: { frame: string | null } }>('GET', `/players/${(await u.call<{ user: { publicId: string } }>('GET', '/me/profile')).body.user.publicId}`);
+    expect(me.body.player.frame).toBe('fire');
+
+    const s = await socketFor(t, u.cookie);
+    await emit<{ room: RoomView }>(s, 'room:create', { modeId: 'friendly', maxPlayers: 2 });
+    let shown: RoomView | null = null;
+    for (let i = 0; i < 20 && shown?.seats[shown.you]?.frame !== 'fire'; i++) {
+      const h = await emit<{ room: RoomView }>(s, 'session:hello');
+      shown = h.ok ? h.room : null;
+    }
+    expect(shown?.seats[shown.you].frame).toBe('fire');
+    const off = next<RoomView>(s, 'room:state', (r) => r.seats[r.you]?.frame === null);
+    const r = await u.call<Frames>('POST', '/frames/none/equip');
+    expect(r.body.equipped).toBeNull();
+    await off;
+  });
+});

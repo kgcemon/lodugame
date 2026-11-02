@@ -159,7 +159,7 @@ final class PlayerProfile {
         avf.setBackground(ring);
         int av = 58;
         TextView avatar = bot ? Ui.avatarColor(a, "🤖", Fx.blend(col, Color.BLACK, 0.2f), av - 8)
-                : seat != null ? Ui.avatar(a, name, seat.optInt("avatarHue", 210), av - 8) : Ui.avatarColor(a, name, col, av - 8);
+                : seat != null ? Ui.avatar(a, seat, name, av - 8) : Ui.avatarColor(a, name, col, av - 8);
         avf.addView(avatar, new FrameLayout.LayoutParams(Ui.dp(a, av - 8), Ui.dp(a, av - 8), Gravity.CENTER));
         View dot = new View(a);
         GradientDrawable dg = new GradientDrawable();

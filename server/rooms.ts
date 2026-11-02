@@ -89,6 +89,8 @@ interface Seat {
   gems: number | null;
   /** Dice skin shown for this seat. */
   diceSkin: string;
+  avatarUrl: string | null;
+  frame: string | null;
 }
 
 interface Room {
@@ -205,6 +207,8 @@ export class RoomManager {
         isHost: s.playerId !== null && s.playerId === room.hostPid,
         team: room.teams ? this.teamOfSeat(room, s, i) : null,
         diceSkin: s.diceSkin,
+        avatarUrl: s.avatarUrl,
+        frame: s.frame,
       })),
     };
   }
@@ -363,28 +367,35 @@ export class RoomManager {
       rerolls: 0,
       gems: null,
       diceSkin: DEFAULT_DICE_SKIN,
+      avatarUrl: u.avatarUrl,
+      frame: null,
     };
   }
 
-  /** Look up the dice skin a newly seated player shows, then tell the room. */
-  private loadDiceSkin(room: Room, seat: Seat): void {
+  /** Look up the dice skin and frame a newly seated player shows, then tell the room. */
+  private loadCosmetics(room: Room, seat: Seat): void {
     if (!seat.playerId) return;
-    this.ledger.diceSkin(seat.playerId).then(
-      (skin) => {
-        if (seat.diceSkin === skin) return;
-        seat.diceSkin = skin;
+    this.ledger.cosmetics(seat.playerId).then(
+      (c) => {
+        if (seat.diceSkin === c.diceSkin && seat.frame === c.frame) return;
+        seat.diceSkin = c.diceSkin;
+        seat.frame = c.frame;
         if (this.rooms.has(room.code)) this.broadcastRoom(room);
       },
       () => {},
     );
   }
 
-  /** A player put on another dice skin: show it at once if they are seated somewhere. */
-  setDiceSkin(userId: string, skin: string): void {
+  /** A player put on another dice skin or frame: show it at once if they are seated somewhere. */
+  setCosmetics(userId: string, c: { diceSkin?: string | null; frame?: string | null }): void {
     const room = this.roomOf(userId);
     const seat = room?.seats.find((s) => s.playerId === userId);
-    if (!room || !seat || seat.diceSkin === skin) return;
-    seat.diceSkin = skin;
+    if (!room || !seat) return;
+    const diceSkin = c.diceSkin ?? seat.diceSkin;
+    const frame = c.frame !== undefined ? c.frame : seat.frame;
+    if (seat.diceSkin === diceSkin && seat.frame === frame) return;
+    seat.diceSkin = diceSkin;
+    seat.frame = frame;
     this.broadcastRoom(room);
   }
 
@@ -434,7 +445,7 @@ export class RoomManager {
     const seat = this.seatFor(socket, room);
     room.seats.push(seat);
     this.rooms.set(code, room);
-    this.loadDiceSkin(room, seat);
+    this.loadCosmetics(room, seat);
     this.track(u.id, room);
     try {
       await this.ledger.join(room.matchId, u.id);
@@ -478,7 +489,7 @@ export class RoomManager {
     const seat = this.seatFor(socket, room);
     room.seats.push(seat);
     this.track(u.id, room);
-    this.loadDiceSkin(room, seat);
+    this.loadCosmetics(room, seat);
     this.broadcastRoom(room);
     try {
       await this.ledger.join(room.matchId, u.id);
@@ -572,6 +583,8 @@ export class RoomManager {
       rerolls: 0,
       gems: null,
       diceSkin: DEFAULT_DICE_SKIN,
+      avatarUrl: null,
+      frame: null,
     };
   }
 

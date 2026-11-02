@@ -8,8 +8,9 @@ import type { RoomManager } from './rooms';
 import * as v from './security';
 import { HttpError } from './security';
 import { GEM_PACKS, REROLL_COSTS, applyGemTx } from './gems';
-import { buySkin, equipSkin, skinState } from './skins';
+import { buyItem, equipItem, shopState, type ShopKind } from './skins';
 import { DICE_SKINS } from '../shared/skins';
+import { PROFILE_FRAMES } from '../shared/frames';
 import { payoutPolicy } from './settings';
 import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type TxType } from './wallet';
 
@@ -46,7 +47,7 @@ const statsCte = (season: string) => `
     group by mp.user_id
   ),
   ranked as (
-    select p.user_id, p.username, p.public_id, p.avatar_hue, w.balance,
+    select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, w.balance,
            coalesce(s.matches, 0) as matches, coalesce(s.wins, 0) as wins,
            coalesce(s.season_wins, 0) * 3 + coalesce(s.season_matches, 0) as season_points,
            case when coalesce(s.matches, 0) = 0 then 0 else round(100.0 * s.wins / s.matches, 1) end as win_rate,
@@ -62,6 +63,8 @@ interface StatsRow {
   username: string;
   public_id: string;
   avatar_hue: number;
+  avatar_url: string | null;
+  frame: string | null;
   balance: number;
   matches: number;
   wins: number;
@@ -84,13 +87,16 @@ async function statsFor(q: Queryable, userId: string) {
   };
 }
 
-function profileOut(r: { username: string; public_id: string; avatar_hue: number }) {
-  return { username: r.username, publicId: r.public_id, avatarHue: r.avatar_hue };
+function profileOut(r: { username: string; public_id: string; avatar_hue: number; avatar_url?: string | null; frame?: string | null }) {
+  return { username: r.username, publicId: r.public_id, avatarHue: r.avatar_hue, avatarUrl: r.avatar_url ?? null, frame: r.frame ?? null };
 }
 
 export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   const r = Router();
   const { db, settings, presence } = ctx;
+  /** A shop's items at the prices the administrator set. */
+  const shopCatalogue = (kind: ShopKind) =>
+    (kind === 'dice' ? DICE_SKINS : PROFILE_FRAMES).map((x) => ({ ...x, price: x.id === 'classic' ? 0 : settings.price(kind, x.id) }));
 
   // ---------------------------------------------------------------- public config
 
@@ -109,7 +115,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         gemPacks: GEM_PACKS,
         rerollCosts: REROLL_COSTS,
         purchasesEnabled: !!ctx.play,
-        diceSkins: DICE_SKINS,
+        diceSkins: shopCatalogue('dice'),
+        frames: shopCatalogue('frame'),
       };
     }),
   );
@@ -147,8 +154,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       if (q.length < 2 || q.length > 20) return { ok: true, players: [] };
       const me = req.user!.id;
       const rows = (
-        await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; friend: boolean; pending: string | null }>(
-          `select p.user_id, p.username, p.public_id, p.avatar_hue,
+        await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; friend: boolean; pending: string | null }>(
+          `select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame,
                   exists (select 1 from friendships f where f.user_a = least($1::uuid, p.user_id) and f.user_b = greatest($1::uuid, p.user_id)) as friend,
                   (select case when fr.from_user = $1 then 'outgoing' else 'incoming' end from friend_requests fr
                     where fr.status = 'pending' and least(fr.from_user, fr.to_user) = least($1::uuid, p.user_id)
@@ -170,8 +177,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   r.get(
     '/players/:publicId',
     h(async (req) => {
-      const p = await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; created_at: string }>(
-        `select p.user_id, p.username, p.public_id, p.avatar_hue, p.created_at from profiles p join users u on u.id = p.user_id
+      const p = await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; created_at: string }>(
+        `select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, p.created_at from profiles p join users u on u.id = p.user_id
          where p.public_id = $1 and u.suspended_at is null`,
         [String(req.params.publicId).toUpperCase()],
       );
@@ -206,32 +213,37 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
     }),
   );
 
-  // ---------------------------------------------------------------- dice skins (diamonds)
+  /** One shop (dice skins or profile frames): list, buy (once) and put on. */
+  const shop = (path: string, kind: ShopKind, list: string) => {
+    r.get(path, h(async (req) => ({ ok: true, [list]: shopCatalogue(kind), ...(await shopState(db, kind, req.user!.id)) })));
 
-  r.get('/skins', h(async (req) => ({ ok: true, skins: DICE_SKINS, ...(await skinState(db, req.user!.id)) })));
+    r.post(
+      `${path}/:id/buy`,
+      rateLimit(20, 60_000, (req) => req.user!.id),
+      h(async (req) => {
+        const id = String(req.params.id);
+        const state = await buyItem(db, kind, req.user!.id, id, settings.price(kind, id));
+        const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
+        presence.emit(req.user!.id, 'wallet', wallet);
+        rooms().setCosmetics(req.user!.id, { [kind === 'dice' ? 'diceSkin' : 'frame']: state.equipped });
+        return { ok: true, ...state, wallet };
+      }),
+    );
 
-  /** Buy (once) and put on a dice skin; the price comes from the server's catalogue. */
-  r.post(
-    '/skins/:id/buy',
-    rateLimit(20, 60_000, (req) => req.user!.id),
-    h(async (req) => {
-      const state = await buySkin(db, req.user!.id, String(req.params.id));
-      const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
-      presence.emit(req.user!.id, 'wallet', wallet);
-      rooms().setDiceSkin(req.user!.id, state.equipped);
-      return { ok: true, ...state, wallet };
-    }),
-  );
+    r.post(
+      `${path}/:id/equip`,
+      rateLimit(60, 60_000, (req) => req.user!.id),
+      h(async (req) => {
+        const state = await equipItem(db, kind, req.user!.id, String(req.params.id));
+        rooms().setCosmetics(req.user!.id, { [kind === 'dice' ? 'diceSkin' : 'frame']: state.equipped });
+        return { ok: true, ...state };
+      }),
+    );
+  };
+  // ---------------------------------------------------------------- shop (diamonds)
 
-  r.post(
-    '/skins/:id/equip',
-    rateLimit(60, 60_000, (req) => req.user!.id),
-    h(async (req) => {
-      const state = await equipSkin(db, req.user!.id, String(req.params.id));
-      rooms().setDiceSkin(req.user!.id, state.equipped);
-      return { ok: true, ...state };
-    }),
-  );
+  shop('/skins', 'dice', 'skins');
+  shop('/frames', 'frame', 'frames');
 
   // ---------------------------------------------------------------- gems (Google Play)
 
@@ -440,8 +452,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
     h(async (req) => {
       const me = req.user!.id;
       const rows = (
-        await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; since: string }>(
-          `select p.user_id, p.username, p.public_id, p.avatar_hue, f.created_at as since
+        await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; since: string }>(
+          `select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, f.created_at as since
            from friendships f join profiles p on p.user_id = case when f.user_a = $1 then f.user_b else f.user_a end
            where f.user_a = $1 or f.user_b = $1 order by p.username`,
           [me],
@@ -472,7 +484,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const me = req.user!.id;
       const rows = (
         await db.query<{ id: string; from_user: string; created_at: string; username: string; public_id: string; avatar_hue: number }>(
-          `select fr.id, fr.from_user, fr.created_at, p.username, p.public_id, p.avatar_hue
+          `select fr.id, fr.from_user, fr.created_at, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame
            from friend_requests fr join profiles p on p.user_id = case when fr.from_user = $1 then fr.to_user else fr.from_user end
            where fr.status = 'pending' and (fr.from_user = $1 or fr.to_user = $1) order by fr.created_at desc`,
           [me],
@@ -677,7 +689,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const rows = (
         await db.query(
           `select u.id, u.email, u.role, u.suspended_at, u.suspended_reason, u.email_verified_at, u.created_at,
-                  p.full_name, p.username, p.public_id, w.balance, w.gems,
+                  p.full_name, p.username, p.public_id, p.avatar_url, p.avatar_hue, p.frame, w.balance, w.gems,
                   (select count(*)::int from match_players mp where mp.user_id = u.id) as matches
            from users u join profiles p on p.user_id = u.id join wallets w on w.user_id = u.id
            ${where} order by u.created_at desc limit $1 offset $2`,

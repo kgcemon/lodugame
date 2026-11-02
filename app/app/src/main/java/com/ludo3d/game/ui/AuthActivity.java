@@ -8,6 +8,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -86,7 +87,7 @@ public class AuthActivity extends BaseActivity {
         col.addView(sub, Ui.lpMatchWrap());
 
         googleButton = googleButton();
-        col.addView(googleButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 56)));
+        col.addView(googleButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 66)));
 
         TextView terms = Ui.muted(this, "New players get free welcome coins.");
         terms.setGravity(Gravity.CENTER);
@@ -100,19 +101,23 @@ public class AuthActivity extends BaseActivity {
         col.addView(offline, olp);
     }
 
-    /** Google's own look: a white pill with the colour "G" and dark text. */
+    /** A chunky 3D game button in Google's colours: white face, colour "G", dark text. */
     private View googleButton() {
-        LinearLayout b = Ui.hbox(this);
-        b.setGravity(Gravity.CENTER);
-        b.setBackground(Ui.roundStroke(0xffffffff, Ui.dp(this, 28), Ui.dp(this, 1), 0xffdadce0));
-        b.setElevation(Ui.dp(this, 4));
-        ImageView g = new ImageView(this);
-        g.setImageResource(R.drawable.ic_google_g);
-        b.addView(g, new LinearLayout.LayoutParams(Ui.dp(this, 22), Ui.dp(this, 22)));
-        googleLabel = Ui.bold(Ui.text(this, "Sign in with Google", 17, 0xff1f1f1f));
+        Fx.Tile b = new Fx.Tile(this, new int[]{0xffffffff, 0xffe9ebf2, 0xff9aa0b8}, 18, 6);
+        LinearLayout row = Ui.hbox(this);
+        row.setGravity(Gravity.CENTER);
+        // The G sits on its own white disc, like Google's mark.
+        FrameLayout g = new FrameLayout(this);
+        g.setBackground(Ui.roundStroke(0xffffffff, Ui.dp(this, 18), Ui.dp(this, 1), 0xffdadce0));
+        ImageView mark = new ImageView(this);
+        mark.setImageResource(R.drawable.ic_google_g);
+        g.addView(mark, new FrameLayout.LayoutParams(Ui.dp(this, 22), Ui.dp(this, 22), Gravity.CENTER));
+        row.addView(g, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36)));
+        googleLabel = Ui.bold(Ui.text(this, "Sign in with Google", 18, 0xff1f1f1f));
         googleLabel.setPadding(Ui.dp(this, 12), 0, 0, 0);
-        b.addView(googleLabel);
-        b.setClickable(true);
+        googleLabel.setShadowLayer(Ui.dp(this, 1), 0, Ui.dp(this, 1), 0x99ffffff);
+        row.addView(googleLabel);
+        b.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         b.setFocusable(true);
         b.setContentDescription("Sign in with Google");
         b.setOnClickListener(v -> signIn());

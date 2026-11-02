@@ -180,7 +180,7 @@ public class MainActivity extends BaseActivity {
         balance = pill(top, "🪙", v -> startActivity(new Intent(this, WalletActivity.class)));
 
         FrameLayout avatarWrap = new FrameLayout(this);
-        TextView av = Ui.avatar(this, app.user.optString("username"), app.user.optInt("avatarHue", 210), 54);
+        TextView av = Ui.avatar(this, app.user, app.user.optString("username"), 54);
         GradientDrawable ring = new GradientDrawable();
         ring.setShape(GradientDrawable.OVAL);
         ring.setColor(0);

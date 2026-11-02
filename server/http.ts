@@ -31,6 +31,8 @@ export interface AuthUser {
   username: string;
   publicId: string;
   avatarHue: number;
+  /** Profile picture (from Google); null shows the initial on the hue. */
+  avatarUrl: string | null;
   sessionId: string;
 }
 
@@ -63,10 +65,10 @@ export async function userForToken(db: Db, token: string | undefined): Promise<A
   if (!token || token.length > 200) return null;
   const r = await db.query<{
     session_id: string; last_seen_at: string; id: string; email: string; role: 'player' | 'admin';
-    email_verified_at: string | null; full_name: string; username: string; public_id: string; avatar_hue: number;
+    email_verified_at: string | null; full_name: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null;
   }>(
     `select s.id as session_id, s.last_seen_at, u.id, u.email, u.role, u.email_verified_at,
-            p.full_name, p.username, p.public_id, p.avatar_hue
+            p.full_name, p.username, p.public_id, p.avatar_hue, p.avatar_url
      from sessions s join users u on u.id = s.user_id join profiles p on p.user_id = u.id
      where s.token_hash = $1 and s.revoked_at is null and s.expires_at > now() and u.suspended_at is null`,
     [hashToken(token)],
@@ -85,6 +87,7 @@ export async function userForToken(db: Db, token: string | undefined): Promise<A
     username: row.username,
     publicId: row.public_id,
     avatarHue: row.avatar_hue,
+    avatarUrl: row.avatar_url ?? null,
     sessionId: row.session_id,
   };
 }

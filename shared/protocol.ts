@@ -13,6 +13,10 @@ export interface SeatView {
   /** Public player id (for friend requests); null for bots. */
   publicId: string | null;
   avatarHue: number;
+  /** Profile picture URL; null for bots and players without one. */
+  avatarUrl: string | null;
+  /** Profile frame (shared/frames.ts) around the picture, or null. */
+  frame: string | null;
   ready: boolean;
   connected: boolean;
   isHost: boolean;

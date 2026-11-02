@@ -39,6 +39,7 @@ export function publicUser(u: AuthUser) {
     username: u.username,
     publicId: u.publicId,
     avatarHue: u.avatarHue,
+    avatarUrl: u.avatarUrl,
   };
 }
 
@@ -231,6 +232,8 @@ export function authRouter(ctx: AppCtx): Router {
         );
       }
       if (row.suspended_at) throw new HttpError(403, `This account is suspended${row.suspended_reason ? `: ${row.suspended_reason}` : ''}`);
+      // The Google profile picture, kept fresh on every sign-in.
+      if (g.picture) await ctx.db.query('update profiles set avatar_url = $2 where user_id = $1', [row.id, g.picture]);
       if (role === 'admin' && row.role !== 'admin') await ctx.db.query(`update users set role = 'admin', updated_at = now() where id = $1`, [row.id]);
       await createSession(ctx, req, res, row.id, true);
       if (created) res.status(201);

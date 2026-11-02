@@ -143,7 +143,7 @@ public class RoomActivity extends BaseActivity {
             if (!s.optBoolean("ready")) everyoneReady = false;
             boolean bot = "ai".equals(s.optString("kind"));
             row.addView(bot ? Ui.avatarColor(this, "🤖", Board.colorArgb(s.optString("color")), 38)
-                    : Ui.avatar(this, s.optString("name"), s.optInt("avatarHue", 210), 38));
+                    : Ui.avatar(this, s, s.optString("name"), 38));
             LinearLayout t = Ui.vbox(this);
             t.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 6), 0);
             t.addView(Ui.bold(Ui.text(this, s.optString("name") + (i == you ? " (you)" : ""), 15, Ui.INK)));
@@ -235,7 +235,7 @@ public class RoomActivity extends BaseActivity {
                 for (int i = 0; i < fs.length(); i++) {
                     JSONObject f = fs.optJSONObject(i);
                     LinearLayout row = Ui.row(RoomActivity.this);
-                    row.addView(Ui.avatar(RoomActivity.this, f.optString("username"), f.optInt("avatarHue", 210), 32));
+                    row.addView(Ui.avatar(RoomActivity.this, f, f.optString("username"), 32));
                     TextView n = Ui.text(RoomActivity.this, f.optString("username") + (f.optBoolean("online") ? "  🟢" : ""), 15, Ui.INK);
                     n.setPadding(Ui.dp(RoomActivity.this, 10), 0, 0, 0);
                     row.addView(n, Ui.weight(1));

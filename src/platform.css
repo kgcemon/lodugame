@@ -1046,6 +1046,15 @@ textarea.input {
 .mode-edit .wide {
   grid-column: 1 / -1;
 }
+.mode-edit.shop-prices {
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+}
+.mode-edit.shop-prices label {
+  justify-content: space-between;
+}
+.mode-edit.shop-prices .input {
+  width: 90px;
+}
 .mode-edit .toggle-row {
   padding: 0;
 }

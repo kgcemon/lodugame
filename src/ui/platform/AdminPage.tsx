@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api, fmt, get, post, type MatchMode } from '../../lib/api';
 import { useGame } from '../../store/game';
-import { Button, Segmented, Toggle } from '../common';
+import { Avatar, Button, Segmented, Toggle } from '../common';
+import { DICE_SKINS } from '../../../shared/skins';
+import { PROFILE_FRAMES } from '../../../shared/frames';
 import { Card, Confirm, Empty, ErrorNote, PageTitle, Spinner, useFetch } from './kit';
 
 /** Administrator tools. Every endpoint re-checks the admin role on the server. */
@@ -130,10 +132,16 @@ function Users() {
               {list.data?.items.map((u) => (
                 <tr key={String(u.id)}>
                   <td>
-                    <b>{u.username}</b>
-                    <small className="muted block">
-                      {u.full_name} · {u.public_id}
-                    </small>
+                    <div className="row gap-s">
+                      <Avatar name={String(u.username)} hue={Number(u.avatar_hue ?? 210)} src={u.avatar_url as string | null} size={36} />
+                      <div>
+                        <b>{u.username}</b>
+                        <small className="muted block">
+                          {u.full_name} · {u.public_id}
+                          {u.frame ? ` · ${PROFILE_FRAMES.find((f) => f.id === u.frame)?.name ?? u.frame} frame` : ''}
+                        </small>
+                      </div>
+                    </div>
                   </td>
                   <td>
                     {u.email}
@@ -402,6 +410,37 @@ interface AdminSettings {
   matchmakingWaitSeconds: number;
   suspiciousAmount: number;
   modes: MatchMode[];
+  shopPrices: Record<string, number>;
+}
+
+/** Diamond prices of everything in the app's shop (the classic dice is always free). */
+function ShopPrices({ prices, onChange }: { prices: Record<string, number>; onChange: (p: Record<string, number>) => void }) {
+  const group = (title: string, kind: 'dice' | 'frame', items: { id: string; name: string }[]) => (
+    <>
+      <h3 className="sub-title">{title}</h3>
+      <div className="mode-edit glass shop-prices">
+        {items.map((x) => (
+          <label key={x.id}>
+            {x.name}
+            <input
+              className="input"
+              type="number"
+              min={0}
+              value={prices[`${kind}:${x.id}`] ?? 0}
+              onChange={(e) => onChange({ ...prices, [`${kind}:${x.id}`]: Number(e.target.value) })}
+            />
+          </label>
+        ))}
+      </div>
+    </>
+  );
+  return (
+    <>
+      {group('Shop · dice prices (💎 diamonds)', 'dice', DICE_SKINS.filter((d) => d.id !== 'classic'))}
+      {group('Shop · profile frame prices (💎 diamonds)', 'frame', PROFILE_FRAMES)}
+      <p className="hint">0 makes an item free. Players who already own an item keep it when its price changes.</p>
+    </>
+  );
 }
 
 function SettingsTab() {
@@ -413,7 +452,7 @@ function SettingsTab() {
     get<{ settings: AdminSettings; policy: string }>('/admin/settings').then((r) => (setS(r.settings), setPolicy(r.policy)), (e: Error) => setError(e.message));
   }, []);
   if (!s) return error ? <ErrorNote error={error} /> : <Spinner />;
-  const num = (k: keyof Omit<AdminSettings, 'modes'>) => (
+  const num = (k: keyof Omit<AdminSettings, 'modes' | 'shopPrices'>) => (
     <label className="setting-row">
       <span>{({ welcomeBonus: 'Welcome bonus (new accounts)', dailyBonus: 'Daily bonus', payoutMultiplier: 'Winner payout multiplier (× entry fee)', matchmakingWaitSeconds: 'Matchmaking wait before starting with 2+ players (s)', suspiciousAmount: 'Flag transactions at or above' } as const)[k]}</span>
       <input className="input" type="number" step={k === 'payoutMultiplier' ? 0.25 : 1} value={s[k]} onChange={(e) => setS({ ...s, [k]: Number(e.target.value) })} />
@@ -459,6 +498,7 @@ function SettingsTab() {
             </div>
           );
         })}
+        <ShopPrices prices={s.shopPrices} onChange={(shopPrices) => setS({ ...s, shopPrices })} />
         <ErrorNote error={error} />
         <Button variant="primary" onClick={save} disabled={busy}>
           {busy ? 'Saving…' : 'Save settings'}

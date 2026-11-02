@@ -123,7 +123,7 @@ export function Segmented<T extends string | number>({ value, options, onChange 
   );
 }
 
-export function Avatar({ name, color, hue, size = 44 }: { name: string; color?: Color; hue?: number; size?: number }) {
+export function Avatar({ name, color, hue, size = 44, src }: { name: string; color?: Color; hue?: number; size?: number; src?: string | null }) {
   const initials = name
     .split(/\s+/)
     .filter(Boolean)
@@ -141,7 +141,7 @@ export function Avatar({ name, color, hue, size = 44 }: { name: string; color?: 
         background: `radial-gradient(circle at 30% 25%, rgba(255,255,255,.55), transparent 45%), ${base}`,
       }}
     >
-      {initials}
+      {src ? <img src={src} alt="" referrerPolicy="no-referrer" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} /> : initials}
     </div>
   );
 }

@@ -228,20 +228,25 @@ public final class Ui {
     }
 
     /** Round avatar with the player's initial on their chosen hue (or a seat colour). */
-    public static TextView avatar(Context c, String name, int hue, int sizeDp) {
+    public static AvatarView avatar(Context c, String name, int hue, int sizeDp) {
         return avatarColor(c, name, Color.HSVToColor(new float[]{hue, 0.62f, 0.78f}), sizeDp);
     }
 
-    public static TextView avatarColor(Context c, String name, int color, int sizeDp) {
+    /** A player's avatar from their JSON: picture (avatarUrl), frame, else initial on their hue. */
+    public static AvatarView avatar(Context c, org.json.JSONObject who, String name, int sizeDp) {
+        return avatar(c, name, who == null ? 210 : who.optInt("avatarHue", 210), sizeDp).of(who);
+    }
+
+    public static AvatarView avatarColor(Context c, String name, int color, int sizeDp) {
         // First code point, so an emoji (e.g. the bot's 🤖) is not cut in half.
         String initial = name == null || name.isEmpty() ? "?" : name.substring(0, name.offsetByCodePoints(0, 1)).toUpperCase(Locale.ROOT);
-        TextView t = text(c, initial, sizeDp * 0.42f, Color.WHITE);
+        AvatarView t = new AvatarView(c, color, sizeDp * 0.42f);
+        t.setText(initial);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeDp * 0.42f);
+        t.setTextColor(Color.WHITE);
         t.setTypeface(Typeface.DEFAULT_BOLD);
         t.setGravity(Gravity.CENTER);
-        GradientDrawable g = new GradientDrawable();
-        g.setShape(GradientDrawable.OVAL);
-        g.setColor(color);
-        t.setBackground(g);
+        t.setIncludeFontPadding(false);
         int s = dp(c, sizeDp);
         t.setLayoutParams(new LinearLayout.LayoutParams(s, s));
         return t;

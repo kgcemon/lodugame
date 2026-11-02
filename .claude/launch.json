@@ -4,7 +4,19 @@
     {
       "name": "ludo",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "ludo-test",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set PGLITE_DIR=memory&& set ADMIN_EMAILS=admin@example.com&& npm run dev"
+      ],
       "port": 5173
     }
   ]

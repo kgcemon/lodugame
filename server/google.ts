@@ -12,6 +12,8 @@ export interface GoogleIdentity {
   sub: string;
   email: string;
   name: string;
+  /** Profile picture URL (https), or null. */
+  picture: string | null;
 }
 
 export interface GoogleVerifier {
@@ -54,7 +56,7 @@ export class GoogleIdTokenVerifier implements GoogleVerifier {
     const parts = typeof idToken === 'string' ? idToken.split('.') : [];
     if (parts.length !== 3 || idToken.length > 4096) throw new InvalidGoogleToken('Malformed token');
     let header: { alg?: string; kid?: string };
-    let claims: { iss?: string; aud?: string; exp?: number; iat?: number; sub?: string; email?: string; email_verified?: boolean | string; name?: string };
+    let claims: { iss?: string; aud?: string; exp?: number; iat?: number; sub?: string; email?: string; email_verified?: boolean | string; name?: string; picture?: string };
     try {
       header = b64json(parts[0]);
       claims = b64json(parts[1]);
@@ -73,7 +75,8 @@ export class GoogleIdTokenVerifier implements GoogleVerifier {
     if (typeof claims.iat === 'number' && claims.iat > now + 300) throw new InvalidGoogleToken('Token from the future');
     if (!claims.sub || !claims.email) throw new InvalidGoogleToken('No account in token');
     if (claims.email_verified !== true && claims.email_verified !== 'true') throw new InvalidGoogleToken('Google email not verified');
-    return { sub: claims.sub, email: claims.email.toLowerCase(), name: (claims.name ?? '').trim() };
+    const picture = typeof claims.picture === 'string' && claims.picture.startsWith('https://') && claims.picture.length <= 500 ? claims.picture : null;
+    return { sub: claims.sub, email: claims.email.toLowerCase(), name: (claims.name ?? '').trim(), picture };
   }
 }
 

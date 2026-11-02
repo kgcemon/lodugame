@@ -31,7 +31,7 @@ final class ProfileTab {
         JSONObject u = app.user;
         LinearLayout head = Ui.vbox(a);
         head.setGravity(Gravity.CENTER_HORIZONTAL);
-        TextView av = Ui.avatar(a, u.optString("username"), u.optInt("avatarHue", 210), 84);
+        TextView av = Ui.avatar(a, u, u.optString("username"), 84);
         head.addView(av);
         TextView name = Ui.title(a, u.optString("fullName"));
         name.setGravity(Gravity.CENTER);

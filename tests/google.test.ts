@@ -25,7 +25,10 @@ describe('Google ID token check', () => {
   const v = new GoogleIdTokenVerifier([CLIENT], async () => ({ keys: [jwk], maxAgeMs: 3600_000 }));
 
   it('accepts a token Google signed for our app', async () => {
-    expect(await v.verify(token(good()))).toEqual({ sub: '1234567890', email: 'player@gmail.com', name: 'Gmail Player' });
+    expect(await v.verify(token(good()))).toEqual({ sub: '1234567890', email: 'player@gmail.com', name: 'Gmail Player', picture: null });
+    const pic = 'https://lh3.googleusercontent.com/a/abc=s96-c';
+    expect((await v.verify(token(good({ picture: pic })))).picture).toBe(pic);
+    expect((await v.verify(token(good({ picture: 'http://insecure.example/p.png' })))).picture).toBeNull();
   });
 
   it('rejects forged, foreign, expired and unverified tokens', async () => {
@@ -43,12 +46,13 @@ describe('Google ID token check', () => {
   });
 });
 
-/** Tokens are "google:<sub>:<email>:<name>" for the server tests. */
+/** Tokens are "google:<sub>:<email>:<name>[|<picture url>]" for the server tests. */
 const fake: GoogleVerifier = {
   async verify(t: string): Promise<GoogleIdentity> {
-    const [kind, sub, email, name] = t.split(':');
+    const [id, picture] = t.split('|');
+    const [kind, sub, email, name] = id.split(':');
     if (kind !== 'google') throw new InvalidGoogleToken('bad');
-    return { sub, email, name: name ?? '' };
+    return { sub, email, name: name ?? '', picture: picture ?? null };
   },
 };
 
@@ -58,7 +62,7 @@ beforeAll(async () => {
 });
 afterAll(() => t.stop());
 
-type Me = { user: { id: string; email: string; fullName: string; emailVerified: boolean } | null; wallet?: { balance: number } };
+type Me = { user: { id: string; email: string; fullName: string; emailVerified: boolean; avatarUrl: string | null } | null; wallet?: { balance: number } };
 
 describe('sign in with Google', () => {
   it('creates an account with the welcome bonus, then signs back into the same one', async () => {
@@ -86,6 +90,15 @@ describe('sign in with Google', () => {
     // Another Google account can't take that email over.
     const thief = await api(t).call('POST', '/auth/google', { idToken: 'google:sub-other:old.timer@gmail.com:X' });
     expect(thief.status).toBe(409);
+  });
+
+  it('keeps the Google profile picture, updated on each sign-in', async () => {
+    const a = api(t);
+    await a.call('POST', '/auth/google', { idToken: 'google:sub-pic:pic@gmail.com:Pic|https://lh3.googleusercontent.com/a/one=s96-c' });
+    expect((await a.call<Me>('GET', '/auth/me')).body.user?.avatarUrl).toBe('https://lh3.googleusercontent.com/a/one=s96-c');
+    const b = api(t);
+    await b.call('POST', '/auth/google', { idToken: 'google:sub-pic:pic@gmail.com:Pic|https://lh3.googleusercontent.com/a/two=s96-c' });
+    expect((await b.call<Me>('GET', '/auth/me')).body.user?.avatarUrl).toBe('https://lh3.googleusercontent.com/a/two=s96-c');
   });
 
   it('refuses bad tokens and suspended accounts', async () => {

@@ -39,7 +39,7 @@ public class PlayerActivity extends BaseActivity {
         if (p == null) return;
         LinearLayout head = Ui.vbox(this);
         head.setGravity(Gravity.CENTER_HORIZONTAL);
-        head.addView(Ui.avatar(this, p.optString("username"), p.optInt("avatarHue", 210), 84));
+        head.addView(Ui.avatar(this, p, p.optString("username"), 84));
         TextView name = Ui.title(this, p.optString("username"));
         name.setPadding(0, Ui.dp(this, 10), 0, 0);
         head.addView(name);

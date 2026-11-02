@@ -87,7 +87,7 @@ final class HomeTab {
         col.addView(t, lp);
     }
 
-    /** A wide 3D banner into the dice shop (dice skins bought with diamonds). */
+    /** A wide 3D banner into the shop (dice skins and profile frames bought with diamonds). */
     private void diceShopBanner() {
         Fx.Tile t = new Fx.Tile(a, Fx.BLUE, 18, 6);
         LinearLayout row = Ui.hbox(a);
@@ -95,14 +95,14 @@ final class HomeTab {
         row.addView(new Fx.Die(a), new LinearLayout.LayoutParams(Ui.dp(a, 38), Ui.dp(a, 38)));
         LinearLayout txt = Ui.vbox(a);
         txt.setPadding(Ui.dp(a, 12), 0, 0, 0);
-        txt.addView(Fx.GoldText.label(a, "DICE SHOP", 17, 0xff0b5a9e));
-        TextView sub = Ui.bold(Ui.text(a, "New dice looks for 💎 diamonds", 12, 0xffe0f0ff));
+        txt.addView(Fx.GoldText.label(a, "SHOP", 17, 0xff0b5a9e));
+        TextView sub = Ui.bold(Ui.text(a, "Dice & fire frames for 💎 diamonds", 12, 0xffe0f0ff));
         sub.setPadding(Ui.dp(a, 4), 0, 0, 0);
         txt.addView(sub);
         row.addView(txt, Ui.weight(1));
         row.addView(Fx.GoldText.label(a, "▶", 20, 0xff0b5a9e));
         t.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        t.setOnClickListener(v -> a.startActivity(new android.content.Intent(a, DiceShopActivity.class)));
+        t.setOnClickListener(v -> a.startActivity(new android.content.Intent(a, ShopActivity.class)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 78));
         lp.topMargin = Ui.dp(a, 14);
         col.addView(t, lp);

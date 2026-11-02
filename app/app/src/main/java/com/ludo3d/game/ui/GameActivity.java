@@ -841,9 +841,12 @@ public class GameActivity extends BaseActivity {
         ring.setStroke(Ui.dp(this, current ? 3 : 2), current ? Ui.GOLD : Fx.blend(col, Color.WHITE, 0.35f));
         av.setBackground(ring);
         int inner = size - 8;
-        TextView a = bot ? Ui.avatarColor(this, "🤖", Fx.blend(col, Color.BLACK, 0.25f), inner)
-                : seat != null ? Ui.avatar(this, p.name, seat.optInt("avatarHue", 210), inner) : Ui.avatarColor(this, p.name, col, inner);
-        av.addView(a, new FrameLayout.LayoutParams(Ui.dp(this, inner), Ui.dp(this, inner), Gravity.CENTER));
+        AvatarView a = bot ? Ui.avatarColor(this, "🤖", Fx.blend(col, Color.BLACK, 0.25f), inner)
+                : seat != null ? Ui.avatar(this, seat, p.name, inner) : Ui.avatarColor(this, p.name, col, inner);
+        // A profile frame burns round the ring, so it gets the whole card corner.
+        boolean framed = seat != null && !seat.isNull("frame") && !seat.optString("frame").isEmpty();
+        int avSize = framed ? size : inner;
+        av.addView(a, new FrameLayout.LayoutParams(Ui.dp(this, avSize), Ui.dp(this, avSize), Gravity.CENTER));
         if (current) {
             // Turn timer: a green sweep over the avatar that shrinks as time runs out.
             timerPie = new TimerRing(this, true, 0x9922c55e);
