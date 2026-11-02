@@ -217,8 +217,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const productId = v.str(req.body?.productId, 'Product', 1, 100);
       const token = v.str(req.body?.purchaseToken, 'Purchase token', 10, 500);
       const pack = GEM_PACKS.find((p) => p.productId === productId);
-      if (!pack) throw new HttpError(400, 'Unknown gem pack');
-      if (!ctx.play) throw new HttpError(503, 'Gem purchases are not set up on this server yet');
+      if (!pack) throw new HttpError(400, 'Unknown diamond pack');
+      if (!ctx.play) throw new HttpError(503, 'Diamond purchases are not set up on this server yet');
       const me = req.user!.id;
 
       // Already redeemed? Same user: fine (retry). Another user: refuse.
@@ -252,7 +252,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
             key: `play:${purchase.orderId ?? token.slice(0, 180)}`,
             productId,
             purchaseToken: token,
-            note: `${pack.gems} gems (Google Play)`,
+            note: `${pack.gems} diamonds (Google Play)`,
           }),
         );
       } catch (e) {
@@ -647,7 +647,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const rows = (
         await db.query(
           `select u.id, u.email, u.role, u.suspended_at, u.suspended_reason, u.email_verified_at, u.created_at,
-                  p.full_name, p.username, p.public_id, w.balance,
+                  p.full_name, p.username, p.public_id, w.balance, w.gems,
                   (select count(*)::int from match_players mp where mp.user_id = u.id) as matches
            from users u join profiles p on p.user_id = u.id join wallets w on w.user_id = u.id
            ${where} order by u.created_at desc limit $1 offset $2`,

@@ -58,6 +58,8 @@ function Users() {
   const [page, setPage] = useState(1);
   const list = useFetch(() => get<{ items: Row[] }>(`/admin/users?page=${page}&q=${encodeURIComponent(query)}`), [query, page]);
   const [adjust, setAdjust] = useState<Row | null>(null);
+  /** Which balance the adjust dialog changes: coins or diamonds. */
+  const [currency, setCurrency] = useState<'coins' | 'diamonds'>('coins');
   const [suspend, setSuspend] = useState<Row | null>(null);
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
@@ -69,8 +71,8 @@ function Users() {
     setBusy(true);
     setError(null);
     try {
-      await post(`/admin/users/${adjust!.id}/adjust`, { amount: Number(amount), reason, requestId });
-      toast('Balance adjusted and recorded in the audit log');
+      await post(`/admin/users/${adjust!.id}/${currency === 'diamonds' ? 'gems' : 'adjust'}`, { amount: Number(amount), reason, requestId });
+      toast(`${currency === 'diamonds' ? 'Diamonds' : 'Balance'} adjusted and recorded in the audit log`);
       setAdjust(null);
       list.reload();
     } catch (e) {
@@ -117,6 +119,7 @@ function Users() {
                 <th>User</th>
                 <th>Email</th>
                 <th className="num">Balance</th>
+                <th className="num">Diamonds</th>
                 <th className="num">Matches</th>
                 <th>Status</th>
                 <th>Joined</th>
@@ -137,6 +140,7 @@ function Users() {
                     {!u.email_verified_at && <small className="muted block">unverified</small>}
                   </td>
                   <td className="num">{fmt(Number(u.balance))}</td>
+                  <td className="num">💎 {fmt(Number(u.gems ?? 0))}</td>
                   <td className="num">{u.matches}</td>
                   <td>{u.role === 'admin' ? <span className="tag tag-gold">admin</span> : u.suspended_at ? <span className="tag tag-warn">suspended</span> : 'active'}</td>
                   <td>{d(u.created_at)}</td>
@@ -145,6 +149,7 @@ function Users() {
                       size="sm"
                       onClick={() => {
                         setAdjust(u);
+                        setCurrency('coins');
                         setAmount('');
                         setReason('');
                         setRequestId(crypto.randomUUID());
@@ -152,6 +157,19 @@ function Users() {
                       }}
                     >
                       Adjust coins
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setAdjust(u);
+                        setCurrency('diamonds');
+                        setAmount('');
+                        setReason('');
+                        setRequestId(crypto.randomUUID());
+                        setError(null);
+                      }}
+                    >
+                      Give diamonds
                     </Button>
                     {u.role !== 'admin' &&
                       (u.suspended_at ? (
@@ -180,8 +198,10 @@ function Users() {
         </Button>
       </div>
       {adjust && (
-        <Confirm title={`Adjust ${adjust.username}'s coins`} confirmLabel="Apply adjustment" busy={busy} onConfirm={doAdjust} onClose={() => setAdjust(null)}>
-          <p className="muted">Current balance: {fmt(Number(adjust.balance))}. Use a negative number to remove coins. Balances cannot go below zero.</p>
+        <Confirm title={`Adjust ${adjust.username}'s ${currency}`} confirmLabel="Apply adjustment" busy={busy} onConfirm={doAdjust} onClose={() => setAdjust(null)}>
+          <p className="muted">
+            Current {currency}: {fmt(Number((currency === 'diamonds' ? adjust.gems : adjust.balance) ?? 0))}. Use a negative number to remove {currency}. Balances cannot go below zero.
+          </p>
           <input className="input" type="number" inputMode="numeric" placeholder="Amount, e.g. 500 or -200" value={amount} onChange={(e) => setAmount(e.target.value)} />
           <input className="input" placeholder="Reason (required, saved in the audit log)" maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} />
           <ErrorNote error={error} />

@@ -22,7 +22,7 @@ export const GEM_PACKS: { productId: string; gems: number }[] = [
   { productId: 'gems_500', gems: 500 },
 ];
 
-export const NOT_ENOUGH_GEMS = 'Not enough gems! Buy more in the gem shop.';
+export const NOT_ENOUGH_GEMS = 'Not enough diamonds! Buy more in the diamond shop.';
 
 export interface GemTxInput {
   userId: string;
@@ -38,7 +38,7 @@ export interface GemTxInput {
 }
 
 export async function applyGemTx(q: Queryable, t: GemTxInput): Promise<{ balance: number; duplicate: boolean; id: string }> {
-  if (!Number.isSafeInteger(t.amount) || t.amount === 0) throw new Error('Invalid gem amount');
+  if (!Number.isSafeInteger(t.amount) || t.amount === 0) throw new Error('Invalid diamond amount');
   const w = await q.query<{ gems: number }>('select gems from wallets where user_id = $1 for update', [t.userId]);
   if (!w.rows.length) throw new HttpError(404, 'Wallet not found');
   const existing = await q.query<{ id: string; balance_after: number }>(

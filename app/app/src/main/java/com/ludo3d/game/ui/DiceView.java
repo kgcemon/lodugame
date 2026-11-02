@@ -75,8 +75,24 @@ final class DiceView extends View {
 
     /** Throw: the die pops out, grows and tumbles for `ms`, then lands on `result`. */
     void roll(int result, long ms) {
+        if (!isAttachedToWindow() || getWidth() == 0) {
+            // The card was just rebuilt and isn't laid out yet: throw as soon as it is,
+            // for whatever is left of the roll, instead of silently skipping the animation.
+            value = result;
+            invalidate();
+            long until = android.os.SystemClock.uptimeMillis() + ms;
+            addOnLayoutChangeListener(new OnLayoutChangeListener() {
+                @Override
+                public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+                    removeOnLayoutChangeListener(this);
+                    long left = until - android.os.SystemClock.uptimeMillis();
+                    if (left > 150) post(() -> roll(result, left));
+                }
+            });
+            return;
+        }
         ViewGroup overlay = overlay();
-        if (overlay == null || getWidth() == 0) {
+        if (overlay == null) {
             value = result;
             invalidate();
             return;

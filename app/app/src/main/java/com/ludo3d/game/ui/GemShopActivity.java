@@ -46,7 +46,7 @@ public class GemShopActivity extends BaseActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        col = pageWithBack("Gem shop");
+        col = pageWithBack("Diamond shop");
         render();
         if (app.config != null && !app.config.optBoolean("purchasesEnabled")) {
             showUnavailable("Purchases aren't switched on on the game server yet.");
@@ -100,22 +100,22 @@ public class GemShopActivity extends BaseActivity {
         TextView gem = Ui.text(this, "💎", 54, Ui.INK);
         gem.setGravity(Gravity.CENTER);
         head.addView(gem);
-        balance = new Fx.GoldText(this, Ui.fmt(app.wallet.optLong("gems")) + " gems", 30, new int[]{0xffffffff, 0xffb9f2ff, 0xff4fd8ff}, 0xff0b4f8a);
+        balance = new Fx.GoldText(this, Ui.fmt(app.wallet.optLong("gems")) + " diamonds", 30, new int[]{0xffffffff, 0xffb9f2ff, 0xff4fd8ff}, 0xff0b4f8a);
         balance.setGravity(Gravity.CENTER);
         head.addView(balance, Ui.lpMatchWrap());
         JSONArray costs = app.config != null ? app.config.optJSONArray("rerollCosts") : null;
         String c = costs != null && costs.length() >= 3 ? costs.optInt(0) + ", " + costs.optInt(1) + " and " + costs.optInt(2) : "5, 15 and 45";
-        TextView how = Ui.muted(this, "Use gems to re-roll the dice when you don't like your roll: " + c + " gems — up to 3 times per match.");
+        TextView how = Ui.muted(this, "Use diamonds to re-roll the dice when you don't like your roll: " + c + " diamonds — up to 3 times per match.");
         how.setGravity(Gravity.CENTER);
         how.setPadding(0, Ui.dp(this, 8), 0, 0);
         head.addView(how);
         col.addView(head);
 
-        col.addView(Ui.heading(this, "Gem packs"));
+        col.addView(Ui.heading(this, "Diamond packs"));
         packs = Ui.vbox(this);
         packs.addView(Ui.spinner(this));
         col.addView(packs);
-        TextView note = Ui.muted(this, "Payments are handled by Google Play. Gems have no cash value and can't be withdrawn.");
+        TextView note = Ui.muted(this, "Payments are handled by Google Play. Diamonds have no cash value and can't be withdrawn.");
         note.setGravity(Gravity.CENTER);
         note.setPadding(0, Ui.dp(this, 12), 0, 0);
         col.addView(note);
@@ -125,7 +125,7 @@ public class GemShopActivity extends BaseActivity {
         if (packs == null) return;
         packs.removeAllViews();
         LinearLayout c = Ui.card(this);
-        c.addView(Ui.bold(Ui.text(this, "Gem shop isn't open yet", 16, Ui.INK)));
+        c.addView(Ui.bold(Ui.text(this, "Diamond shop isn't open yet", 16, Ui.INK)));
         c.addView(Ui.muted(this, why));
         packs.addView(c);
     }
@@ -142,7 +142,7 @@ public class GemShopActivity extends BaseActivity {
             products.add(QueryProductDetailsParams.Product.newBuilder().setProductId(id).setProductType(BillingClient.ProductType.INAPP).build());
         }
         if (products.isEmpty()) {
-            showUnavailable("No gem packs are on sale right now.");
+            showUnavailable("No diamond packs are on sale right now.");
             return;
         }
         billing.queryProductDetailsAsync(QueryProductDetailsParams.newBuilder().setProductList(products).build(), (result, found) -> runOnUiThread(() -> {
@@ -179,7 +179,7 @@ public class GemShopActivity extends BaseActivity {
             shown++;
         }
         if (shown == 0) {
-            showUnavailable("The gem packs aren't available from Google Play yet. They appear once the app and its products are published in the Play Console.");
+            showUnavailable("The diamond packs aren't available from Google Play yet. They appear once the app and its products are published in the Play Console.");
         }
     }
 
@@ -214,7 +214,7 @@ public class GemShopActivity extends BaseActivity {
 
     private void redeem(Purchase p) {
         if (p.getPurchaseState() == Purchase.PurchaseState.PENDING) {
-            LudoApp.toast("Payment pending — your gems arrive when it completes.");
+            LudoApp.toast("Payment pending — your diamonds arrive when it completes.");
             return;
         }
         if (p.getPurchaseState() != Purchase.PurchaseState.PURCHASED || p.getProducts().isEmpty()) return;
@@ -232,9 +232,9 @@ public class GemShopActivity extends BaseActivity {
                 long granted = r.optLong("granted");
                 if (granted > 0) {
                     Sfx.get().play(Sfx.S.MATCH_FOUND);
-                    Popup.message(GemShopActivity.this, "Thank you!", "💎 +" + Ui.fmt(granted) + " gems added to your account.");
+                    Popup.message(GemShopActivity.this, "Thank you!", "💎 +" + Ui.fmt(granted) + " diamonds added to your account.");
                 }
-                balance.setText(Ui.fmt(app.wallet.optLong("gems")) + " gems");
+                balance.setText(Ui.fmt(app.wallet.optLong("gems")) + " diamonds");
                 // The server already consumed it; this just clears the local copy.
                 billing.consumeAsync(ConsumeParams.newBuilder().setPurchaseToken(p.getPurchaseToken()).build(), (res, token) -> {});
             }
@@ -246,7 +246,7 @@ public class GemShopActivity extends BaseActivity {
                 if (!p.isAcknowledged()) {
                     billing.acknowledgePurchase(AcknowledgePurchaseParams.newBuilder().setPurchaseToken(p.getPurchaseToken()).build(), res -> {});
                 }
-                Popup.message(GemShopActivity.this, "Couldn't add gems yet", e.message + "\n\nYour payment is safe: the gems are added automatically next time you open the shop.");
+                Popup.message(GemShopActivity.this, "Couldn't add diamonds yet", e.message + "\n\nYour payment is safe: the diamonds are added automatically next time you open the shop.");
             }
         });
     }
@@ -254,6 +254,6 @@ public class GemShopActivity extends BaseActivity {
     @Override
     public void onSocketEvent(String event, Object data) {
         super.onSocketEvent(event, data);
-        if ("wallet".equals(event) && balance != null) balance.setText(Ui.fmt(app.wallet.optLong("gems")) + " gems");
+        if ("wallet".equals(event) && balance != null) balance.setText(Ui.fmt(app.wallet.optLong("gems")) + " diamonds");
     }
 }

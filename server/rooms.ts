@@ -843,7 +843,7 @@ export class RoomManager {
       // The game moved on while we were charging: give the gems back.
       await this.ledger.refundReroll(room.matchId, seat.playerId!, charge.attempt, charge.cost).catch((e) => console.error('[rooms] reroll refund failed', e));
       seat.rerolls = charge.attempt - 1;
-      throw new RuleError('Too late — the game moved on (gems refunded)');
+      throw new RuleError('Too late — the game moved on (diamonds refunded)');
     }
     const seq = room.game.seq;
     this.apply(room, { type: 'roll', value: this.roll() }, r.before, seq + 1);

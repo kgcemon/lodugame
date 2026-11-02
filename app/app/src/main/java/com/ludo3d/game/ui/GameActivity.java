@@ -77,6 +77,10 @@ public class GameActivity extends BaseActivity {
     private TimerRing timerPie;
     /** Last value each colour rolled, so a card's die keeps showing it after the move. */
     private final java.util.Map<String, Integer> lastRolls = new java.util.HashMap<>();
+    /** The roll in flight (colour, value, when it lands), so a rebuilt card re-throws it. */
+    private String rollColor;
+    private int rollValue;
+    private long rollEndAt;
     /** My re-roll button on my card: the button, its countdown ring and the gem cost under it. */
     private TextView retryBtn, retryCostView;
     private TimerRing retryRing;
@@ -427,9 +431,9 @@ public class GameActivity extends BaseActivity {
                 }
             } else if ("NOT_ENOUGH_GEMS".equals(res.optString("code"))) {
                 Sfx.get().play(Sfx.S.ERROR);
-                Popup.message(this, "Not enough gems", "💎\nA re-roll costs " + rerollCost + " gems. Buy gems in the shop.",
+                Popup.message(this, "Not enough diamonds", "💎\nA re-roll costs " + rerollCost + " diamonds. Buy diamonds in the shop.",
                         Popup.plain("Close", null),
-                        new Popup.Btn("Gem shop", "gold", () -> startActivity(new android.content.Intent(this, GemShopActivity.class))));
+                        new Popup.Btn("Diamond shop", "gold", () -> startActivity(new android.content.Intent(this, GemShopActivity.class))));
             } else {
                 Sfx.get().play(Sfx.S.ERROR);
                 LudoApp.toast(res.optString("error", "Can't re-roll now"));
@@ -709,6 +713,13 @@ public class GameActivity extends BaseActivity {
             corners[corner].addView(card, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT, right ? Gravity.END : Gravity.START));
         }
+        // Cards rebuilt mid-throw (a new update, chat, presence): the old die was torn down
+        // with its card, so keep the throw going on the new one.
+        long left = rollEndAt - System.currentTimeMillis();
+        if (rollColor != null && left > 150) {
+            View v = root.findViewWithTag("dice:" + rollColor);
+            if (v instanceof DiceView) ((DiceView) v).roll(rollValue, left);
+        }
         renderStatus();
     }
 
@@ -810,7 +821,7 @@ public class GameActivity extends BaseActivity {
             retryBtn = Ui.bold(Ui.text(this, "↻", compact ? 17 : 19, 0x88ffffff));
             retryBtn.setGravity(Gravity.CENTER);
             retryBtn.setIncludeFontPadding(false);
-            retryBtn.setContentDescription("Re-roll with gems");
+            retryBtn.setContentDescription("Re-roll with diamonds");
             rb.addView(retryBtn, new FrameLayout.LayoutParams(rs - Ui.dp(this, 6), rs - Ui.dp(this, 6), Gravity.CENTER));
             retryRing = new TimerRing(this, false, Ui.GOLD);
             rb.addView(retryRing, new FrameLayout.LayoutParams(rs, rs, Gravity.CENTER));
@@ -819,7 +830,7 @@ public class GameActivity extends BaseActivity {
                     pressPop(v);
                     reroll();
                 } else {
-                    LudoApp.toast("Not happy with a roll? Re-roll it with gems right after rolling");
+                    LudoApp.toast("Not happy with a roll? Re-roll it with diamonds right after rolling");
                 }
             });
             retry.addView(rb, new LinearLayout.LayoutParams(rs, rs));
@@ -872,6 +883,9 @@ public class GameActivity extends BaseActivity {
         String color = state.players.get(player).color;
         View v = root.findViewWithTag("dice:" + color);
         lastRolls.put(color, value);
+        rollColor = color;
+        rollValue = value;
+        rollEndAt = System.currentTimeMillis() + ms;
         if (v instanceof DiceView) ((DiceView) v).roll(value, ms);
     }
 
