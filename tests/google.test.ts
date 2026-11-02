@@ -109,3 +109,14 @@ describe('sign in with Google', () => {
     }
   });
 });
+
+describe('legal pages', () => {
+  it('serves the privacy policy and terms (linked from the Google consent screen)', async () => {
+    for (const [path, title] of [['/privacy', 'Privacy policy'], ['/terms', 'Terms of service']]) {
+      const res = await fetch(`${t.url}${path}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toMatch(/text\/html/);
+      expect(await res.text()).toContain(title);
+    }
+  });
+});

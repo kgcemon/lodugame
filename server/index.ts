@@ -22,6 +22,7 @@ import {
 } from './http';
 import { MatchLedger } from './ledger';
 import { createMailer, type Mailer } from './mailer';
+import { legalPages } from './legal';
 import { GoogleIdTokenVerifier, type GoogleVerifier } from './google';
 import { GooglePlayVerifier, type PlayVerifier } from './googleplay';
 import { Presence } from './presence';
@@ -142,6 +143,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   app.disable('x-powered-by');
   app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? 1 : false);
   app.use(securityHeaders(cfg));
+  legalPages(app);
   app.get('/healthz', (_req, res) => res.json({ ok: true, db: db!.kind, rooms: rooms.roomCount }));
   app.use('/api', express.json({ limit: '16kb' }), csrfGuard(cfg), sessionMiddleware(ctx));
   app.use('/api/auth', authRouter(ctx));
