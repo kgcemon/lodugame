@@ -18,7 +18,7 @@ android {
         buildConfigField 'String', 'DEFAULT_SERVER_URL', '"https://freefirediamondtopup.com"'
         // Google Sign-In: the *Web* OAuth client id from Google Cloud Console (the server checks
         // tokens against it; set the same id in the server's GOOGLE_CLIENT_IDS).
-        buildConfigField 'String', 'GOOGLE_WEB_CLIENT_ID', '""'
+        buildConfigField 'String', 'GOOGLE_WEB_CLIENT_ID', '"308840747387-4ggm50ac5en3eh94f6ir33382o5bolb0.apps.googleusercontent.com"'
     }
 
     buildTypes {
