@@ -78,6 +78,31 @@ final class Synth {
         return this;
     }
 
+    /**
+     * A small hard object struck (a plastic die clacking): a few inharmonic modes that ring
+     * down exponentially within milliseconds, set off by a tiny burst of contact noise.
+     * `base` is the lowest mode in Hz, `ratios` the modes above it, `decay` the time constant
+     * of the lowest mode in seconds (higher modes die faster).
+     */
+    Synth strike(double start, double gain, double base, double[] ratios, double decay) {
+        int s0 = (int) (start * RATE), n = (int) (decay * 6 * RATE);
+        for (int m = 0; m < ratios.length; m++) {
+            double f = base * ratios[m], d = decay / (1 + m * 0.6), a = gain / (1 + m * 0.7), ph = rng.nextDouble();
+            for (int i = 0; i < n && s0 + i < buf.length; i++) {
+                double t = i / (double) RATE;
+                buf[s0 + i] += (float) (a * Math.exp(-t / d) * Math.sin(2 * Math.PI * (f * t + ph)));
+            }
+        }
+        return noise(start, 0.004, gain * 0.8, 0.9, 0.7, 0.0002, 2);
+    }
+
+    /** The wooden board under a landing die: a short, dull low knock. */
+    Synth thud(double start, double gain) {
+        tone(start, 0.07, 150, 105, SINE, gain, 0.0008, 3);
+        tone(start, 0.035, 420, 300, TRIANGLE, gain * 0.25, 0.0005, 4);
+        return noise(start, 0.02, gain * 0.5, 0.35, 0, 0.0003, 3);
+    }
+
     double random() {
         return rng.nextDouble();
     }

@@ -28,7 +28,7 @@ public final class Sfx {
     }
 
     /** Bump when a sound's design changes so cached files are regenerated. */
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
     private static Sfx instance;
 
     private final SharedPreferences prefs;
@@ -143,7 +143,7 @@ public final class Sfx {
     /** A second play of the same sound sooner than this is a duplicate trigger. */
     private static long minGapMs(S s) {
         switch (s) {
-            case DICE_SHAKE: return 700;
+            case DICE_SHAKE: return 1000;
             case DICE_LAND: case CAPTURE: case HOME: case TURN: case EXTRA: return 150;
             case STEP: return 40;
             default: return 60;
@@ -176,6 +176,8 @@ public final class Sfx {
 
     // ------------------------------------------------------------------ sound design
 
+    /** Mode ratios of a small plastic cube (inharmonic, so it clacks rather than rings). */
+    private static final double[] DIE_MODES = {1, 1.47, 2.09, 2.56, 3.37};
     private static final double C5 = 523.25, E5 = 659.26, G5 = 783.99, A5 = 880, B5 = 987.77;
     private static final double C6 = 1046.5, E6 = 1318.5, G6 = 1568, B6 = 1975.5, C7 = 2093;
 
@@ -186,23 +188,44 @@ public final class Sfx {
                 return new Synth(0.05).tone(0, 0.04, 1900, 1200, Synth.SINE, 0.6, 0.001, 3)
                         .noise(0, 0.012, 0.25, 0.9, 0.6, 0.0005, 2).render(0.45);
             case DICE_SHAKE: {
-                // Dice rattling in a cup: a cluster of tiny wooden knocks.
-                x = new Synth(0.6);
-                for (int i = 0; i < 9; i++) {
-                    double t = i * 0.055 + x.random() * 0.03;
-                    x.noise(t, 0.03, 0.55, 0.55, 0, 0.001, 2.5);
-                    x.tone(t, 0.035, 1100 + x.random() * 700, 700, Synth.TRIANGLE, 0.18, 0.001, 3);
+                // Two plastic dice shaken in the hand (three shakes of clacks), then thrown
+                // onto the wooden board: each bounce lower and sooner than the last, ending
+                // in a quick tumble of light ticks.
+                x = new Synth(0.95);
+                for (int s2 = 0; s2 < 3; s2++) {
+                    double t0 = s2 * 0.14;
+                    int hits = 4 + (int) (x.random() * 3);
+                    for (int i = 0; i < hits; i++) {
+                        x.strike(t0 + x.random() * 0.07, 0.3 + x.random() * 0.3, 2300 + x.random() * 1400, DIE_MODES, 0.012);
+                    }
                 }
-                return x.render(0.7);
+                double t = 0.47, gap = 0.12, g = 1;
+                for (int b = 0; b < 5; b++) {
+                    x.thud(t, g * 0.9);
+                    x.strike(t, g * 0.7, 1900 + x.random() * 900, DIE_MODES, 0.02);
+                    // The second die lands a hair later.
+                    x.strike(t + 0.006 + x.random() * 0.01, g * 0.45, 2600 + x.random() * 900, DIE_MODES, 0.015);
+                    t += gap;
+                    gap *= 0.68;
+                    g *= 0.62;
+                }
+                for (int i = 0; i < 6; i++) {
+                    x.strike(t + i * 0.022 + x.random() * 0.008, 0.18 * (1 - i / 7.0), 2400 + x.random() * 1200, DIE_MODES, 0.008);
+                }
+                return x.render(0.8);
             }
             case DICE_LAND:
-                // Thud, then a smaller bounce.
-                return new Synth(0.35)
-                        .tone(0, 0.18, 190, 85, Synth.SINE, 1, 0.002, 2)
-                        .noise(0, 0.05, 0.6, 0.35, 0, 0.001, 2)
-                        .tone(0.12, 0.12, 170, 90, Synth.SINE, 0.45, 0.002, 2.5)
-                        .noise(0.12, 0.03, 0.3, 0.4, 0, 0.001, 2)
-                        .render(0.85);
+                // The die rocks onto its face: a firm clack on the board, then two little
+                // wobbles that die away.
+                return new Synth(0.3)
+                        .thud(0, 0.8)
+                        .strike(0, 0.75, 2100, DIE_MODES, 0.022)
+                        .strike(0.004, 0.4, 2900, DIE_MODES, 0.016)
+                        .thud(0.05, 0.25)
+                        .strike(0.05, 0.3, 2200, DIE_MODES, 0.012)
+                        .strike(0.085, 0.15, 2350, DIE_MODES, 0.01)
+                        .strike(0.11, 0.07, 2400, DIE_MODES, 0.008)
+                        .render(0.8);
             case STEP:
                 // A token tapping onto a wooden square.
                 return new Synth(0.09)

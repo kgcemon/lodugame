@@ -313,6 +313,9 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         @Override
         void end() {
             rollT = -1;
+            // The rattle's last bounces must not run on under the landing.
+            Sfx x = Sfx.get();
+            if (x != null) x.stop(Sfx.S.DICE_SHAKE);
             sfx(Sfx.S.DICE_LAND, 1f, 0.95f + rng.nextFloat() * 0.1f);
         }
     }
