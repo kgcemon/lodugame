@@ -128,6 +128,8 @@ export interface ClientToServerEvents {
   /** `team: true` sends to your 2 vs 2 partner only. */
   'chat:send': (p: { text: string; quick?: boolean; team?: boolean }, ack: AckFn) => void;
   'emote:send': (p: { id: string }, ack: AckFn) => void;
+  /** A packet of compressed voice (binary), heard by your friends in the room. */
+  'voice:frame': (data: ArrayBuffer | Uint8Array) => void;
 }
 
 export interface ServerToClientEvents {
@@ -150,6 +152,8 @@ export interface ServerToClientEvents {
   'friend:rejected': (r: { id: string; player: FriendCard }) => void;
   /** A request to you was withdrawn: close its popup. */
   'friend:cancelled': (r: { id: string }) => void;
+  /** A friend's voice packet, from their seat in your room. */
+  'voice:frame': (seatId: string, data: ArrayBuffer | Uint8Array) => void;
 }
 
 /** A player's public card in the live friend popups. */

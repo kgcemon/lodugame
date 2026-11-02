@@ -175,6 +175,10 @@ public final class GameSocket {
         s.on("friend:accepted", a -> fire("friend:accepted", obj(a)));
         s.on("friend:rejected", a -> fire("friend:rejected", obj(a)));
         s.on("friend:cancelled", a -> fire("friend:cancelled", obj(a)));
+        // A friend's voice: straight to the voice engine (it has its own threads).
+        s.on("voice:frame", a -> {
+            if (a.length >= 2 && a[1] instanceof byte[]) com.ludo3d.game.audio.VoiceChat.get().onPacket(String.valueOf(a[0]), (byte[]) a[1]);
+        });
         s.connect();
     }
 
@@ -196,7 +200,9 @@ public final class GameSocket {
             if (prev == null || !prev.optString("code").equals(r.optString("code"))) {
                 chat.clear();
                 unreadChat = 0;
+                com.ludo3d.game.audio.VoiceChat.get().refreshFriends();
             }
+            com.ludo3d.game.audio.VoiceChat.get().syncRoom();
             if ("lobby".equals(r.optString("status"))) {
                 lastUpdate = null;
                 settlement = null;
@@ -206,6 +212,7 @@ public final class GameSocket {
     }
 
     private void resetRoom() {
+        com.ludo3d.game.audio.VoiceChat.get().stopAll();
         room = null;
         lastUpdate = null;
         settlement = null;
@@ -254,6 +261,12 @@ public final class GameSocket {
                 if (cb != null) LudoApp.MAIN.post(() -> cb.done(fail("The server did not respond")));
             }
         });
+    }
+
+    /** Fire-and-forget event (binary allowed, no ack), e.g. voice packets. Safe from any thread. */
+    public void emitRaw(String event, Object... args) {
+        Socket s = socket;
+        if (s != null && s.connected()) s.emit(event, args);
     }
 
     /** Like emit(), but shows the server's error as a toast. */

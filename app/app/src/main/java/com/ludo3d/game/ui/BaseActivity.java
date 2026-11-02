@@ -49,10 +49,45 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
         setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC);
     }
 
+    private static final int REQ_MIC = 4201;
+    private final com.ludo3d.game.audio.VoiceChat.Listener voiceListener = this::onVoiceChanged;
+
+    /** Voice: mic, mutes or who is talking changed. */
+    protected void onVoiceChanged() {}
+
+    /** Mic on/off; the first time, Android asks for the microphone. */
+    protected void toggleMic() {
+        com.ludo3d.game.audio.VoiceChat v = com.ludo3d.game.audio.VoiceChat.get();
+        if (v.micOn()) {
+            v.setMic(false);
+            LudoApp.toast("🔇 Mic off");
+            return;
+        }
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            v.setMic(true);
+            LudoApp.toast("🎙 Mic on: your friends in this room can hear you");
+        } else {
+            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != REQ_MIC) return;
+        if (results.length > 0 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            com.ludo3d.game.audio.VoiceChat.get().setMic(true);
+            LudoApp.toast("🎙 Mic on: your friends in this room can hear you");
+        } else {
+            LudoApp.toast("Allow the microphone to talk with your friends");
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
         app.socket.addListener(this);
+        com.ludo3d.game.audio.VoiceChat.get().addListener(voiceListener);
         // A match may have started (or be running after a reconnect) while this screen was hidden.
         if (!(this instanceof GameActivity) && app.socket.lastUpdate != null && app.socket.room != null
                 && "playing".equals(app.socket.room.optString("status"))) {
@@ -64,6 +99,7 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
     protected void onPause() {
         super.onPause();
         app.socket.removeListener(this);
+        com.ludo3d.game.audio.VoiceChat.get().removeListener(voiceListener);
     }
 
     @Override

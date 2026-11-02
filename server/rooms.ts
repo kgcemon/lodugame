@@ -1040,6 +1040,22 @@ export class RoomManager {
 
   // ---------------------------------------------------------------- guards
 
+  /**
+   * Who could hear this socket's voice: the other people seated (and connected) in its room.
+   * Null when the socket isn't seated. Friendship is checked by the voice relay.
+   */
+  voicePeers(socket: ClientSocket): { playerId: string; seatId: string; peers: { playerId: string; socketId: string }[] } | null {
+    const u = socket.data.user as AuthUser | undefined;
+    if (!u) return null;
+    const room = this.roomOf(u.id);
+    const seat = room?.seats.find((s) => s.playerId === u.id);
+    if (!room || !seat || seat.pending || seat.socketId !== socket.id) return null;
+    const peers = room.seats
+      .filter((s) => s !== seat && s.kind === 'human' && s.playerId && s.socketId && s.connected && !s.pending)
+      .map((s) => ({ playerId: s.playerId!, socketId: s.socketId! }));
+    return { playerId: u.id, seatId: seat.id, peers };
+  }
+
   private mySeat(socket: ClientSocket): { room: Room; seat: Seat } {
     const u = this.user(socket);
     const room = this.roomOf(u.id);

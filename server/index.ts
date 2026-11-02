@@ -26,6 +26,7 @@ import { legalPages } from './legal';
 import { GoogleIdTokenVerifier, type GoogleVerifier } from './google';
 import { GooglePlayVerifier, type PlayVerifier } from './googleplay';
 import { Presence } from './presence';
+import { VoiceRelay } from './voice';
 import { DEFAULT_TIMINGS, RoomManager, type ClientSocket, type Timings } from './rooms';
 import { HttpError } from './security';
 import { Settings } from './settings';
@@ -178,6 +179,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   });
   presence.attach(io as unknown as Server);
   const rooms = new RoomManager(io, ledger, settings, presence, { ...DEFAULT_TIMINGS, ...opts.timings }, opts.roll);
+  const voice = new VoiceRelay(db, io, rooms);
 
   // Every socket belongs to a signed-in, non-suspended user.
   io.use((socket, next) => {
@@ -210,6 +212,10 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     socket.on('game:reroll', handler(socket, () => rooms.reroll(socket)));
     socket.on('chat:send', handler(socket, (p: { text: unknown; quick?: unknown; team?: unknown }) => rooms.chat(socket, p.text, p.quick, p.team)));
     socket.on('emote:send', handler(socket, (p: { id: unknown }) => rooms.emote(socket, p.id)));
+    // Voice packets are fire-and-forget binary (no ack): forwarded to friends in the room.
+    socket.on('voice:frame', (data: unknown) => {
+      voice.packet(socket, data).catch((e: unknown) => console.error('[voice] relay failed', e));
+    });
     socket.on('disconnect', () => {
       presence.disconnect(user.id, socket.id);
       rooms.disconnect(socket);

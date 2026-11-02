@@ -72,6 +72,8 @@ public class GameActivity extends BaseActivity {
     private FrameLayout middle, boardArea;
     private int boardSize = -1;
     private TextView status, chatBtn, titleView, feeView, connView;
+    /** Mic on/off for voice with friends in the room (hidden without friends). */
+    private TextView micBtn;
     private LinearLayout statusBox;
     /** Turn timer drawn over the current player's avatar. */
     private TimerRing timerPie;
@@ -117,6 +119,7 @@ public class GameActivity extends BaseActivity {
         public void run() {
             renderStatus();
             maybeAutoMove();
+            renderVoice();
             LudoApp.MAIN.postDelayed(this, 250);
         }
     };
@@ -671,6 +674,14 @@ public class GameActivity extends BaseActivity {
         chatBtn = roundIcon("💬", "Chat", v -> openChat());
         controls.addView(chatBtn, new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl())));
         if (local != null) chatBtn.setVisibility(View.GONE);
+        micBtn = roundIcon("🔇", "Microphone", v -> {
+            pressPop(v);
+            toggleMic();
+        });
+        LinearLayout.LayoutParams micLp = new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl()));
+        micLp.leftMargin = Ui.dp(this, 6);
+        controls.addView(micBtn, micLp);
+        micBtn.setVisibility(View.GONE);
         LinearLayout reactions = Ui.hbox(this);
         reactions.setGravity(Gravity.CENTER);
         for (String id : Social.INSTANT_REACTIONS) {
@@ -757,6 +768,42 @@ public class GameActivity extends BaseActivity {
         t.setPadding(0, 0, 0, depth);
         t.setOnClickListener(onClick);
         return t;
+    }
+
+    @Override
+    protected void onVoiceChanged() {
+        renderChips();
+        renderVoice();
+    }
+
+    /** The mic button, and a pulse on whoever is talking. */
+    private void renderVoice() {
+        if (micBtn == null) return;
+        com.ludo3d.game.audio.VoiceChat voice = com.ludo3d.game.audio.VoiceChat.get();
+        boolean show = local == null && voice.available();
+        micBtn.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) return;
+        String label = voice.micOn() ? "🎙" : "🔇";
+        if (!label.contentEquals(micBtn.getText())) {
+            micBtn.setText(label);
+            int depth = Fx.bevel(micBtn, voice.micOn() ? Fx.GREEN : Fx.PURPLE, 29, 4, true);
+            micBtn.setPadding(0, 0, 0, depth);
+        }
+        float me = voice.meSpeaking() ? 1.12f : 1f;
+        micBtn.animate().scaleX(me).scaleY(me).setDuration(120).start();
+        JSONObject room = app.socket.room;
+        JSONArray seats = room != null ? room.optJSONArray("seats") : null;
+        String mine = app.socket.mySeatId();
+        for (int i = 0; seats != null && i < seats.length(); i++) {
+            JSONObject s = seats.optJSONObject(i);
+            if (s == null) continue;
+            String id = s.optString("id");
+            View b = root.findViewWithTag("voice:" + id);
+            if (b == null) continue;
+            boolean talking = id.equals(mine) ? voice.meSpeaking() : voice.speaking(id);
+            float k = talking ? 1.3f : 1f;
+            b.animate().scaleX(k).scaleY(k).setDuration(120).start();
+        }
     }
 
     /** Small press feedback for buttons. */
@@ -873,6 +920,31 @@ public class GameActivity extends BaseActivity {
                     Gravity.TOP | (right ? Gravity.END : Gravity.START)));
         } else if (pid != null) {
             PlayerProfile.load(this, pid, false, this::renderChips);
+        }
+        // Voice: friends get a speaker badge (tap to mute them); my own shows my mic.
+        if (local == null && seat != null && !bot) {
+            com.ludo3d.game.audio.VoiceChat voice = com.ludo3d.game.audio.VoiceChat.get();
+            boolean friend = !mine && voice.isFriend(seat);
+            if (friend || (mine && voice.micOn())) {
+                String vpid = seat.optString("publicId");
+                TextView vb = Ui.text(this, mine ? "🎙" : voice.isMuted(vpid) ? "🔇" : "🔊", compact ? 10 : 11, Color.WHITE);
+                vb.setGravity(Gravity.CENTER);
+                vb.setTag("voice:" + seat.optString("id"));
+                GradientDrawable vbg = new GradientDrawable();
+                vbg.setShape(GradientDrawable.OVAL);
+                vbg.setColor(0xee1a0640);
+                vbg.setStroke(Ui.dp(this, 2), voice.isMuted(vpid) ? 0xffe53945 : 0xff22c55e);
+                vb.setBackground(vbg);
+                vb.setContentDescription(mine ? "Your microphone" : (voice.isMuted(vpid) ? "Unmute " : "Mute ") + p.name);
+                if (friend) {
+                    vb.setOnClickListener(v -> {
+                        pressPop(v);
+                        voice.toggleMute(vpid);
+                        LudoApp.toast(voice.isMuted(vpid) ? "🔇 " + p.name + " muted" : "🔊 You can hear " + p.name);
+                    });
+                }
+                av.addView(vb, new FrameLayout.LayoutParams(Ui.dp(this, 22), Ui.dp(this, 22), Gravity.BOTTOM | (right ? Gravity.END : Gravity.START)));
+            }
         }
         av.setContentDescription("Profile of " + p.name);
         if (local == null) {

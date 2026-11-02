@@ -82,6 +82,11 @@ public class RoomActivity extends BaseActivity {
         }
     }
 
+    @Override
+    protected void onVoiceChanged() {
+        if (matchmaking == null) render();
+    }
+
     private void alertAndClose(String reason) {
         Popup p = Popup.message(this, "Room closed", reason, Popup.ok("OK", this::finish));
         p.setOnCancelListener(d -> finish());
@@ -160,6 +165,15 @@ public class RoomActivity extends BaseActivity {
             t.addView(tags);
             row.addView(t, Ui.weight(1));
             row.addView(Ui.text(this, s.optBoolean("ready") ? "✓ Ready" : "Not ready", 13, s.optBoolean("ready") ? Ui.SUCCESS : Ui.MUTED));
+            // A friend: tap the speaker to mute / unmute their voice.
+            com.ludo3d.game.audio.VoiceChat voice = com.ludo3d.game.audio.VoiceChat.get();
+            if (i != you && voice.isFriend(s)) {
+                String vpid = s.optString("publicId");
+                TextView sp = Ui.text(this, voice.isMuted(vpid) ? "  🔇" : voice.speaking(s.optString("id")) ? "  🗣" : "  🔊", 18, Ui.INK);
+                sp.setContentDescription((voice.isMuted(vpid) ? "Unmute " : "Mute ") + s.optString("name"));
+                sp.setOnClickListener(v -> voice.toggleMute(vpid));
+                row.addView(sp);
+            }
             if (isHost && i != you && !isPublic) {
                 final int seat = i;
                 TextView x = Ui.text(this, "  ✕", 18, Ui.MUTED);
@@ -172,6 +186,21 @@ public class RoomActivity extends BaseActivity {
             list.addView(row);
         }
         col.addView(list);
+
+        // Voice with friends in this room: one big mic switch.
+        com.ludo3d.game.audio.VoiceChat voice = com.ludo3d.game.audio.VoiceChat.get();
+        if (voice.available()) {
+            LinearLayout vc = Ui.card(this);
+            Ui.margins(vc, this, 0, 12, 0, 0);
+            LinearLayout vr = Ui.row(this);
+            LinearLayout vt = Ui.vbox(this);
+            vt.addView(Ui.bold(Ui.text(this, "🎧 Voice chat with friends", 15, Ui.INK)));
+            vt.addView(Ui.muted(this, voice.micOn() ? "Your mic is on. Only your friends here hear you." : "Turn on your mic to talk. Only friends hear you."));
+            vr.addView(vt, Ui.weight(1));
+            vr.addView(Ui.smallButton(this, voice.micOn() ? "🎙 On" : "🔇 Off", voice.micOn() ? "ok" : "glass", v -> toggleMic()));
+            vc.addView(vr);
+            col.addView(vc);
+        }
 
         if (isPublic) {
             col.addView(Ui.muted(this, "The match starts automatically when the room is full (or after a short wait with at least 2 players)."));
