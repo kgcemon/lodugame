@@ -130,6 +130,18 @@ final class ProfileTab {
             Sfx.get().play(Sfx.S.CLICK);
         });
         prefsCard.addView(sound);
+        android.widget.Switch vibrate = new android.widget.Switch(a);
+        vibrate.setText("📳  Vibrate on my turn");
+        vibrate.setTextColor(Ui.INK);
+        vibrate.setTextSize(15);
+        vibrate.setChecked(com.ludo3d.game.audio.Haptics.isEnabled(app.prefs));
+        vibrate.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 8));
+        vibrate.setOnCheckedChangeListener((b, on) -> {
+            com.ludo3d.game.audio.Haptics.setEnabled(app.prefs, on);
+            // Feel what it will be like.
+            if (on) com.ludo3d.game.audio.Haptics.turn(a, app.prefs);
+        });
+        prefsCard.addView(vibrate);
         col.addView(prefsCard);
 
         col.addView(Ui.heading(a, "Security"));

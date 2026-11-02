@@ -20,6 +20,8 @@ import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type T
 const PAGE = 20;
 const TX_TYPES: TxType[] = ['welcome_bonus', 'match_entry', 'match_reward', 'match_refund', 'daily_bonus', 'referral_reward', 'admin_adjustment'];
 const MIN_WINRATE_MATCHES = 5;
+/** How many friend requests one player may ever send another (declined or cancelled ones count). */
+export const MAX_FRIEND_REQUESTS = 2;
 /** Pictures an administrator may upload for an announcement (decoded size limit 2 MB). */
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -206,12 +208,16 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       if (q.length < 2 || q.length > 20) return { ok: true, players: [] };
       const me = req.user!.id;
       const rows = (
-        await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; country: string | null; friend: boolean; pending: string | null }>(
+        await db.query<{ user_id: string; username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; country: string | null; friend: boolean; pending: string | null; request_id: string | null; sent: number }>(
           `select p.user_id, p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, p.country,
                   exists (select 1 from friendships f where f.user_a = least($1::uuid, p.user_id) and f.user_b = greatest($1::uuid, p.user_id)) as friend,
                   (select case when fr.from_user = $1 then 'outgoing' else 'incoming' end from friend_requests fr
                     where fr.status = 'pending' and least(fr.from_user, fr.to_user) = least($1::uuid, p.user_id)
-                      and greatest(fr.from_user, fr.to_user) = greatest($1::uuid, p.user_id)) as pending
+                      and greatest(fr.from_user, fr.to_user) = greatest($1::uuid, p.user_id)) as pending,
+                  (select fr.id from friend_requests fr
+                    where fr.status = 'pending' and least(fr.from_user, fr.to_user) = least($1::uuid, p.user_id)
+                      and greatest(fr.from_user, fr.to_user) = greatest($1::uuid, p.user_id)) as request_id,
+                  (select count(*) from friend_requests fr where fr.from_user = $1 and fr.to_user = p.user_id) as sent
            from profiles p join users u on u.id = p.user_id and u.suspended_at is null
            where p.user_id <> $1 and (p.public_id = upper($2) or lower(p.username) like lower($3))
            order by (p.public_id = upper($2)) desc, p.username limit 10`,
@@ -221,7 +227,14 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       ).rows;
       return {
         ok: true,
-        players: rows.map((p) => ({ ...profileOut(p), isFriend: !!p.friend, pending: p.pending, online: presence.isOnline(p.user_id) })),
+        players: rows.map((p) => ({
+          ...profileOut(p),
+          isFriend: !!p.friend,
+          pending: p.pending,
+          requestId: p.request_id,
+          sendsLeft: Math.max(0, MAX_FRIEND_REQUESTS - Number(p.sent)),
+          online: presence.isOnline(p.user_id),
+        })),
       };
     }),
   );
@@ -236,7 +249,16 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       );
       if (!p.rows.length) throw new HttpError(404, 'Player not found');
       const row = p.rows[0];
-      return { ok: true, player: { ...profileOut(row), joinedAt: row.created_at, online: presence.isOnline(row.user_id), stats: await statsFor(db, row.user_id) } };
+      return {
+        ok: true,
+        player: {
+          ...profileOut(row),
+          joinedAt: row.created_at,
+          online: presence.isOnline(row.user_id),
+          stats: await statsFor(db, row.user_id),
+          friendship: row.user_id === req.user!.id ? null : await friendship(req.user!.id, row.user_id),
+        },
+      };
     }),
   );
 
@@ -522,6 +544,31 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
 
   const pair = (a: string, b: string) => (a < b ? [a, b] : [b, a]);
   const touchFriends = (...ids: string[]) => ids.forEach((id) => presence.emit(id, 'friends:changed', null));
+  /** A player's public card (for the live friend popups). */
+  const card = async (userId: string) => {
+    const r = await db.query<{ username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; country: string | null }>(
+      'select username, public_id, avatar_hue, avatar_url, frame, country from profiles where user_id = $1',
+      [userId],
+    );
+    return profileOut(r.rows[0]);
+  };
+  /** Where two players stand: friends, a pending request (and whose), and requests left to send. */
+  const friendship = async (me: string, other: string) => {
+    const [a, b] = pair(me, other);
+    const isFriend = (await db.query('select 1 from friendships where user_a = $1 and user_b = $2', [a, b])).rows.length > 0;
+    const pending = await db.query<{ id: string; from_user: string }>(
+      `select id, from_user from friend_requests where status = 'pending' and least(from_user, to_user) = $1 and greatest(from_user, to_user) = $2`,
+      [a, b],
+    );
+    const sent = (await db.query<{ n: number }>('select count(*)::int as n from friend_requests where from_user = $1 and to_user = $2', [me, other])).rows[0].n;
+    const pr = pending.rows[0];
+    return {
+      isFriend,
+      pending: pr ? (pr.from_user === me ? 'outgoing' : 'incoming') : null,
+      requestId: pr?.id ?? null,
+      sendsLeft: Math.max(0, MAX_FRIEND_REQUESTS - Number(sent)),
+    };
+  };
 
   r.get(
     '/friends',
@@ -602,15 +649,22 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         await acceptRequest(reverse.rows[0].id, me);
         return { ok: true, accepted: true };
       }
+      const sent = (await db.query<{ n: number }>('select count(*)::int as n from friend_requests where from_user = $1 and to_user = $2', [me, target.user_id])).rows[0].n;
+      if (Number(sent) >= MAX_FRIEND_REQUESTS) {
+        throw new HttpError(429, `You can send ${target.username} a friend request only ${MAX_FRIEND_REQUESTS} times`, 'FRIEND_REQUEST_LIMIT');
+      }
+      const requestId = randomUUID();
       try {
-        await db.query('insert into friend_requests (from_user, to_user) values ($1, $2)', [me, target.user_id]);
+        await db.query('insert into friend_requests (id, from_user, to_user) values ($1, $2, $3)', [requestId, me, target.user_id]);
       } catch (e) {
         if ((e as { code?: string }).code === '23505') throw new HttpError(409, 'A friend request is already pending');
         throw e;
       }
       await notify(db, presence, target.user_id, 'friend_request', { from: req.user!.username, fromPublicId: req.user!.publicId });
+      // The live popup (Accept / Decline) on the other player's screen, even mid-match.
+      presence.emit(target.user_id, 'friend:request', { id: requestId, player: await card(me) });
       touchFriends(me, target.user_id);
-      return { ok: true, accepted: false };
+      return { ok: true, accepted: false, requestId, sendsLeft: MAX_FRIEND_REQUESTS - Number(sent) - 1 };
     }),
   );
 
@@ -626,8 +680,10 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       await q.query('insert into friendships (user_a, user_b) values ($1, $2) on conflict do nothing', [a, b]);
       return r2.rows[0];
     });
-    const meP = (await db.query<{ username: string; public_id: string }>('select username, public_id from profiles where user_id = $1', [me])).rows[0];
-    await notify(db, presence, fr.from_user, 'friend_accepted', { by: meP.username, byPublicId: meP.public_id });
+    const meP = await card(me);
+    await notify(db, presence, fr.from_user, 'friend_accepted', { by: meP.username, byPublicId: meP.publicId });
+    // The sender celebrates too.
+    presence.emit(fr.from_user, 'friend:accepted', { id, player: meP });
     touchFriends(fr.from_user, fr.to_user);
   }
 
@@ -652,8 +708,11 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         await q.query('update friend_requests set status = $2, responded_at = now() where id = $1', [id, action === 'reject' ? 'rejected' : 'cancelled']);
         return r2.rows[0];
       });
+      if (action === 'reject') presence.emit(fr.from_user, 'friend:rejected', { id, player: await card(me) });
+      else presence.emit(fr.to_user, 'friend:cancelled', { id });
       touchFriends(fr.from_user, fr.to_user);
-      return { ok: true };
+      const other = action === 'reject' ? fr.from_user : fr.to_user;
+      return { ok: true, friendship: await friendship(me, other) };
     }),
   );
 

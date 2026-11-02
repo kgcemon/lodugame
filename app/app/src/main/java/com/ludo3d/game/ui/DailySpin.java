@@ -78,6 +78,8 @@ final class DailySpin extends Dialog {
     private final MainActivity a;
     private final int[] prizes;
     private final FrameLayout stage;
+    /** The dark backdrop (fades in and out with the popup). */
+    private final View scrim;
     private final LinearLayout content;
     private final Rays rays;
     private final Wheel wheel;
@@ -98,33 +100,55 @@ final class DailySpin extends Dialog {
     private static final float CRUISE = 1100f;
 
     private DailySpin(MainActivity a, JSONObject state) {
-        super(a);
+        // A full-screen, see-through window: the popup is centred by its own layout, so no
+        // dialog theme (insets, minimum widths) can push it to one side.
+        super(a, android.R.style.Theme_Translucent_NoTitleBar);
         this.a = a;
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
         JSONArray p = state.optJSONArray("prizes");
         int n = p != null && p.length() > 1 ? p.length() : 10;
         prizes = new int[n];
         for (int i = 0; i < n; i++) prizes[i] = p != null ? p.optInt(i, i + 1) : i + 1;
 
+        // Sizes from the screen, so small and short phones fit the whole popup.
+        android.util.DisplayMetrics dm = a.getResources().getDisplayMetrics();
+        int screenW = dm.widthPixels, screenH = dm.heightPixels;
+        boolean small = screenW < Ui.dp(a, 360) || screenH < Ui.dp(a, 640);
+        int size = Math.min(Math.min(screenW - Ui.dp(a, 48), (int) (screenH * 0.46f)), Ui.dp(a, 340));
+
         stage = new FrameLayout(a);
-        rays = new Rays(a);
-        int raySize = Ui.dp(a, 520);
-        stage.addView(rays, new FrameLayout.LayoutParams(raySize, raySize, Gravity.CENTER));
+        stage.setClipChildren(false);
+        scrim = new View(a);
+        android.graphics.drawable.GradientDrawable dark = new android.graphics.drawable.GradientDrawable();
+        dark.setGradientType(android.graphics.drawable.GradientDrawable.RADIAL_GRADIENT);
+        dark.setGradientRadius(Math.max(screenW, screenH) * 0.75f);
+        dark.setColors(new int[]{0xe03b1680, 0xf20a0320});
+        scrim.setBackground(dark);
+        stage.addView(scrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // Everything else stays clear of the status and navigation bars.
+        FrameLayout safe = new FrameLayout(a);
+        safe.setFitsSystemWindows(true);
+        safe.setClipChildren(false);
+        stage.addView(safe, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         content = Ui.vbox(a);
         content.setGravity(Gravity.CENTER_HORIZONTAL);
-        Fx.GoldText title = new Fx.GoldText(a, "DAILY SPIN", 38);
+        content.setClipChildren(false);
+        Fx.GoldText title = new Fx.GoldText(a, "DAILY SPIN", small ? 30 : 38);
         title.setGravity(Gravity.CENTER);
         content.addView(title, Ui.lpMatchWrap());
-        subtitle = Ui.bold(Ui.text(a, "Spin the wheel and win up to 10 💎 free, every day!", 14, 0xffffe9a8));
+        subtitle = Ui.bold(Ui.text(a, "Spin the wheel and win up to 10 💎 free, every day!", small ? 13 : 14, 0xffffe9a8));
         subtitle.setGravity(Gravity.CENTER);
         subtitle.setShadowLayer(Ui.dp(a, 3), 0, Ui.dp(a, 1), 0xcc000000);
-        Ui.margins(subtitle, a, 24, 2, 24, 10);
+        Ui.margins(subtitle, a, 28, 2, 28, small ? 6 : 10);
         content.addView(subtitle, Ui.lpMatchWrap());
 
-        int screen = a.getResources().getDisplayMetrics().widthPixels;
-        int size = Math.min(screen - Ui.dp(a, 36), Ui.dp(a, 330));
         FrameLayout wheelBox = new FrameLayout(a);
+        wheelBox.setClipChildren(false);
+        // Light rays fan out behind the wheel (drawn past its box, never widening the layout).
+        rays = new Rays(a);
+        int raySize = (int) (size * 1.75f);
+        wheelBox.addView(rays, new FrameLayout.LayoutParams(raySize, raySize, Gravity.CENTER));
         wheel = new Wheel(a, prizes);
         wheelBox.addView(wheel, new FrameLayout.LayoutParams(size, size, Gravity.CENTER));
         hub = new Hub(a);
@@ -159,16 +183,16 @@ final class DailySpin extends Dialog {
         collect.setOnClickListener(v -> dismissAnimated());
         collect.setVisibility(View.GONE);
         button.addView(collect, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(Ui.dp(a, 230), Ui.dp(a, 62));
-        blp.topMargin = Ui.dp(a, 16);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(Math.min(Ui.dp(a, 240), screenW - Ui.dp(a, 64)), Ui.dp(a, small ? 56 : 62));
+        blp.topMargin = Ui.dp(a, small ? 10 : 18);
         content.addView(button, blp);
-        stage.addView(content, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        safe.addView(content, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
 
         close = Fx.badge(a, "✖", Fx.RED, 42, v -> dismissAnimated());
         FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(Ui.dp(a, 42), Ui.dp(a, 46), Gravity.TOP | Gravity.END);
-        clp.topMargin = Ui.dp(a, 28);
-        clp.rightMargin = Ui.dp(a, 16);
-        stage.addView(close, clp);
+        clp.topMargin = Ui.dp(a, 12);
+        clp.rightMargin = Ui.dp(a, 14);
+        safe.addView(close, clp);
 
         confetti = new Confetti(a);
         stage.addView(confetti, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -177,8 +201,6 @@ final class DailySpin extends Dialog {
         Window w = getWindow();
         if (w != null) {
             w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-            w.setDimAmount(0.78f);
             w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         }
         setCanceledOnTouchOutside(false);
@@ -192,7 +214,9 @@ final class DailySpin extends Dialog {
     @Override
     public void show() {
         super.show();
-        // The wheel flies in spinning, the title drops, the button rises, the light rays bloom.
+        // The backdrop fades in, the wheel flies in spinning, the light rays bloom.
+        scrim.setAlpha(0f);
+        scrim.animate().alpha(1).setDuration(300).start();
         content.setScaleX(0.3f);
         content.setScaleY(0.3f);
         content.setAlpha(0f);
@@ -241,6 +265,7 @@ final class DailySpin extends Dialog {
     private void dismissAnimated() {
         if (spinning) return;
         content.animate().scaleX(0.6f).scaleY(0.6f).alpha(0).setDuration(220).setInterpolator(new AccelerateInterpolator()).start();
+        scrim.animate().alpha(0).setDuration(230).start();
         rays.animate().alpha(0).setDuration(220).start();
         close.animate().alpha(0).setDuration(150).start();
         LudoApp.MAIN.postDelayed(() -> {
@@ -383,6 +408,14 @@ final class DailySpin extends Dialog {
         // "+7 💎" pops out of the hub and floats over the wheel.
         LinearLayout prizeBox = Ui.vbox(a);
         prizeBox.setGravity(Gravity.CENTER);
+        // A dark, gold-rimmed pill keeps the prize readable over the colourful wheel.
+        android.graphics.drawable.GradientDrawable pill = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xee3b1680, 0xee1a0640});
+        pill.setCornerRadius(Ui.dp(a, 28));
+        pill.setStroke(Ui.dp(a, 3), 0xffffc94a);
+        prizeBox.setBackground(pill);
+        prizeBox.setPadding(Ui.dp(a, 26), Ui.dp(a, 10), Ui.dp(a, 26), Ui.dp(a, 12));
+        prizeBox.setElevation(Ui.dp(a, 12));
         Fx.GoldText big = new Fx.GoldText(a, "+" + prize + " 💎", 56);
         big.setGravity(Gravity.CENTER);
         prizeBox.addView(big);
@@ -419,7 +452,7 @@ final class DailySpin extends Dialog {
             sound(Sfx.S.HOME, 0.8f, 1.2f);
         }, 1500);
 
-        subtitle.setText("You won " + prize + " diamonds! Come back tomorrow for another spin.");
+        subtitle.setText("You won " + prize + (prize == 1 ? " diamond" : " diamonds") + "! Come back tomorrow for another spin.");
         collect.setVisibility(View.VISIBLE);
         button.animate().scaleX(1).scaleY(1).alpha(1).setDuration(250).setStartDelay(600).start();
         close.setEnabled(true);
@@ -667,7 +700,7 @@ final class DailySpin extends Dialog {
         @Override
         protected void onDraw(Canvas c) {
             float cx = getWidth() / 2f, cy = getHeight() / 2f, r = Math.min(cx, cy);
-            p.setShader(new RadialGradient(cx, cy, r, new int[]{0x99ffd54a, 0x33ff9f0a, 0x00ff9f0a}, new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
+            p.setShader(new RadialGradient(cx, cy, r, new int[]{0xaaffd54a, 0x40ff9f0a, 0x00ff9f0a}, new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
             RectF o = new RectF(cx - r, cy - r, cx + r, cy + r);
             int n = 18;
             for (int i = 0; i < n; i++) c.drawArc(o, i * 360f / n, 360f / n / 2, true, p);

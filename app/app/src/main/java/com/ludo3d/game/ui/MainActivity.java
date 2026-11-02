@@ -39,6 +39,8 @@ public class MainActivity extends BaseActivity {
     PlayFlow play;
     /** Today's daily spin from the server (available, prizes); null until loaded. */
     JSONObject spinState;
+    /** Friend requests waiting for my answer (the badge on SOCIAL). */
+    private int pendingRequests;
     /** A daily popup (spin or announcement) is loading or open. */
     private boolean popupBusy;
     /** This screen is on top (popups never open over another screen). */
@@ -261,6 +263,8 @@ public class MainActivity extends BaseActivity {
             label.setGravity(Gravity.CENTER);
             col.addView(label);
             t.addView(col, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            if (NAV_TAB[k] == 1 && pendingRequests > 0) t.addView(requestBadge(), new FrameLayout.LayoutParams(
+                    Ui.dp(this, 24), Ui.dp(this, 24), Gravity.TOP | Gravity.END));
             t.setOnClickListener(v -> {
                 if (NAV_TAB[slot] < 0) startActivity(new Intent(this, WalletActivity.class));
                 else selectTab(NAV_TAB[slot]);
@@ -270,6 +274,44 @@ public class MainActivity extends BaseActivity {
             lp.rightMargin = Ui.dp(this, 3);
             nav.addView(t, lp);
         }
+    }
+
+    /** A red bubble with the number of new friend requests; it beats like a heart. */
+    private View requestBadge() {
+        TextView b = Ui.bold(Ui.text(this, pendingRequests > 9 ? "9+" : String.valueOf(pendingRequests), 11, Color.WHITE));
+        b.setGravity(Gravity.CENTER);
+        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xffff5a6a, 0xffd61f2c});
+        bg.setShape(GradientDrawable.OVAL);
+        bg.setStroke(Ui.dp(this, 2), Color.WHITE);
+        b.setBackground(bg);
+        b.setElevation(Ui.dp(this, 6));
+        android.animation.ObjectAnimator beat = android.animation.ObjectAnimator.ofPropertyValuesHolder(b,
+                android.animation.PropertyValuesHolder.ofFloat("scaleX", 1f, 1.25f, 1f, 1.12f, 1f),
+                android.animation.PropertyValuesHolder.ofFloat("scaleY", 1f, 1.25f, 1f, 1.12f, 1f));
+        beat.setDuration(900);
+        beat.setStartDelay(400);
+        beat.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+        beat.start();
+        return b;
+    }
+
+    /** Count friend requests waiting for me; redraw the bar when it changes. */
+    void refreshRequests() {
+        app.api.get("/friends/requests", new Api.Cb(this) {
+            @Override
+            public void ok(JSONObject r) {
+                org.json.JSONArray in = r.optJSONArray("incoming");
+                int n = in != null ? in.length() : 0;
+                if (n == pendingRequests || nav == null) return;
+                pendingRequests = n;
+                renderNav();
+            }
+
+            @Override
+            public void err(Api.Error e) {
+                // Keep the last count.
+            }
+        });
     }
 
     void selectTab(int i) {
@@ -322,6 +364,7 @@ public class MainActivity extends BaseActivity {
         loadConfig();
         refreshHeader();
         selectTab(tab);
+        refreshRequests();
         dailyPopups();
     }
 
@@ -421,6 +464,7 @@ public class MainActivity extends BaseActivity {
                 break;
             case "friends:changed":
                 if (tab == 1 || tab == 0) selectTab(tab);
+                refreshRequests();
                 break;
             case "room:state":
             case "room:left":

@@ -75,6 +75,24 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
             case "notify":
                 showNotification((JSONObject) data);
                 break;
+            // Friend requests pop up live on any screen, mid-match included.
+            case "friend:request": {
+                FriendPopups.request(this, (JSONObject) data);
+                break;
+            }
+            case "friend:accepted": {
+                JSONObject p = ((JSONObject) data).optJSONObject("player");
+                if (p != null) FriendPopups.celebrate(this, p);
+                break;
+            }
+            case "friend:rejected": {
+                JSONObject p = ((JSONObject) data).optJSONObject("player");
+                if (p != null) FriendPopups.declined(this, p);
+                break;
+            }
+            case "friend:cancelled":
+                FriendPopups.cancelled((JSONObject) data);
+                break;
             case "room:closed":
                 if (!(this instanceof GameActivity) && !(this instanceof RoomActivity)) LudoApp.toast(String.valueOf(data));
                 break;
@@ -102,7 +120,10 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
         JSONObject p = n.optJSONObject("payload");
         if (p == null) p = new JSONObject();
         String text = Notifications.describe(n.optString("type"), p);
-        if ("room_invite".equals(n.optString("type")) && !(this instanceof GameActivity)) {
+        String type = n.optString("type");
+        // Friend requests and acceptances have their own popups.
+        if ("friend_request".equals(type) || "friend_accepted".equals(type)) text = null;
+        if ("room_invite".equals(type) && !(this instanceof GameActivity)) {
             InviteToast.show(this, p);
         } else if (text != null && !(this instanceof GameActivity)) {
             LudoApp.toast(text);

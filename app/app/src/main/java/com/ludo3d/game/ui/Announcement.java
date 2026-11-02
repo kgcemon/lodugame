@@ -60,19 +60,34 @@ final class Announcement extends Dialog {
     }
 
     private final GlowFrame frame;
+    /** The card with its close button: what flies in and out. */
     private final View panel;
+    /** The dark backdrop; tapping it closes the popup. */
+    private final View scrim;
+    private final View shine;
 
     private Announcement(Activity a, JSONObject ann) {
-        super(a);
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        // A full-screen, see-through window that centres the card itself, so no dialog
+        // theme (insets, minimum widths) can push it to one side.
+        super(a, android.R.style.Theme_Translucent_NoTitleBar);
         setCancelable(true);
-        setCanceledOnTouchOutside(true);
 
-        int screenW = a.getResources().getDisplayMetrics().widthPixels;
-        int screenH = a.getResources().getDisplayMetrics().heightPixels;
-        int width = Math.min(screenW - Ui.dp(a, 36), Ui.dp(a, 420));
+        android.util.DisplayMetrics dm = a.getResources().getDisplayMetrics();
+        int screenW = dm.widthPixels, screenH = dm.heightPixels;
+        boolean small = screenW < Ui.dp(a, 360);
+        // The card: the screen less a margin each side, at most 400dp (tablets).
+        int width = Math.min(screenW - Ui.dp(a, 40), Ui.dp(a, 400));
+        int corner = Ui.dp(a, 22);
 
-        FrameLayout outer = new FrameLayout(a);
+        FrameLayout root = new FrameLayout(a);
+        scrim = new View(a);
+        scrim.setBackgroundColor(0xcc0a0320);
+        scrim.setOnClickListener(v -> close());
+        root.addView(scrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        FrameLayout safe = new FrameLayout(a);
+        safe.setFitsSystemWindows(true);
+        root.addView(safe, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         frame = new GlowFrame(a);
         int pad = Ui.dp(a, 4);
         frame.setPadding(pad, pad, pad, pad);
@@ -80,86 +95,128 @@ final class Announcement extends Dialog {
         LinearLayout card = Ui.vbox(a);
         card.setGravity(Gravity.CENTER_HORIZONTAL);
         android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable(
-                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xff5a32b8, 0xff2e1065});
-        bg.setCornerRadius(Ui.dp(a, 22));
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xff6a3fd0, 0xff3b1680, 0xff26104f});
+        bg.setCornerRadius(corner);
         card.setBackground(bg);
         card.setClipToOutline(true);
 
         String image = ann.isNull("imageUrl") ? "" : ann.optString("imageUrl", "");
-        ImageView pic = null;
         if (!image.isEmpty()) {
-            pic = new RoundTopImage(a, Ui.dp(a, 22));
+            ImageView pic = new RoundTopImage(a, corner);
             pic.setAdjustViewBounds(true);
             pic.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            pic.setMaxHeight((int) (screenH * 0.45f));
-            pic.setMinimumHeight(Ui.dp(a, 160));
+            pic.setMaxHeight((int) (screenH * 0.38f));
+            pic.setMinimumHeight(Ui.dp(a, 140));
             pic.setBackgroundColor(0x33000000);
             card.addView(pic, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             loadImage(a, image.startsWith("/") ? LudoApp.get().serverUrl() + image : image, pic, width);
+        } else {
+            // No picture: a gold megaphone badge heads the card.
+            Fx.Tile badge = Fx.badge(a, "📢", Fx.YELLOW, 64, null);
+            badge.setClickable(false);
+            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(Ui.dp(a, 64), Ui.dp(a, 68));
+            blp.topMargin = Ui.dp(a, 18);
+            card.addView(badge, blp);
         }
 
         LinearLayout text = Ui.vbox(a);
         text.setGravity(Gravity.CENTER_HORIZONTAL);
-        text.setPadding(Ui.dp(a, 18), Ui.dp(a, 14), Ui.dp(a, 18), Ui.dp(a, 18));
-        Fx.GoldText title = new Fx.GoldText(a, ann.optString("title"), 24);
+        text.setPadding(Ui.dp(a, 18), Ui.dp(a, 12), Ui.dp(a, 18), Ui.dp(a, 18));
+        Fx.GoldText title = new Fx.GoldText(a, ann.optString("title"), small ? 21 : 24);
         title.setGravity(Gravity.CENTER);
         text.addView(title, Ui.lpMatchWrap());
         String body = ann.optString("body", "");
         if (!body.isEmpty()) {
-            TextView t = Ui.text(a, body, 15, Color.WHITE);
+            TextView t = Ui.text(a, body, small ? 14 : 15, 0xfff3eeff);
             t.setGravity(Gravity.CENTER);
-            t.setLineSpacing(0, 1.2f);
-            ScrollView sv = new ScrollView(a);
+            t.setLineSpacing(0, 1.25f);
+            // Long text scrolls inside the card instead of pushing it off the screen.
+            ScrollView sv = new MaxHeightScroll(a, (int) (screenH * (image.isEmpty() ? 0.42f : 0.2f)));
             sv.addView(t);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.topMargin = Ui.dp(a, 8);
             text.addView(sv, lp);
-            if (image.isEmpty()) sv.setMinimumHeight(Ui.dp(a, 40));
         }
-        Fx.Tile ok = new Fx.Tile(a, Fx.GREEN, 16, 5);
-        Fx.GoldText label = Fx.GoldText.label(a, ann.optString("buttonText", "OK").toUpperCase(), 17, 0xff1f6d0a);
+        FrameLayout okBox = new FrameLayout(a);
+        Fx.Tile ok = new Fx.Tile(a, Fx.GREEN, 18, 5);
+        Fx.GoldText label = Fx.GoldText.label(a, ann.optString("buttonText", "OK").toUpperCase(), 18, 0xff1f6d0a);
         label.setGravity(Gravity.CENTER);
         label.setSingleLine(true);
         ok.addView(label, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         ok.setOnClickListener(v -> close());
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(Ui.dp(a, 200), Ui.dp(a, 54));
+        okBox.addView(ok, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // A gleam that sweeps across the button now and then.
+        shine = new Shine(a);
+        okBox.addView(shine, new FrameLayout.LayoutParams(Ui.dp(a, 46), ViewGroup.LayoutParams.MATCH_PARENT));
+        okBox.setClipChildren(true);
+        okBox.setClipToOutline(true);
+        okBox.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override
+            public void getOutline(View v, android.graphics.Outline o) {
+                o.setRoundRect(0, 0, v.getWidth(), v.getHeight() - Ui.dp(v.getContext(), 5), Ui.dp(v.getContext(), 18));
+            }
+        });
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 56));
         blp.topMargin = Ui.dp(a, 16);
-        text.addView(ok, blp);
+        blp.leftMargin = Ui.dp(a, 12);
+        blp.rightMargin = Ui.dp(a, 12);
+        text.addView(okBox, blp);
         card.addView(text, Ui.lpMatchWrap());
-
         frame.addView(card, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
-        flp.topMargin = Ui.dp(a, 16);
-        flp.rightMargin = Ui.dp(a, 8);
-        outer.addView(frame, flp);
+
+        // The card with the close button on its corner; equal room both sides keeps it centred.
+        int edge = Ui.dp(a, 14);
+        FrameLayout holder = new FrameLayout(a);
+        FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL);
+        flp.topMargin = edge;
+        flp.leftMargin = edge;
+        flp.rightMargin = edge;
+        holder.addView(frame, flp);
         View x = Fx.badge(a, "✖", Fx.RED, 38, v -> close());
-        outer.addView(x, new FrameLayout.LayoutParams(Ui.dp(a, 38), Ui.dp(a, 42), Gravity.TOP | Gravity.END));
-        panel = outer;
-        setContentView(outer);
+        holder.addView(x, new FrameLayout.LayoutParams(Ui.dp(a, 38), Ui.dp(a, 42), Gravity.TOP | Gravity.END));
+        panel = holder;
+        safe.addView(holder, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        setContentView(root);
 
         Window w = getWindow();
         if (w != null) {
             w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-            w.setDimAmount(0.7f);
-            w.setLayout(width + Ui.dp(a, 8), ViewGroup.LayoutParams.WRAP_CONTENT);
+            w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         }
     }
 
     @Override
     public void show() {
         super.show();
-        panel.setTranslationY(Ui.dp(getContext(), 220));
-        panel.setScaleX(0.7f);
-        panel.setScaleY(0.7f);
+        scrim.setAlpha(0f);
+        scrim.animate().alpha(1).setDuration(280).start();
+        panel.setTranslationY(Ui.dp(getContext(), 180));
+        panel.setScaleX(0.75f);
+        panel.setScaleY(0.75f);
         panel.setAlpha(0f);
         panel.animate().translationY(0).scaleX(1).scaleY(1).alpha(1).setDuration(520).setInterpolator(new OvershootInterpolator(1.2f)).start();
         frame.start();
+        sweep();
         Sfx s = Sfx.get();
         if (s != null) s.play(Sfx.S.MESSAGE, 0.8f, 1f);
     }
 
+    /** Run the button's gleam across, then again a little later. */
+    private void sweep() {
+        View box = (View) shine.getParent();
+        if (box == null || !isShowing()) return;
+        shine.setTranslationX(-shine.getWidth() - Ui.dp(getContext(), 20));
+        shine.animate().translationX(box.getWidth() + Ui.dp(getContext(), 20)).setStartDelay(900).setDuration(750)
+                .setInterpolator(new DecelerateInterpolator()).withEndAction(this::sweep).start();
+    }
+
+    @Override
+    public void onBackPressed() {
+        close();
+    }
+
     private void close() {
+        scrim.animate().alpha(0).setDuration(220).start();
         panel.animate().translationY(Ui.dp(getContext(), 80)).scaleX(0.85f).scaleY(0.85f).alpha(0).setDuration(200)
                 .setInterpolator(new AccelerateInterpolator()).withEndAction(() -> {
                     if (isShowing()) dismiss();
@@ -169,6 +226,7 @@ final class Announcement extends Dialog {
     @Override
     public void dismiss() {
         frame.stop();
+        shine.animate().cancel();
         super.dismiss();
     }
 
@@ -221,6 +279,44 @@ final class Announcement extends Dialog {
                 });
             }
         });
+    }
+
+    /** A scroll view that grows with its text up to a maximum height. */
+    static final class MaxHeightScroll extends ScrollView {
+        private final int max;
+
+        MaxHeightScroll(Context c, int max) {
+            super(c);
+            this.max = max;
+        }
+
+        @Override
+        protected void onMeasure(int w, int h) {
+            super.onMeasure(w, MeasureSpec.makeMeasureSpec(max, MeasureSpec.AT_MOST));
+        }
+    }
+
+    /** A slanted white gleam (moved across the button). */
+    static final class Shine extends View {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        Shine(Context c) {
+            super(c);
+            setClickable(false);
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            float w = getWidth(), h = getHeight();
+            p.setShader(new android.graphics.LinearGradient(0, 0, w, 0, new int[]{0x00ffffff, 0x88ffffff, 0x00ffffff}, null, android.graphics.Shader.TileMode.CLAMP));
+            Path band = new Path();
+            band.moveTo(w * 0.35f, 0);
+            band.lineTo(w, 0);
+            band.lineTo(w * 0.65f, h);
+            band.lineTo(0, h);
+            band.close();
+            c.drawPath(band, p);
+        }
     }
 
     /** A picture with rounded top corners, to sit flush at the top of the card. */

@@ -179,8 +179,11 @@ final class FriendsTab {
                     t.addView(Ui.text(a, "ID " + p.optString("publicId") + (p.optBoolean("online") ? " · 🟢 online" : ""), 12, Ui.MUTED));
                     row.addView(t, Ui.weight(1));
                     if (p.optBoolean("isFriend")) row.addView(Ui.tag(a, "FRIEND", Ui.SUCCESS));
-                    else if ("outgoing".equals(p.optString("pending"))) row.addView(Ui.tag(a, "SENT", Ui.MUTED));
-                    else row.addView(Ui.smallButton(a, "incoming".equals(p.optString("pending")) ? "Accept" : "Add", "primary",
+                    else if ("outgoing".equals(p.optString("pending")) && !p.isNull("requestId")) {
+                        row.addView(Ui.smallButton(a, "Cancel", "danger", v -> act(p.optString("requestId"), "cancel", "Friend request cancelled")));
+                    } else if (!"incoming".equals(p.optString("pending")) && p.optInt("sendsLeft", 1) <= 0) {
+                        row.addView(Ui.tag(a, "LIMIT", Ui.MUTED));
+                    } else row.addView(Ui.smallButton(a, "incoming".equals(p.optString("pending")) ? "Accept" : "Add", "primary",
                                 v -> sendRequest(p.optString("publicId"))));
                     results.addView(row);
                 }

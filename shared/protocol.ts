@@ -142,6 +142,24 @@ export interface ServerToClientEvents {
   'wallet': (w: { balance: number; totalEarned: number; totalSpent: number }) => void;
   'notify': (n: { id: string; type: string; payload: Record<string, unknown>; createdAt: string; readAt: string | null }) => void;
   'friends:changed': () => void;
+  /** Someone asked to be your friend (a live Accept / Decline popup). */
+  'friend:request': (r: { id: string; player: FriendCard }) => void;
+  /** Your request was accepted: celebrate together. */
+  'friend:accepted': (r: { id: string; player: FriendCard }) => void;
+  /** Your request was declined. */
+  'friend:rejected': (r: { id: string; player: FriendCard }) => void;
+  /** A request to you was withdrawn: close its popup. */
+  'friend:cancelled': (r: { id: string }) => void;
+}
+
+/** A player's public card in the live friend popups. */
+export interface FriendCard {
+  username: string;
+  publicId: string;
+  avatarHue: number;
+  avatarUrl: string | null;
+  frame: string | null;
+  country: string | null;
 }
 
 export const ROOM_CODE_LENGTH = 5;

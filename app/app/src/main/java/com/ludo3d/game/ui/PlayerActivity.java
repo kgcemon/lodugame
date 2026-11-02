@@ -19,6 +19,10 @@ public class PlayerActivity extends BaseActivity {
         super.onCreate(savedInstanceState);
         col = pageWithBack("Player");
         col.addView(Ui.spinner(this));
+        load();
+    }
+
+    private void load() {
         String id = getIntent().getStringExtra("publicId");
         app.api.get("/players/" + android.net.Uri.encode(id == null ? "" : id), new Api.Cb(this) {
             @Override
@@ -59,14 +63,40 @@ public class PlayerActivity extends BaseActivity {
             c.addView(line("Season points", Ui.fmt(s.optLong("seasonPoints"))));
             col.addView(c);
         }
-        if (!p.optString("publicId").equals(app.user != null ? app.user.optString("publicId") : "")) {
-            col.addView(Ui.button(this, "＋ Add friend", "blue", v -> app.api.post("/friends/requests", PlayFlow.obj("player", p.optString("publicId")), new Api.Cb(this) {
-                @Override
-                public void ok(JSONObject r) {
-                    LudoApp.toast(r.optBoolean("accepted") ? "You are now friends!" : "Friend request sent");
-                }
-            })));
+        JSONObject f = p.optJSONObject("friendship");
+        if (f != null) col.addView(friendButton(p, f));
+    }
+
+    /** Add friend; once sent it becomes Cancel; Accept if they asked first; nothing once friends. */
+    private android.view.View friendButton(JSONObject p, JSONObject f) {
+        String pending = f.isNull("pending") ? "" : f.optString("pending");
+        if (f.optBoolean("isFriend")) return Ui.tag(this, "✓ FRIENDS", Ui.SUCCESS);
+        if ("outgoing".equals(pending)) {
+            return Ui.button(this, "✖ Cancel friend request", "danger", v -> respond(f.optString("requestId"), "cancel", "Friend request cancelled", null));
         }
+        if ("incoming".equals(pending)) {
+            return Ui.button(this, "✓ Accept friend request", "ok", v -> respond(f.optString("requestId"), "accept", null, p));
+        }
+        if (f.optInt("sendsLeft", 1) <= 0) return Ui.muted(this, "You can send a friend request only twice.");
+        return Ui.button(this, "＋ Add friend", "blue", v -> app.api.post("/friends/requests", PlayFlow.obj("player", p.optString("publicId")), new Api.Cb(this) {
+            @Override
+            public void ok(JSONObject r) {
+                if (r.optBoolean("accepted")) FriendPopups.celebrate(PlayerActivity.this, p);
+                else LudoApp.toast("Friend request sent 💌");
+                load();
+            }
+        }));
+    }
+
+    private void respond(String id, String action, String done, JSONObject celebrateWith) {
+        app.api.post("/friends/requests/" + id + "/" + action, null, new Api.Cb(this) {
+            @Override
+            public void ok(JSONObject r) {
+                if (done != null) LudoApp.toast(done);
+                if (celebrateWith != null) FriendPopups.celebrate(PlayerActivity.this, celebrateWith);
+                load();
+            }
+        });
     }
 
     private LinearLayout line(String k, String v) {

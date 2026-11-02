@@ -112,6 +112,9 @@ final class PlayerProfile {
         String publicId = seat != null && !seat.isNull("publicId") ? seat.optString("publicId", null) : null;
         if (mine && (publicId == null || publicId.isEmpty()) && a.app.user != null) publicId = a.app.user.optString("publicId", null);
         final String pid = publicId;
+        // Where we stand with this player (friends / request sent / ...), filled once the profile loads.
+        final JSONObject[] friendship = {null};
+        final Runnable[] showFriendship = {() -> {}};
 
         android.app.Dialog dialog = new android.app.Dialog(a);
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
@@ -180,15 +183,16 @@ final class PlayerProfile {
         sub.setSingleLine(true);
         who.addView(sub);
         head.addView(who, Ui.weight(1));
+        TextView add = null;
         if (!bot && !mine && pid != null) {
-            TextView add = Ui.bold(Ui.text(a, "＋👤", 15, Color.WHITE));
+            add = Ui.bold(Ui.text(a, "＋👤", 15, Color.WHITE));
             add.setGravity(Gravity.CENTER);
             int depth = Fx.bevel(add, Fx.GREEN, 10, 3, true);
             add.setPadding(Ui.dp(a, 8), 0, Ui.dp(a, 8), depth);
             add.setContentDescription("Add friend");
-            add.setOnClickListener(v -> addFriend(a, pid));
             head.addView(add, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(a, 38)));
         }
+        final TextView quick = add;
         card.addView(head, Ui.lpMatchWrap());
 
         // ---- a big die in a tile, labelled with the player's level (or BOT)
@@ -244,6 +248,10 @@ final class PlayerProfile {
                 panel.removeAllViews();
                 if (fresh != null) fill(a, panel, heroLabel, fresh, pid);
                 else panel.addView(note(a, "Couldn't load the profile right now."));
+                if (fresh != null && fresh.optJSONObject("friendship") != null) {
+                    friendship[0] = fresh.optJSONObject("friendship");
+                    showFriendship[0].run();
+                }
             });
         }
 
@@ -259,14 +267,39 @@ final class PlayerProfile {
             Ui.margins(wallet, a, 0, 12, 0, 0);
             card.addView(wallet, Ui.lpMatchWrap());
         } else if (!bot && pid != null) {
-            Fx.Tile btn = new Fx.Tile(a, Fx.GREEN, 16, 5);
-            Fx.GoldText l = Fx.GoldText.label(a, "＋ ADD FRIEND", 15, 0xff1f6d0a);
-            l.setGravity(Gravity.CENTER);
-            btn.addView(l, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
-            btn.setOnClickListener(v -> addFriend(a, pid));
+            // Add friend → (sent) Cancel request; Accept when they asked first; nothing once friends.
+            FrameLayout footer = new FrameLayout(a);
             LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 48));
             blp.topMargin = Ui.dp(a, 12);
-            card.addView(btn, blp);
+            card.addView(footer, blp);
+            final String shownName = name;
+            showFriendship[0] = () -> {
+                String st = friendState(friendship[0]);
+                footer.removeAllViews();
+                int[] colors = "outgoing".equals(st) ? Fx.RED : "friend".equals(st) || "limit".equals(st) ? Fx.PURPLE_DARK : Fx.GREEN;
+                int outline = "outgoing".equals(st) ? 0xff8a0d16 : "friend".equals(st) || "limit".equals(st) ? 0xff26104f : 0xff1f6d0a;
+                String label = "outgoing".equals(st) ? "✖ CANCEL REQUEST" : "incoming".equals(st) ? "✓ ACCEPT REQUEST"
+                        : "friend".equals(st) ? "✓ FRIENDS" : "limit".equals(st) ? "REQUEST LIMIT REACHED" : "＋ ADD FRIEND";
+                Fx.Tile btn = new Fx.Tile(a, colors, 16, 5);
+                Fx.GoldText l = Fx.GoldText.label(a, label, 15, outline);
+                l.setGravity(Gravity.CENTER);
+                btn.addView(l, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+                View.OnClickListener act = v -> friendAction(a, pid, shownName, seat, friendship, showFriendship[0]);
+                btn.setOnClickListener(act);
+                footer.addView(btn, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                // A little flip as the button changes.
+                btn.setRotationX(-70);
+                btn.animate().rotationX(0).setDuration(320).setInterpolator(new OvershootInterpolator(1.6f)).start();
+                if (quick != null) {
+                    quick.setText("outgoing".equals(st) ? "✖" : "friend".equals(st) ? "✓" : "limit".equals(st) ? "⛔" : "＋👤");
+                    int d = Fx.bevel(quick, colors, 10, 3, true);
+                    quick.setPadding(Ui.dp(a, 8), 0, Ui.dp(a, 8), d);
+                    quick.setOnClickListener(act);
+                }
+            };
+            JSONObject known = cached(pid);
+            if (known != null) friendship[0] = known.optJSONObject("friendship");
+            showFriendship[0].run();
         }
 
         android.widget.ScrollView sv = new android.widget.ScrollView(a);
@@ -293,13 +326,77 @@ final class PlayerProfile {
         tilt(card);
     }
 
-    private static void addFriend(BaseActivity a, String pid) {
-        a.app.api.post("/friends/requests", PlayFlow.obj("player", pid), new Api.Cb(a) {
-            @Override
-            public void ok(JSONObject r) {
-                LudoApp.toast(r.optBoolean("accepted") ? "You are now friends!" : "Friend request sent");
-            }
-        });
+    /** none / outgoing / incoming / friend / limit (no requests left to send). */
+    private static String friendState(JSONObject f) {
+        if (f == null) return "none";
+        if (f.optBoolean("isFriend")) return "friend";
+        String pending = f.isNull("pending") ? "" : f.optString("pending");
+        if ("outgoing".equals(pending)) return "outgoing";
+        if ("incoming".equals(pending)) return "incoming";
+        return f.optInt("sendsLeft", 1) <= 0 ? "limit" : "none";
+    }
+
+    /** What the friend button does in its current state; updates the state and redraws. */
+    private static void friendAction(BaseActivity a, String pid, String name, JSONObject seat, JSONObject[] f, Runnable redraw) {
+        String st = friendState(f[0]);
+        JSONObject who = cached(pid) != null ? cached(pid) : seat != null ? seat : PlayFlow.obj("username", name);
+        switch (st) {
+            case "friend":
+                LudoApp.toast("You're already friends");
+                return;
+            case "limit":
+                LudoApp.toast("You can send a friend request only twice");
+                return;
+            case "outgoing":
+                a.app.api.post("/friends/requests/" + f[0].optString("requestId") + "/cancel", null, new Api.Cb(a) {
+                    @Override
+                    public void ok(JSONObject r) {
+                        f[0] = r.optJSONObject("friendship");
+                        LudoApp.toast("Friend request cancelled");
+                        redraw.run();
+                    }
+                });
+                return;
+            case "incoming":
+                a.app.api.post("/friends/requests/" + f[0].optString("requestId") + "/accept", null, new Api.Cb(a) {
+                    @Override
+                    public void ok(JSONObject r) {
+                        f[0] = PlayFlow.obj("isFriend", true);
+                        redraw.run();
+                        FriendPopups.celebrate(a, who);
+                    }
+                });
+                return;
+            default:
+                a.app.api.post("/friends/requests", PlayFlow.obj("player", pid), new Api.Cb(a) {
+                    @Override
+                    public void ok(JSONObject r) {
+                        if (r.optBoolean("accepted")) {
+                            f[0] = PlayFlow.obj("isFriend", true);
+                            FriendPopups.celebrate(a, who);
+                        } else {
+                            JSONObject out = new JSONObject();
+                            try {
+                                out.put("pending", "outgoing").put("requestId", r.optString("requestId")).put("sendsLeft", r.optInt("sendsLeft"));
+                            } catch (Exception ignored) {
+                            }
+                            f[0] = out;
+                            Sfx.get().play(Sfx.S.MESSAGE, 0.8f, 1.2f);
+                            LudoApp.toast("Friend request sent 💌");
+                        }
+                        redraw.run();
+                    }
+
+                    @Override
+                    public void err(Api.Error e) {
+                        if ("FRIEND_REQUEST_LIMIT".equals(e.code)) {
+                            f[0] = PlayFlow.obj("sendsLeft", 0);
+                            redraw.run();
+                        }
+                        LudoApp.toast(e.message);
+                    }
+                });
+        }
     }
 
     /** Info fields, the STATS section and badges once the profile is here. */

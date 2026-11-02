@@ -171,6 +171,10 @@ public final class GameSocket {
         });
         s.on("notify", a -> fire("notify", obj(a)));
         s.on("friends:changed", a -> fire("friends:changed", null));
+        s.on("friend:request", a -> fire("friend:request", obj(a)));
+        s.on("friend:accepted", a -> fire("friend:accepted", obj(a)));
+        s.on("friend:rejected", a -> fire("friend:rejected", obj(a)));
+        s.on("friend:cancelled", a -> fire("friend:cancelled", obj(a)));
         s.connect();
     }
 

@@ -287,7 +287,11 @@ public class GameActivity extends BaseActivity {
             renderer.applyUpdate(next, events, contiguous);
             renderer.setHighlight(highlight);
         });
-        if (!wasMine && isMyTurn(next) && "roll".equals(next.phase)) gl.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        // The dice came to me: buzz the phone (online only; pass-and-play is one phone anyway).
+        if (!wasMine && isMyTurn(next) && "roll".equals(next.phase)) {
+            if (local == null) com.ludo3d.game.audio.Haptics.turn(this, app.prefs);
+            else gl.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        }
         renderChips();
         renderStatus();
         if ("over".equals(next.phase)) {
