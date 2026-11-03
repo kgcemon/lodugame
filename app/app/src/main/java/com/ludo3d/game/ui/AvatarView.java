@@ -47,7 +47,7 @@ public class AvatarView extends TextView {
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
     private final Matrix m = new Matrix();
-    private final int color;
+    private int color;
     private final float textPx;
     private String url;
     private Bitmap photo;
@@ -58,6 +58,13 @@ public class AvatarView extends TextView {
         this.color = color;
         this.textPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, textSp, c.getResources().getDisplayMetrics());
         setWillNotDraw(false);
+    }
+
+    /** The circle's colour behind the initial (e.g. while picking an avatar colour). */
+    public AvatarView color(int c) {
+        color = c;
+        invalidate();
+        return this;
     }
 
     /** Show this picture (https URL) instead of the initial; null or empty keeps the initial. */

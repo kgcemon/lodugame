@@ -31,7 +31,7 @@ final class ProfileTab {
         JSONObject u = app.user;
         LinearLayout head = Ui.vbox(a);
         head.setGravity(Gravity.CENTER_HORIZONTAL);
-        TextView av = Ui.avatar(a, u, u.optString("username"), 84);
+        AvatarView av = Ui.avatar(a, u, u.optString("username"), 84);
         head.addView(av);
         TextView name = Ui.title(a, Flags.named(u, u.optString("fullName")));
         name.setGravity(Gravity.CENTER);
@@ -87,7 +87,7 @@ final class ProfileTab {
             @Override
             public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
                 hue[0] = p;
-                ((android.graphics.drawable.GradientDrawable) av.getBackground()).setColor(Color.HSVToColor(new float[]{p, 0.62f, 0.78f}));
+                av.color(Color.HSVToColor(new float[]{p, 0.62f, 0.78f}));
             }
 
             @Override
