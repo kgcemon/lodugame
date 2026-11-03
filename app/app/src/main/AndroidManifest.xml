@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Voice chat with friends in a room (asked the first time the mic is turned on). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Call-style audio while the mic is on, so the phone's echo canceller works. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
 
     <!-- Plain http only in debug builds, for a test server (e.g. npm run dev on your PC); release

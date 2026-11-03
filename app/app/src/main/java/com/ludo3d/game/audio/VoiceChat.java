@@ -1,7 +1,10 @@
 package com.ludo3d.game.audio;
 
+import android.content.Context;
 import android.media.AudioAttributes;
+import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaCodec;
@@ -9,7 +12,9 @@ import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.media.MediaRecorder;
 import android.media.audiofx.AcousticEchoCanceler;
+import android.media.audiofx.AutomaticGainControl;
 import android.media.audiofx.NoiseSuppressor;
+import android.os.Build;
 import android.util.Log;
 
 import com.ludo3d.game.LudoApp;
@@ -33,9 +38,15 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Live voice with friends in the same room. The microphone is off until the player turns
- * it on; speech is compressed to AAC (16 kHz mono, ~24 kbps) and sent to the server in
+ * it on; speech is compressed to AAC (16 kHz mono, ~16 kbps) and sent to the server in
  * packets of about a tenth of a second, which forwards them to the player's friends in the
  * room only. Each friend's voice plays through its own decoder; any friend can be muted.
+ *
+ * No echo: while the mic is on the phone is in call mode and friends play on the call
+ * stream, so the phone's echo canceller can take their voices back out of the mic. On top
+ * of that, a gate sends only speech (silence costs nothing on a weak network) and needs a
+ * louder voice while a friend is talking, so what leaks from the speaker is never sent
+ * back. Playback keeps a small jitter buffer so a bumpy network doesn't chop words.
  *
  * Packet: [frame count u8] then per frame [length u16, big-endian][AAC frame].
  */
@@ -51,6 +62,15 @@ public final class VoiceChat {
     /** AudioSpecificConfig for AAC-LC, 16 kHz, mono (what the encoder produces). */
     private static final byte[] CSD = {0x14, 0x08};
     private static final long PACKET_MS = 100;
+    private static final int BIT_RATE = 16_000;
+    /** Mic loudness that counts as speech, normally and while a friend's voice is playing. */
+    private static final int GATE = 700, GATE_ECHO = 2200;
+    /** Keep sending this long after the last word, so endings aren't clipped. */
+    private static final long GATE_HOLD_MS = 450;
+    /** A friend's voice counts as "playing" this long after a loud bit came out. */
+    private static final long ECHO_TAIL_MS = 300;
+    /** After a pause, wait up to this long for a second packet before playing (jitter). */
+    private static final long PREBUFFER_MS = 120;
     private static final String PREF_MUTED = "voice_muted";
 
     private static VoiceChat instance;
@@ -69,6 +89,10 @@ public final class VoiceChat {
     private final Set<Listener> listeners = ConcurrentHashMap.newKeySet();
     private volatile Capture capture;
     private volatile long lastSpoke;
+    /** Last time a friend's voice came out of the speaker loudly (for the echo gate). */
+    private volatile long lastPlayedLoud;
+    /** Audio mode to put back when the mic goes off (-1: not in call mode). */
+    private int prevMode = -1;
 
     private VoiceChat(LudoApp app) {
         this.app = app;
@@ -163,6 +187,7 @@ public final class VoiceChat {
     public synchronized void setMic(boolean on) {
         if (on == micOn()) return;
         if (on) {
+            callMode(true);
             Capture c = new Capture();
             capture = c;
             c.start();
@@ -170,8 +195,50 @@ public final class VoiceChat {
             Capture c = capture;
             capture = null;
             if (c != null) c.running = false;
+            callMode(false);
         }
         changed();
+    }
+
+    /**
+     * Call mode while the mic is on: the echo canceller only knows about sound on the call
+     * stream. Sound stays on the loudspeaker unless a headset is plugged in.
+     */
+    private synchronized void callMode(boolean on) {
+        AudioManager am = (AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return;
+        try {
+            if (on && prevMode < 0) {
+                prevMode = am.getMode();
+                am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+                boolean headset = false;
+                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                    int t = d.getType();
+                    if (t == AudioDeviceInfo.TYPE_WIRED_HEADSET || t == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+                            || t == AudioDeviceInfo.TYPE_USB_HEADSET || t == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                            || t == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) headset = true;
+                }
+                if (!headset) {
+                    if (Build.VERSION.SDK_INT >= 31) {
+                        for (AudioDeviceInfo d : am.getAvailableCommunicationDevices()) {
+                            if (d.getType() == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+                                am.setCommunicationDevice(d);
+                                break;
+                            }
+                        }
+                    } else {
+                        am.setSpeakerphoneOn(true);
+                    }
+                }
+            } else if (!on && prevMode >= 0) {
+                if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice();
+                else am.setSpeakerphoneOn(false);
+                am.setMode(prevMode);
+                prevMode = -1;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "audio mode", e);
+        }
     }
 
     /** Leaving the room: mic off, stop every voice. */
@@ -264,6 +331,7 @@ public final class VoiceChat {
             MediaCodec enc = null;
             AcousticEchoCanceler aec = null;
             NoiseSuppressor ns = null;
+            AutomaticGainControl agc = null;
             try {
                 int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
                 rec = new AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, RATE, AudioFormat.CHANNEL_IN_MONO,
@@ -278,9 +346,13 @@ public final class VoiceChat {
                     ns = NoiseSuppressor.create(rec.getAudioSessionId());
                     if (ns != null) ns.setEnabled(true);
                 }
+                if (AutomaticGainControl.isAvailable()) {
+                    agc = AutomaticGainControl.create(rec.getAudioSessionId());
+                    if (agc != null) agc.setEnabled(true);
+                }
                 MediaFormat f = MediaFormat.createAudioFormat(AAC, RATE, 1);
                 f.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
-                f.setInteger(MediaFormat.KEY_BIT_RATE, 24_000);
+                f.setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE);
                 f.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4096);
                 enc = MediaCodec.createEncoderByType(AAC);
                 enc.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -300,16 +372,22 @@ public final class VoiceChat {
                             n = rec.read(buf, Math.min(buf.remaining(), 1280));
                         }
                         if (n > 0) {
-                            if (level(buf, n) > 900) lastSpoke = System.currentTimeMillis();
+                            // While a friend's voice is coming out of the speaker, only a
+                            // clearly louder (nearer) voice opens the gate: never their echo.
+                            long now = System.currentTimeMillis();
+                            int gate = now - lastPlayedLoud < ECHO_TAIL_MS ? GATE_ECHO : GATE;
+                            if (level(buf, n) > gate) lastSpoke = now;
                             enc.queueInputBuffer(in, 0, n, pts, 0);
                             pts += n / 2 * 1_000_000L / RATE;
                         } else {
                             enc.queueInputBuffer(in, 0, 0, pts, 0);
                         }
                     }
+                    // Silence (and echo) is still encoded, to keep the encoder warm, but not sent.
+                    boolean open = System.currentTimeMillis() - lastSpoke < GATE_HOLD_MS;
                     int out;
                     while ((out = enc.dequeueOutputBuffer(info, 0)) >= 0) {
-                        if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && info.size > 0) {
+                        if (open && (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && info.size > 0) {
                             ByteBuffer ob = enc.getOutputBuffer(out);
                             if (ob != null) {
                                 byte[] fr = new byte[info.size];
@@ -331,6 +409,7 @@ public final class VoiceChat {
                 Log.w(TAG, "microphone stopped", e);
                 if (capture == this) {
                     capture = null;
+                    callMode(false);
                     changed();
                 }
             } finally {
@@ -350,6 +429,7 @@ public final class VoiceChat {
                 }
                 if (aec != null) aec.release();
                 if (ns != null) ns.release();
+                if (agc != null) agc.release();
             }
         }
 
@@ -384,7 +464,7 @@ public final class VoiceChat {
     }
 
     /** Decodes and plays one friend's voice. */
-    private static final class Player extends Thread {
+    private final class Player extends Thread {
         volatile boolean running = true;
         private final LinkedBlockingQueue<byte[]> queue = new LinkedBlockingQueue<>();
 
@@ -412,7 +492,8 @@ public final class VoiceChat {
                 int min = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
                 track = new AudioTrack.Builder()
                         .setAudioAttributes(new AudioAttributes.Builder()
-                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                // The call stream: the echo canceller removes it from the mic.
+                                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                                 .build())
                         .setAudioFormat(new AudioFormat.Builder()
@@ -427,10 +508,26 @@ public final class VoiceChat {
                 MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
                 long pts = 0;
                 byte[] pcm = new byte[8192];
+                boolean idle = true;
+                List<byte[]> batch = new ArrayList<>();
                 while (running) {
-                    byte[] packet = queue.poll(400, TimeUnit.MILLISECONDS);
-                    if (packet == null) continue;
-                    for (byte[] frame : unpack(packet)) {
+                    byte[] packet = queue.poll(250, TimeUnit.MILLISECONDS);
+                    if (packet == null) {
+                        idle = true;
+                        continue;
+                    }
+                    batch.clear();
+                    batch.add(packet);
+                    if (idle) {
+                        // First words after a pause: hold back a moment so a late packet
+                        // doesn't leave a hole in the middle of them.
+                        byte[] next = queue.poll(PREBUFFER_MS, TimeUnit.MILLISECONDS);
+                        if (next != null) batch.add(next);
+                        idle = false;
+                    }
+                    List<byte[]> frames = new ArrayList<>();
+                    for (byte[] b : batch) frames.addAll(unpack(b));
+                    for (byte[] frame : frames) {
                         int in = dec.dequeueInputBuffer(20_000);
                         if (in < 0) continue;
                         ByteBuffer ib = dec.getInputBuffer(in);
@@ -446,6 +543,7 @@ public final class VoiceChat {
                                 if (pcm.length < info.size) pcm = new byte[info.size];
                                 ob.position(info.offset);
                                 ob.get(pcm, 0, info.size);
+                                if (loud(pcm, info.size)) lastPlayedLoud = System.currentTimeMillis();
                                 track.write(pcm, 0, info.size);
                             }
                             dec.releaseOutputBuffer(out, false);
@@ -472,6 +570,18 @@ public final class VoiceChat {
                 } catch (Exception ignored) {
                 }
             }
+        }
+
+        /** Decoded speech (16-bit little-endian) loud enough to echo into a mic. */
+        private boolean loud(byte[] pcm, int size) {
+            long sum = 0;
+            int count = 0;
+            for (int i = 0; i + 1 < size; i += 16) {
+                int v = (short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8));
+                sum += (long) v * v;
+                count++;
+            }
+            return count > 0 && Math.sqrt(sum / (double) count) > 400;
         }
     }
 }
