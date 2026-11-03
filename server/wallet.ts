@@ -16,7 +16,9 @@ export type TxType =
   | 'match_refund'
   | 'daily_bonus'
   | 'referral_reward'
-  | 'admin_adjustment';
+  | 'admin_adjustment'
+  /** Coins spent in the shop (boards). */
+  | 'shop_purchase';
 
 export interface WalletTxRow {
   id: string;

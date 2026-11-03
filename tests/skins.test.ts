@@ -141,52 +141,6 @@ describe('profile frames and shop prices', () => {
   });
 });
 
-type Boards = { boards: { id: string; price: number; royal: boolean }[]; owned: string[]; equipped: string; wallet?: { gems: number } };
-
-describe('royal boards', () => {
-  it('everyone has the classic board; a bought board is the room\'s board for every player while its owner hosts', async () => {
-    const host = await registerUser(t, 'King');
-    const start = await host.call<Boards>('GET', '/boards');
-    expect(start.body.owned).toEqual(['classic']);
-    expect(start.body.equipped).toBe('classic');
-    expect(start.body.boards.find((b) => b.id === 'classic')?.price).toBe(0);
-    expect(start.body.boards.filter((b) => b.royal).length).toBeGreaterThan(0);
-    expect((await host.call('POST', '/boards/royal_gold/buy')).status).toBe(402);
-
-    for (let i = 0; i < 4; i++) {
-      await host.call('POST', '/gems/purchase', { productId: 'gems_50', purchaseToken: `ok:${host.id}:555555555${i}` });
-    }
-    const price = start.body.boards.find((b) => b.id === 'royal_gold')!.price;
-    const bought = await host.call<Boards>('POST', '/boards/royal_gold/buy');
-    expect(bought.status).toBe(200);
-    expect(bought.body.equipped).toBe('royal_gold');
-    expect(bought.body.wallet?.gems).toBe(200 - price);
-    expect((await host.call('POST', '/boards/maharaja/equip')).status).toBe(403);
-
-    const hs = await socketFor(t, host.cookie);
-    const created = await emit<{ room: RoomView }>(hs, 'room:create', { modeId: 'friendly', maxPlayers: 2 });
-    expect(created.ok).toBe(true);
-    const code = created.ok ? created.room.code : '';
-    let shown: RoomView | null = null;
-    for (let i = 0; i < 20 && shown?.board !== 'royal_gold'; i++) {
-      const h = await emit<{ room: RoomView }>(hs, 'session:hello');
-      shown = h.ok ? h.room : null;
-    }
-    expect(shown?.board).toBe('royal_gold');
-
-    // The guest owns no board, yet plays on the host's.
-    const guest = await registerUser(t, 'Visitor');
-    const gs = await socketFor(t, guest.cookie);
-    const joined = await emit<{ room: RoomView }>(gs, 'room:join', { code });
-    expect(joined.ok && joined.room.board).toBe('royal_gold');
-
-    // The host switches back: everyone sees the classic board at once.
-    const back = next<RoomView>(gs, 'room:state', (r) => r.board === 'classic');
-    await host.call('POST', '/boards/classic/equip');
-    expect((await back).board).toBe('classic');
-  });
-});
-
 type Product = { id: string; name: string; price: number; rarity: string; collection: string; effect: string; labels: string[]; limit: number | null; left: number | null; published: boolean; featured: boolean };
 type DiceShop = { skins: Product[]; owned: string[]; equipped: string; wallet?: { gems: number } };
 

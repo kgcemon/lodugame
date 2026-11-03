@@ -181,6 +181,7 @@ public class GameActivity extends BaseActivity {
         onGl(() -> renderer.setMyColor(color));
         String board = boardId();
         onGl(() -> renderer.setBoard(board));
+        syncAmbient(board);
         syncDiceLooks();
         // Animations left over from before the pause would replay old rolls and their sounds.
         onGl(renderer::skipAnimations);
@@ -227,6 +228,7 @@ public class GameActivity extends BaseActivity {
                     // The host may have put on another board.
                     String board = room.optString("board", null);
                     onGl(() -> renderer.setBoard(board));
+                    syncAmbient(board);
                     syncDiceLooks();
                     renderChips();
                 }
@@ -331,6 +333,21 @@ public class GameActivity extends BaseActivity {
     private boolean isMyTurn(GameState s) {
         // Offline, every seat is played on this phone.
         return s != null && !"over".equals(s.phase) && (local != null || s.currentPlayer().color.equals(myColor()));
+    }
+
+    private BoardAmbient ambientView;
+    private String ambientKind = "none";
+
+    /** The board's ambient effect over it (hearts, petals, stars...), unless turned off in Settings. */
+    private void syncAmbient(String boardId) {
+        String kind = BoardAmbient.enabled() ? com.ludo3d.game.gl.BoardThemes.get(boardId).ambient : "none";
+        if (kind.equals(ambientKind) || boardArea == null) return;
+        ambientKind = kind;
+        if (ambientView != null) boardArea.removeView(ambientView);
+        ambientView = null;
+        if (!BoardAmbient.has(kind)) return;
+        ambientView = new BoardAmbient(this, kind);
+        boardArea.addView(ambientView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
     /** Tell the 3D board which die each colour throws (each player's own dice skin). */

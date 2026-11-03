@@ -4,6 +4,8 @@ import { DICE_SKINS } from '../shared/skins';
 import { PROFILE_FRAMES } from '../shared/frames';
 import { BOARDS } from '../shared/boards';
 import { validateDiceOverrides, type DiceOverride } from './dice';
+import { useCustomBoards, validateBoardOverrides, validateCustomBoards, type BoardOverride } from './boards';
+import type { BoardTheme } from '../shared/boards';
 
 /** Trusted game configuration, stored in game_settings and editable by administrators. */
 
@@ -31,6 +33,9 @@ export interface GameSettings {
   shopPrices: Record<string, number>;
   /** The administrator's changes to dice products (name, rarity, effect, publishing, featuring, stock). */
   diceProducts: Record<string, DiceOverride>;
+  /** The administrator's changes to catalogue boards, and boards they created. */
+  boardProducts: Record<string, BoardOverride>;
+  boardCustom: BoardTheme[];
 }
 
 /** Every shop item at its catalogue price: what the shop costs until an administrator changes it. */
@@ -61,6 +66,8 @@ const KEYS: Record<keyof GameSettings, string> = {
   modes: 'match_modes',
   shopPrices: 'shop_prices',
   diceProducts: 'dice_products',
+  boardProducts: 'board_products',
+  boardCustom: 'board_custom',
 };
 
 export function payoutPolicy(s: Pick<GameSettings, 'payoutMultiplier'>): string {
@@ -123,7 +130,10 @@ export class Settings {
       // Stored prices over the catalogue's, so items added later start at their default.
       shopPrices: { ...defaultShopPrices(), ...((get('shopPrices') as Record<string, number> | undefined) ?? {}) },
       diceProducts: (get('diceProducts') as Record<string, DiceOverride> | undefined) ?? {},
+      boardProducts: (get('boardProducts') as Record<string, BoardOverride> | undefined) ?? {},
+      boardCustom: (get('boardCustom') as BoardTheme[] | undefined) ?? [],
     };
+    useCustomBoards(this.cache.boardCustom);
     return this.cache;
   }
 
@@ -162,6 +172,8 @@ export class Settings {
     if (patch.modes !== undefined) next.modes = validateModes(patch.modes, cur.modes);
     if (patch.shopPrices !== undefined) next.shopPrices = validateShopPrices(patch.shopPrices, cur.shopPrices);
     if (patch.diceProducts !== undefined) next.diceProducts = validateDiceOverrides(patch.diceProducts, cur.diceProducts);
+    if (patch.boardProducts !== undefined) next.boardProducts = validateBoardOverrides(patch.boardProducts, cur.boardProducts);
+    if (patch.boardCustom !== undefined) next.boardCustom = validateCustomBoards(patch.boardCustom);
 
     await this.db.tx(async (q: Queryable) => {
       for (const k of Object.keys(KEYS) as (keyof GameSettings)[]) {
@@ -178,6 +190,7 @@ export class Settings {
       ]);
     });
     this.cache = next;
+    useCustomBoards(next.boardCustom);
     return next;
   }
 }

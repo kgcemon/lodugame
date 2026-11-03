@@ -100,6 +100,8 @@ interface Seat {
 interface Room {
   code: string;
   hostPid: string | null;
+  /** The board this match is played on: the host's when it started, locked until it ends. */
+  matchBoard?: string;
   isPublic: boolean;
   quick: boolean;
   mode: MatchMode;
@@ -197,7 +199,7 @@ export class RoomManager {
       mode: { id: room.mode.id, name: room.mode.name },
       entryFee: room.entryFee,
       payoutMultiplier: room.payoutMultiplier,
-      board: room.seats.find((s) => s.playerId !== null && s.playerId === room.hostPid)?.board ?? DEFAULT_BOARD,
+      board: room.status !== 'lobby' && room.matchBoard ? room.matchBoard : this.hostBoard(room),
       you: pid ? room.seats.findIndex((s) => s.playerId === pid) : -1,
       waitMsLeft: room.waitUntil ? Math.max(0, room.waitUntil - Date.now()) : null,
       seats: room.seats.map((s, i) => ({
@@ -217,6 +219,11 @@ export class RoomManager {
         country: s.country,
       })),
     };
+  }
+
+  /** The host's board (it is only ever one they own: the server looked it up from their profile). */
+  private hostBoard(room: Room): string {
+    return room.seats.find((s) => s.playerId !== null && s.playerId === room.hostPid)?.board ?? DEFAULT_BOARD;
   }
 
   preview(code: unknown): RoomPreview {
@@ -666,6 +673,7 @@ export class RoomManager {
     room.entryFee = info.entryFee;
     room.payoutMultiplier = info.payoutMultiplier;
     room.status = 'lobby';
+    room.matchBoard = undefined;
     room.game = null;
     room.deadline = null;
     if (room.timer) clearTimeout(room.timer);
@@ -713,6 +721,9 @@ export class RoomManager {
     if (!this.rooms.has(room.code)) return;
     room.game = createGame(room.seats.map((s) => ({ color: s.color, name: s.name, kind: s.kind, aiLevel: s.aiLevel })), { teams: room.teams });
     room.status = 'playing';
+    // Lock the board: a host changing boards (or leaving) mid-match changes nothing, and
+    // anyone reconnecting gets the same one.
+    room.matchBoard = this.hostBoard(room);
     room.lastEvents = [];
     room.rerollable = null;
     for (const s of room.seats) s.rerolls = 0;

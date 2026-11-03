@@ -197,6 +197,7 @@ const TX_LABEL: Record<string, string> = {
   daily_bonus: 'Daily Bonus',
   referral_reward: 'Referral Reward',
   admin_adjustment: 'Administrator Adjustment',
+  shop_purchase: 'Shop Purchase',
 };
 
 export function WalletPage() {

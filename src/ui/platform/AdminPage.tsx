@@ -4,12 +4,12 @@ import { useGame } from '../../store/game';
 import { Avatar, Button, Segmented, Toggle } from '../common';
 import { EFFECTS, RARITIES } from '../../../shared/skins';
 import { PROFILE_FRAMES } from '../../../shared/frames';
-import { BOARDS, DEFAULT_BOARD } from '../../../shared/boards';
+import { BOARD_AMBIENTS, BOARD_COLLECTIONS, BOARD_DECORS, BOARD_EMBLEMS, BOARD_PATTERNS, BOARD_RARITIES } from '../../../shared/boards';
 import { Card, Confirm, Empty, ErrorNote, PageTitle, Spinner, useFetch } from './kit';
 
 /** Administrator tools. Every endpoint re-checks the admin role on the server. */
 
-type Tab = 'overview' | 'users' | 'transactions' | 'matches' | 'disputes' | 'popups' | 'dice' | 'settings' | 'audit';
+type Tab = 'overview' | 'users' | 'transactions' | 'matches' | 'disputes' | 'popups' | 'dice' | 'boards' | 'settings' | 'audit';
 
 type Row = Record<string, string | number | boolean | null>;
 
@@ -613,9 +613,9 @@ interface AdminSettings {
   shopPrices: Record<string, number>;
 }
 
-/** Diamond prices of frames and boards (dice are priced in the Dice tab; the classic board is always free). */
+/** Diamond prices of profile frames (dice and boards are priced in their own tabs). */
 function ShopPrices({ prices, onChange }: { prices: Record<string, number>; onChange: (p: Record<string, number>) => void }) {
-  const group = (title: string, kind: 'dice' | 'frame' | 'board', items: { id: string; name: string }[]) => (
+  const group = (title: string, kind: 'frame', items: { id: string; name: string }[]) => (
     <>
       <h3 className="sub-title">{title}</h3>
       <div className="mode-edit glass shop-prices">
@@ -637,8 +637,7 @@ function ShopPrices({ prices, onChange }: { prices: Record<string, number>; onCh
   return (
     <>
       {group('Shop · profile frame prices (💎 diamonds)', 'frame', PROFILE_FRAMES)}
-      {group('Shop · royal board prices (💎 diamonds)', 'board', BOARDS.filter((b) => b.id !== DEFAULT_BOARD))}
-      <p className="hint">0 makes an item free. Players who already own an item keep it when its price changes. Dice prices are in the Dice tab.</p>
+      <p className="hint">0 makes an item free. Players who already own an item keep it when its price changes. Dice and board prices are in their own tabs.</p>
     </>
   );
 }
@@ -801,6 +800,225 @@ function DiceProducts() {
   );
 }
 
+type BoardRow = {
+  id: string;
+  name: string;
+  price: number;
+  rarity: string;
+  collection: string;
+  badge?: string;
+  blurb: string;
+  published: boolean;
+  featured: boolean;
+  custom: boolean;
+  labels: string[];
+  added: string;
+  look: Record<string, unknown> & { emblem: string; pattern: string; decor: string; ambient: string; panel: string; base: string; sky: string };
+  sales: { owners: number; recent: number; coins: number };
+};
+
+const BOARD_LOOK_KEYS = ['emblem', 'pattern', 'decor', 'ambient'] as const;
+
+/**
+ * Boards: edit any board (name, coin price, rarity, collection, ribbon, on sale, featured and
+ * its emblem, pattern, decorations and ambient effect), see real sales, and create new boards
+ * from an existing one's look with new colours and ornaments.
+ */
+function BoardProducts() {
+  const [rows, setRows] = useState<BoardRow[] | null>(null);
+  const [orig, setOrig] = useState<Record<string, BoardRow>>({});
+  const [totals, setTotals] = useState<{ owners: number; recent: number; coins: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState({ id: 'custom_', name: '', price: 3000, rarity: 'epic', collection: 'couple', template: 'love_story', panel: '#fff1f6', base: '#f6c6dc', sky: '#4a1452', emblem: 'heart', pattern: 'hearts', ambient: 'hearts', badge: '' });
+  const load = () =>
+    get<{ products: BoardRow[]; totals: { owners: number; recent: number; coins: number } }>('/admin/boards').then(
+      (r) => {
+        setRows(r.products);
+        setTotals(r.totals);
+        setOrig(Object.fromEntries(r.products.map((p) => [p.id, p])));
+      },
+      (e: Error) => setError(e.message),
+    );
+  useEffect(() => {
+    load();
+  }, []);
+  if (!rows) return error ? <ErrorNote error={error} /> : <Spinner />;
+  const upd = (id: string, patch: Partial<BoardRow>) => setRows(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const updLook = (id: string, k: string, v: string) => setRows(rows.map((r) => (r.id === id ? { ...r, look: { ...r.look, [k]: v } } : r)));
+  const customOut = (list: BoardRow[]) =>
+    list.filter((r) => r.custom).map((r) => ({ id: r.id, name: r.name, price: r.price, rarity: r.rarity, collection: r.collection, badge: r.badge, blurb: r.blurb, added: r.added, look: r.look }));
+  const save = async (extraCustom?: ReturnType<typeof customOut>) => {
+    setBusy(true);
+    setError(null);
+    const boardProducts: Record<string, unknown> = {};
+    const shopPrices: Record<string, number> = {};
+    for (const r of rows.filter((x) => !x.custom)) {
+      const o = orig[r.id];
+      const ch: Record<string, unknown> = {};
+      for (const k of ['name', 'rarity', 'collection', 'published', 'featured'] as const) if (r[k] !== o[k]) ch[k] = r[k];
+      if ((r.badge ?? '') !== (o.badge ?? '')) ch.badge = r.badge ? r.badge : null;
+      const look: Record<string, unknown> = {};
+      for (const k of [...BOARD_LOOK_KEYS, 'panel', 'base', 'sky'] as const) if (r.look[k] !== o.look[k]) look[k] = r.look[k];
+      if (Object.keys(look).length) ch.look = look;
+      if (Object.keys(ch).length) boardProducts[r.id] = ch;
+      if (r.price !== o.price && r.id !== 'classic') shopPrices[`board:${r.id}`] = r.price;
+    }
+    try {
+      await api('PUT', '/admin/settings', { boardProducts, shopPrices, boardCustom: extraCustom ?? customOut(rows) });
+      toast('Boards saved — the shop shows the changes right away');
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const create = () => {
+    const tpl = rows.find((r) => r.id === draft.template);
+    if (!tpl) return setError('Pick a board to start from');
+    const made = {
+      id: draft.id.trim(),
+      name: draft.name.trim(),
+      price: draft.price,
+      rarity: draft.rarity,
+      collection: draft.collection,
+      badge: draft.badge.trim() || undefined,
+      blurb: `${draft.name.trim()} — a LudoX special board.`,
+      added: new Date().toISOString().slice(0, 10),
+      look: { ...tpl.look, panel: draft.panel, base: draft.base, sky: draft.sky, emblem: draft.emblem, pattern: draft.pattern, ambient: draft.ambient },
+    };
+    save([...customOut(rows), made]);
+  };
+  const remove = (id: string) => save(customOut(rows.filter((r) => r.id !== id)));
+  const sel = (value: string, list: readonly string[], on: (v: string) => void, label: string) => (
+    <select className="input" aria-label={label} value={value} onChange={(e) => on(e.target.value)}>
+      {list.map((x) => (
+        <option key={x} value={x}>
+          {x}
+        </option>
+      ))}
+    </select>
+  );
+  return (
+    <Card>
+      {totals && (
+        <p className="hint">
+          <b>{fmt(totals.owners)}</b> boards owned by players · <b>{fmt(totals.recent)}</b> bought in the last 30 days · <b>🪙 {fmt(totals.coins)}</b> coins spent on boards
+        </p>
+      )}
+      <p className="hint">
+        Boards are paid in coins. A room plays on its host's board (locked for the match); opponents never pay for it. Hidden boards leave the shop; owners keep them.
+        Every board keeps the same paths and rules — only the look changes. Labels follow real data (NEW for 30 days, BEST SELLER / MOST POPULAR from sales).
+      </p>
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Board</th>
+              <th>Price 🪙</th>
+              <th>Rarity</th>
+              <th>Collection</th>
+              <th>Emblem</th>
+              <th>Pattern</th>
+              <th>Decor</th>
+              <th>Effect</th>
+              <th>Colours</th>
+              <th>On sale</th>
+              <th>Featured</th>
+              <th>Owners</th>
+              <th>30 days</th>
+              <th>🪙 earned</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td>
+                  <input className="input" value={r.name} aria-label={`Name of ${r.id}`} onChange={(e) => upd(r.id, { name: e.target.value })} />
+                  <input className="input" value={r.badge ?? ''} placeholder="Ribbon (optional)" aria-label={`Ribbon of ${r.id}`} onChange={(e) => upd(r.id, { badge: e.target.value })} />
+                  <div className="small muted">
+                    {r.id}
+                    {r.custom ? ' · custom' : ''}
+                    {r.labels.length ? ` · ${r.labels.join(', ')}` : ''}
+                  </div>
+                  {r.custom && (
+                    <Button variant="ghost" onClick={() => remove(r.id)} disabled={busy}>
+                      Delete
+                    </Button>
+                  )}
+                </td>
+                <td>
+                  <input className="input" type="number" min={0} disabled={r.id === 'classic'} aria-label={`Price of ${r.id}`} value={r.price} onChange={(e) => upd(r.id, { price: Number(e.target.value) })} />
+                </td>
+                <td>{sel(r.rarity, BOARD_RARITIES, (v) => upd(r.id, { rarity: v }), `Rarity of ${r.id}`)}</td>
+                <td>{sel(r.collection, BOARD_COLLECTIONS, (v) => upd(r.id, { collection: v }), `Collection of ${r.id}`)}</td>
+                <td>{sel(r.look.emblem, BOARD_EMBLEMS, (v) => updLook(r.id, 'emblem', v), `Emblem of ${r.id}`)}</td>
+                <td>{sel(r.look.pattern, BOARD_PATTERNS, (v) => updLook(r.id, 'pattern', v), `Pattern of ${r.id}`)}</td>
+                <td>{sel(r.look.decor, BOARD_DECORS, (v) => updLook(r.id, 'decor', v), `Decorations of ${r.id}`)}</td>
+                <td>{sel(r.look.ambient, BOARD_AMBIENTS, (v) => updLook(r.id, 'ambient', v), `Ambient effect of ${r.id}`)}</td>
+                <td>
+                  <input type="color" aria-label={`Panel colour of ${r.id}`} value={r.look.panel.slice(0, 7)} onChange={(e) => updLook(r.id, 'panel', e.target.value)} />
+                  <input type="color" aria-label={`Board colour of ${r.id}`} value={r.look.base.slice(0, 7)} onChange={(e) => updLook(r.id, 'base', e.target.value)} />
+                  <input type="color" aria-label={`Sky colour of ${r.id}`} value={r.look.sky.slice(0, 7)} onChange={(e) => updLook(r.id, 'sky', e.target.value)} />
+                </td>
+                <td>
+                  <Toggle label="" checked={r.published} onChange={(v) => r.id !== 'classic' && upd(r.id, { published: v })} />
+                </td>
+                <td>
+                  <Toggle label="" checked={r.featured} onChange={(v) => upd(r.id, { featured: v })} />
+                </td>
+                <td>{fmt(r.sales.owners)}</td>
+                <td>{fmt(r.sales.recent)}</td>
+                <td>{fmt(r.sales.coins)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ErrorNote error={error} />
+      <Button variant="primary" onClick={() => save()} disabled={busy}>
+        {busy ? 'Saving…' : 'Save boards'}
+      </Button>
+
+      <h3 className="sub-title">Create a new board</h3>
+      <div className="mode-edit glass">
+        <label>
+          Id <input className="input" value={draft.id} onChange={(e) => setDraft({ ...draft, id: e.target.value })} placeholder="custom_eid_night" />
+        </label>
+        <label>
+          Name <input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+        </label>
+        <label>
+          Price 🪙 <input className="input" type="number" min={0} value={draft.price} onChange={(e) => setDraft({ ...draft, price: Number(e.target.value) })} />
+        </label>
+        <label>Start from {sel(draft.template, rows.map((r) => r.id), (v) => setDraft({ ...draft, template: v }), 'Template board')}</label>
+        <label>Rarity {sel(draft.rarity, BOARD_RARITIES, (v) => setDraft({ ...draft, rarity: v }), 'New board rarity')}</label>
+        <label>Collection {sel(draft.collection, BOARD_COLLECTIONS, (v) => setDraft({ ...draft, collection: v }), 'New board collection')}</label>
+        <label>Emblem {sel(draft.emblem, BOARD_EMBLEMS, (v) => setDraft({ ...draft, emblem: v }), 'New board emblem')}</label>
+        <label>Pattern {sel(draft.pattern, BOARD_PATTERNS, (v) => setDraft({ ...draft, pattern: v }), 'New board pattern')}</label>
+        <label>Effect {sel(draft.ambient, BOARD_AMBIENTS, (v) => setDraft({ ...draft, ambient: v }), 'New board effect')}</label>
+        <label>
+          Panel <input type="color" value={draft.panel} onChange={(e) => setDraft({ ...draft, panel: e.target.value })} />
+        </label>
+        <label>
+          Board <input type="color" value={draft.base} onChange={(e) => setDraft({ ...draft, base: e.target.value })} />
+        </label>
+        <label>
+          Sky <input type="color" value={draft.sky} onChange={(e) => setDraft({ ...draft, sky: e.target.value })} />
+        </label>
+        <label>
+          Ribbon <input className="input" value={draft.badge} placeholder="optional, e.g. 🌙 EID" onChange={(e) => setDraft({ ...draft, badge: e.target.value })} />
+        </label>
+        <Button variant="primary" onClick={create} disabled={busy || !draft.name.trim()}>
+          Create board
+        </Button>
+      </div>
+      <p className="hint">Ids look like custom_my_board. A new board goes on sale at once and appears in the app without an update.</p>
+    </Card>
+  );
+}
+
 function SettingsTab() {
   const [s, setS] = useState<AdminSettings | null>(null);
   const [policy, setPolicy] = useState('');
@@ -928,6 +1146,7 @@ export function AdminPage() {
             { value: 'disputes', label: 'Disputes' },
             { value: 'popups', label: 'Popups' },
             { value: 'dice', label: 'Dice' },
+            { value: 'boards', label: 'Boards' },
             { value: 'settings', label: 'Settings' },
             { value: 'audit', label: 'Audit log' },
           ]}
@@ -941,6 +1160,7 @@ export function AdminPage() {
       {tab === 'disputes' && <Disputes />}
       {tab === 'popups' && <Popups />}
       {tab === 'dice' && <DiceProducts />}
+      {tab === 'boards' && <BoardProducts />}
       {tab === 'settings' && <SettingsTab />}
       {tab === 'audit' && <Audit />}
     </div>

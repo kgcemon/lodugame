@@ -130,6 +130,14 @@ final class ProfileTab {
             Sfx.get().play(Sfx.S.CLICK);
         });
         prefsCard.addView(sound);
+        android.widget.Switch effects = new android.widget.Switch(a);
+        effects.setText("✨  Board effects (hearts, petals, stars…)");
+        effects.setTextColor(Ui.INK);
+        effects.setTextSize(15);
+        effects.setChecked(BoardAmbient.enabled());
+        effects.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 8));
+        effects.setOnCheckedChangeListener((b, on) -> app.prefs.edit().putBoolean(BoardAmbient.PREF, on).apply());
+        prefsCard.addView(effects);
         android.widget.Switch vibrate = new android.widget.Switch(a);
         vibrate.setText("📳  Vibrate on my turn");
         vibrate.setTextColor(Ui.INK);

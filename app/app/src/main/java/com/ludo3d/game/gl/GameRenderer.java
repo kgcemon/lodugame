@@ -98,13 +98,20 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     /** True while a finger is turning the board. */
     public volatile boolean dragging;
     /**
+     * Showcase (the shop's board preview): the camera orbits slowly by itself, `zoom` brings
+     * it closer, and `pitchDeg` (when 0..90) tilts it; the board never eases back.
+     */
+    public volatile boolean showcase;
+    public volatile float zoom = 1f;
+    public volatile float pitchDeg = -1f;
+    /**
      * Asks for another frame. The view renders on demand (saves battery): a frame that is
      * still animating requests the next one, and a still board draws nothing.
      */
     public volatile Runnable requestRender;
     /** Camera inputs of the last solved camera; it is only solved again when one changes. */
     private int camW = -1, camH = -1;
-    private float camYaw = Float.NaN;
+    private float camYaw = Float.NaN, camZoom = Float.NaN, camPitch = Float.NaN;
     private boolean camClassic;
     private String camColor;
     /** Token rest positions need recomputing (state changed or a token is moving). */
@@ -151,7 +158,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     /** Play on this board theme (the room's: its host's); repaints the board face if it changed. */
     public void setBoard(String id) {
         BoardThemes.Theme next = BoardThemes.get(id);
-        if (next == theme) return;
+        if (next == theme || next.key().equals(theme.key())) return;
         theme = next;
         if (texBoard != 0) {
             GLES20.glDeleteTextures(1, new int[]{texBoard}, 0);
@@ -572,18 +579,21 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     }
 
     private void camera() {
-        float yawNow = yawOffset;
-        if (width == camW && height == camH && yawNow == camYaw && classic == camClassic && myColor.equals(camColor)) return;
+        float yawNow = yawOffset, zoomNow = zoom, pitchNow = pitchDeg;
+        if (width == camW && height == camH && yawNow == camYaw && classic == camClassic && myColor.equals(camColor)
+                && zoomNow == camZoom && pitchNow == camPitch) return;
         camW = width;
         camH = height;
         camYaw = yawNow;
+        camZoom = zoomNow;
+        camPitch = pitchNow;
         camClassic = classic;
         camColor = myColor;
         float aspect = width / (float) height;
         float fovy = 40f;
         // Phones (portrait): higher camera so the board reads clearly; wider screens: more cinematic.
         // In a tall area a steeper view lets the (width-limited) board also fill more height.
-        double pitch = Math.toRadians(classic ? 90 : aspect < 0.7f ? 70 : aspect < 0.85f ? 64 : aspect < 1.2f ? 56 : 50);
+        double pitch = Math.toRadians(pitchNow >= 0 ? pitchNow : classic ? 90 : aspect < 0.7f ? 70 : aspect < 0.85f ? 64 : aspect < 1.2f ? 56 : 50);
         double yaw = Math.toRadians(baseYaw(myColor) + yawNow);
         // Closest distance at which every corner of the board (frame included) stays on screen.
         float lo = 5f, hi = 200f;
@@ -593,7 +603,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             if (boardFits()) hi = mid;
             else lo = mid;
         }
-        placeCamera(hi, fovy, aspect, pitch, yaw);
+        placeCamera(hi / Math.max(0.5f, zoomNow), fovy, aspect, pitch, yaw);
     }
 
     private void placeCamera(float dist, float fovy, float aspect, double pitch, double yaw) {
@@ -617,7 +627,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         for (int k = 0; k < 8; k++) {
             tmpIn[0] = (k & 1) == 0 ? -EDGE : EDGE;
             tmpIn[2] = (k & 2) == 0 ? -EDGE : EDGE;
-            tmpIn[1] = (k & 4) == 0 ? 0.15f : -0.7f;
+            tmpIn[1] = (k & 4) == 0 ? decorTop() : -0.7f;
             tmpIn[3] = 1;
             Matrix.multiplyMV(tmpOut, 0, vp, 0, tmpIn, 0);
             if (tmpOut[3] <= 0) return false;
@@ -652,8 +662,12 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         long now = SystemClock.uptimeMillis();
         step(now);
         layout();
-        // After a drag the board eases back to the player's own view.
-        if (!dragging) {
+        GLES20.glClearColor(((theme.sky >> 16) & 255) / 255f, ((theme.sky >> 8) & 255) / 255f, (theme.sky & 255) / 255f, 1f);
+        if (showcase && !dragging) {
+            // The preview's slow cinematic orbit.
+            yawOffset = (yawOffset + 0.25f) % 360f;
+        } else if (!dragging) {
+            // After a drag the board eases back to the player's own view.
             yawOffset *= 0.86f;
             if (Math.abs(yawOffset) < 0.05f) yawOffset = 0f;
         }
@@ -671,6 +685,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         use(0, theme.wood[0], theme.wood[1], theme.wood[2], 1, false, 0.08f);
         draw(boardBase);
         drawFrame();
+        drawDecor();
         Matrix.setIdentityM(model, 0);
         use(texBoard, 1, 1, 1, 1, false, 0.05f);
         draw(boardTop);
@@ -792,7 +807,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         // Keep drawing only while something on the board moves or glows.
         boolean diceSettled = state == null
                 || (Math.abs(dicePos[0] - diceTarget[0]) < 0.002f && Math.abs(dicePos[2] - diceTarget[1]) < 0.002f);
-        boolean moving = !idle || cur != null || !queue.isEmpty() || rollT >= 0 || dragging || yawOffset != 0f
+        boolean moving = showcase || !idle || cur != null || !queue.isEmpty() || rollT >= 0 || dragging || yawOffset != 0f
                 || !movable.isEmpty() || (selPlayer >= 0 && now - selAt < 500) || !diceSettled;
         Runnable rr = requestRender;
         if (moving && rr != null) rr.run();
@@ -809,6 +824,87 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         Matrix.scaleM(model, 0, rs, 1, rs);
         use(texRing, r, g, b, a, true, 0);
         draw(flat);
+    }
+
+    /** How high the board's corner decorations reach (so the camera keeps them in view). */
+    private float decorTop() {
+        switch (theme.decor) {
+            case "pillar": return 1.5f;
+            case "crystal": return 1.35f;
+            case "tree": return 1.6f;
+            case "lantern":
+            case "orb": return 1.0f;
+            default: return 0.15f;
+        }
+    }
+
+    /** The board's decorations standing on its four corners (palace pillars, crystals, lanterns, orbs, trees). */
+    private void drawDecor() {
+        if ("none".equals(theme.decor)) return;
+        int dc = theme.decorColor;
+        float r = ((dc >> 16) & 255) / 255f, g = ((dc >> 8) & 255) / 255f, b = (dc & 255) / 255f;
+        float[] rim = theme.rim;
+        float c = 7.7f;
+        float[][] corners = {{c, c}, {-c, c}, {c, -c}, {-c, -c}};
+        for (int i = 0; i < 4; i++) {
+            float x = corners[i][0], z = corners[i][1];
+            switch (theme.decor) {
+                case "pillar":
+                    // A column with a base, a capital and a glowing finial.
+                    box(x, 0.12f, z, 0.62f, 0.12f, 0.62f, rim[0], rim[1], rim[2], theme.rimSpec, false);
+                    box(x, 0.75f, z, 0.42f, 1.15f, 0.42f, r, g, b, 0.6f, false);
+                    box(x, 1.38f, z, 0.6f, 0.12f, 0.6f, rim[0], rim[1], rim[2], theme.rimSpec, false);
+                    pawnAt(x, 1.42f, z, 0.32f, r, g, b, true);
+                    break;
+                case "crystal":
+                    // A cluster of tilted crystal prisms.
+                    crystal(x, z, 0.32f, 1.25f, 0f, 10f, r, g, b);
+                    crystal(x + 0.28f * Math.signum(x), z - 0.1f * Math.signum(z), 0.2f, 0.8f, 45f, -18f, r, g, b);
+                    crystal(x - 0.1f * Math.signum(x), z + 0.28f * Math.signum(z), 0.18f, 0.65f, 20f, 22f, r, g, b);
+                    break;
+                case "lantern":
+                    box(x, 0.35f, z, 0.08f, 0.7f, 0.08f, rim[0] * 0.6f, rim[1] * 0.6f, rim[2] * 0.6f, 0.3f, false);
+                    pawnAt(x, 0.62f, z, 0.45f, r, g, b, true);
+                    break;
+                case "orb":
+                    box(x, 0.2f, z, 0.4f, 0.2f, 0.4f, rim[0], rim[1], rim[2], theme.rimSpec, false);
+                    pawnAt(x, 0.28f, z, 0.6f, r, g, b, true);
+                    break;
+                case "tree":
+                    box(x, 0.45f, z, 0.16f, 0.9f, 0.16f, 0.42f, 0.28f, 0.16f, 0.1f, false);
+                    pawnAt(x, 0.75f, z, 0.85f, r, g, b, false);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    private void box(float x, float y, float z, float sx, float sy, float sz, float r, float g, float b, float spec, boolean unlit) {
+        Matrix.setIdentityM(model, 0);
+        Matrix.translateM(model, 0, x, y, z);
+        Matrix.scaleM(model, 0, sx, sy, sz);
+        use(0, r, g, b, 1, unlit, spec);
+        draw(unitBox);
+    }
+
+    private void crystal(float x, float z, float w, float h, float yaw, float tilt, float r, float g, float b) {
+        Matrix.setIdentityM(model, 0);
+        Matrix.translateM(model, 0, x, h * 0.45f, z);
+        Matrix.rotateM(model, 0, yaw + 45f, 0, 1, 0);
+        Matrix.rotateM(model, 0, tilt, 1, 0, 0);
+        Matrix.scaleM(model, 0, w, h, w);
+        use(0, r, g, b, 1, false, 1.3f);
+        draw(unitBox);
+    }
+
+    /** The pawn mesh used as a decoration: an orb, a lantern's glow or a tree's crown. */
+    private void pawnAt(float x, float y, float z, float s, float r, float g, float b, boolean glow) {
+        Matrix.setIdentityM(model, 0);
+        Matrix.translateM(model, 0, x, y, z);
+        Matrix.scaleM(model, 0, s, s, s);
+        use(0, r, g, b, 1, glow, glow ? 0f : 0.2f);
+        draw(pawn);
     }
 
     /** A raised rim (wood, or gold on royal boards) around the playing surface (four bars of the unit box). */

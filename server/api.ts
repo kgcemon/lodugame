@@ -13,6 +13,7 @@ import { DICE_SKINS } from '../shared/skins';
 import { PROFILE_FRAMES } from '../shared/frames';
 import { BOARDS, DEFAULT_BOARD } from '../shared/boards';
 import { diceProducts, diceSales, stockSold, type DiceProduct } from './dice';
+import { boardProducts, boardSales, type BoardProduct } from './boards';
 import { payoutPolicy } from './settings';
 import { spin, spinState } from './spin';
 import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type TxType } from './wallet';
@@ -20,7 +21,7 @@ import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type T
 /** Player-facing and administrator REST API (everything under /api except auth). */
 
 const PAGE = 20;
-const TX_TYPES: TxType[] = ['welcome_bonus', 'match_entry', 'match_reward', 'match_refund', 'daily_bonus', 'referral_reward', 'admin_adjustment'];
+const TX_TYPES: TxType[] = ['welcome_bonus', 'match_entry', 'match_reward', 'match_refund', 'daily_bonus', 'referral_reward', 'admin_adjustment', 'shop_purchase'];
 const MIN_WINRATE_MATCHES = 5;
 /** How many friend requests one player may ever send another (declined or cancelled ones count). */
 export const MAX_FRIEND_REQUESTS = 2;
@@ -145,6 +146,9 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   /** The seat field each shop changes. */
   const seatField = { dice: 'diceSkin', frame: 'frame', board: 'board' } as const;
   /** Every die with the administrator's changes, prices, stock left and data-backed labels. */
+  /** Every board (catalogue and custom) with the administrator's changes, coin prices and labels. */
+  const allBoards = async (): Promise<BoardProduct[]> =>
+    boardProducts(settings.get().boardProducts, settings.get().boardCustom, (id) => settings.price('board', id), await boardSales(db));
   const allDice = async (): Promise<DiceProduct[]> =>
     diceProducts(settings.get().diceProducts, (id) => settings.price('dice', id), await diceSales(db), await stockSold(db));
 
@@ -168,7 +172,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         // Every die (also unpublished ones): the app needs any die a player shows at the table.
         diceSkins: await allDice(),
         frames: shopCatalogue('frame'),
-        boards: shopCatalogue('board'),
+        // Every board (also unpublished ones): the app paints whichever board a room plays on.
+        boards: await allBoards(),
       };
     }),
   );
@@ -330,7 +335,10 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       h(async (req) => {
         const state = await shopState(db, kind, req.user!.id);
         // Dice: what's on sale, plus unpublished dice the player already owns.
-        const items = kind === 'dice' ? (await allDice()).filter((d) => d.published || state.owned.includes(d.id)) : shopCatalogue(kind);
+        const items =
+          kind === 'dice' ? (await allDice()).filter((d) => d.published || state.owned.includes(d.id))
+          : kind === 'board' ? (await allBoards()).filter((b) => b.published || state.owned.includes(b.id))
+          : shopCatalogue(kind);
         return { ok: true, [list]: items, ...state };
       }),
     );
@@ -341,8 +349,10 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       h(async (req) => {
         const id = String(req.params.id);
         const product = kind === 'dice' ? (await allDice()).find((d) => d.id === id) : undefined;
-        const terms = product ? { published: product.published, limit: product.limit } : undefined;
-        const state = await buyItem(db, kind, req.user!.id, id, settings.price(kind, id), terms);
+        const board = kind === 'board' ? (await allBoards()).find((b) => b.id === id) : undefined;
+        const terms = product ? { published: product.published, limit: product.limit } : board ? { published: board.published, limit: null } : undefined;
+        const cost = board ? board.price : settings.price(kind, id);
+        const state = await buyItem(db, kind, req.user!.id, id, cost, terms);
         const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
         presence.emit(req.user!.id, 'wallet', wallet);
         rooms().setCosmetics(req.user!.id, { [seatField[kind]]: state.equipped });
@@ -1044,6 +1054,24 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   );
 
   admin.get('/settings', h(async () => ({ ok: true, settings: settings.get(), policy: payoutPolicy(settings.get()) })));
+
+  /** Boards as the shop sells them, with real sales per board (owners, last 30 days, coins earned). */
+  admin.get(
+    '/boards',
+    h(async () => {
+      const sales = await boardSales(db);
+      const products = await allBoards();
+      return {
+        ok: true,
+        products: products.map((p) => ({ ...p, sales: sales.get(p.id) ?? { owners: 0, recent: 0, coins: 0 } })),
+        totals: {
+          owners: [...sales.values()].reduce((a, x) => a + x.owners, 0),
+          recent: [...sales.values()].reduce((a, x) => a + x.recent, 0),
+          coins: [...sales.values()].reduce((a, x) => a + x.coins, 0),
+        },
+      };
+    }),
+  );
 
   /** Dice products as the shop sells them, with real sales per die (owners, last 30 days, diamonds earned). */
   admin.get(

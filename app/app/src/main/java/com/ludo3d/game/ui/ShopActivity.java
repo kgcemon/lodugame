@@ -51,6 +51,8 @@ public class ShopActivity extends BaseActivity {
         String badge;
         /** The server's product (dice: rarity, collection, labels, stock...). */
         JSONObject data = new JSONObject();
+        /** Boards: the look, straight from the server's product. */
+        BoardThemes.Theme theme;
         final int price;
         final boolean royal;
         final DiceView.Skin skin;
@@ -114,7 +116,7 @@ public class ShopActivity extends BaseActivity {
     protected void onResume() {
         super.onResume();
         // Back from the diamond shop: show the new balance.
-        if (balance != null) balance.setText(Ui.fmt(app.wallet.optLong("gems")));
+        if (balance != null) balance.setText(Ui.fmt(app.wallet.optLong(tab == boards ? "balance" : "gems")));
     }
 
     private void load(Shop s) {
@@ -134,7 +136,15 @@ public class ShopActivity extends BaseActivity {
                             it.data = o;
                             s.items.add(it);
                         }
-                    } else if (s == frames ? AvatarView.Frames.known(id) : BoardThemes.known(id)) {
+                    } else if (s == boards) {
+                        BoardThemes.Theme th = id.equals(BoardThemes.CLASSIC.id) ? BoardThemes.CLASSIC : BoardThemes.Theme.from(o);
+                        if (th == null) continue;
+                        Item it = new Item(id, o.optString("name"), o.optInt("price"), null, o.optString("blurb", null), o.optBoolean("royal"));
+                        it.badge = o.isNull("badge") ? null : o.optString("badge", null);
+                        it.data = o;
+                        it.theme = th;
+                        s.items.add(it);
+                    } else if (AvatarView.Frames.known(id)) {
                         Item it = new Item(id, o.optString("name"), o.optInt("price"), null, o.optString("blurb", null), o.optBoolean("royal"));
                         it.badge = o.isNull("badge") ? null : o.optString("badge", null);
                         s.items.add(it);
@@ -179,11 +189,20 @@ public class ShopActivity extends BaseActivity {
         // Diamonds and a way to get more.
         LinearLayout bar = Ui.hbox(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.addView(Ui.text(this, "💎", 26, Ui.INK));
-        balance = new Fx.GoldText(this, Ui.fmt(app.wallet.optLong("gems")), 24, new int[]{0xffffffff, 0xffb9f2ff, 0xff4fd8ff}, 0xff0b4f8a);
-        balance.setPadding(Ui.dp(this, 8), 0, 0, 0);
-        bar.addView(balance, Ui.weight(1));
-        bar.addView(Ui.smallButton(this, "+ Get diamonds", "blue", v -> startActivity(new Intent(this, GemShopActivity.class))));
+        if (tab == boards) {
+            // Boards are paid in coins.
+            bar.addView(Ui.text(this, "🪙", 26, Ui.INK));
+            balance = new Fx.GoldText(this, Ui.fmt(app.wallet.optLong("balance")), 24);
+            balance.setPadding(Ui.dp(this, 8), 0, 0, 0);
+            bar.addView(balance, Ui.weight(1));
+            bar.addView(Ui.text(this, "💎 " + Ui.fmt(app.wallet.optLong("gems")), 14, 0xffb9f2ff));
+        } else {
+            bar.addView(Ui.text(this, "💎", 26, Ui.INK));
+            balance = new Fx.GoldText(this, Ui.fmt(app.wallet.optLong("gems")), 24, new int[]{0xffffffff, 0xffb9f2ff, 0xff4fd8ff}, 0xff0b4f8a);
+            balance.setPadding(Ui.dp(this, 8), 0, 0, 0);
+            bar.addView(balance, Ui.weight(1));
+            bar.addView(Ui.smallButton(this, "+ Get diamonds", "blue", v -> startActivity(new Intent(this, GemShopActivity.class))));
+        }
         col.addView(bar, Ui.lpMatchWrap());
 
         // Dice | Frames | Boards.
@@ -207,7 +226,7 @@ public class ShopActivity extends BaseActivity {
         col.addView(tabs, Ui.lpMatchWrap());
         TextView intro = Ui.muted(this, tab == dice ? "The LudoX Dice Collection — every opponent sees your die. Looks only: every die rolls the same."
                 : tab == frames ? "A ring round your picture: on your profile, with friends and at every table."
-                : "Royal boards. When you host a room, everyone in it plays on your board.");
+                : "Premium 3D boards. When you host a room, everyone in it plays on your board — they don't need to buy it.");
         intro.setGravity(Gravity.CENTER);
         intro.setPadding(Ui.dp(this, 8), Ui.dp(this, 10), Ui.dp(this, 8), 0);
         col.addView(intro, Ui.lpMatchWrap());
@@ -218,6 +237,10 @@ public class ShopActivity extends BaseActivity {
         }
         if (tab == dice) {
             renderDice();
+            return;
+        }
+        if (tab == boards) {
+            renderBoards();
             return;
         }
         Item pick = tab.byId(tab.selected);
@@ -874,6 +897,336 @@ public class ShopActivity extends BaseActivity {
                     super.err(e);
                     load(dice);
                 }
+            }
+        });
+    }
+
+    // ================================================================= the board marketplace
+
+    /** Board filters: free text, collection and rarity ("all" = any). */
+    private String boardQuery = "", boardCollection = "all", boardRarity = "all";
+    private LinearLayout boardGrid;
+
+    private void renderBoards() {
+        // My boards: the one in use, and what it means.
+        int have = 0;
+        for (Item k : boards.items) if (boards.owned.contains(k.id)) have++;
+        Item on = boards.byId(boards.equipped);
+        LinearLayout mine = Ui.hbox(this);
+        mine.setGravity(Gravity.CENTER_VERTICAL);
+        mine.setBackground(DiceLux.card(this, "legendary", true));
+        mine.setPadding(Ui.dp(this, 12), Ui.dp(this, 10), Ui.dp(this, 12), Ui.dp(this, 10));
+        if (on != null && on.theme != null) {
+            ImageView iv = new ImageView(this);
+            BoardLux.thumb(iv, on.theme, Ui.dp(this, 84));
+            mine.addView(iv, new LinearLayout.LayoutParams(Ui.dp(this, 84), Ui.dp(this, 66)));
+        }
+        LinearLayout mt = Ui.vbox(this);
+        mt.setPadding(Ui.dp(this, 10), 0, 0, 0);
+        mt.addView(Ui.bold(Ui.text(this, "My Boards · " + have + " of " + boards.items.size(), 15, Ui.INK)));
+        mt.addView(Ui.text(this, (on != null ? "Using " + on.name + ". " : "") + "Everyone in rooms you host plays on your board — free for them.", 12, 0xffd9cfff));
+        mine.addView(mt, Ui.weight(1));
+        LinearLayout.LayoutParams ml = Ui.lpMatchWrap();
+        ml.topMargin = Ui.dp(this, 12);
+        col.addView(mine, ml);
+
+        List<Item> featured = new ArrayList<>(), couple = new ArrayList<>(), fresh = new ArrayList<>(), best = new ArrayList<>();
+        for (Item k : boards.items) {
+            if (k.theme == null) continue;
+            List<String> ls = labelsOf(k);
+            if (k.data.optBoolean("featured")) featured.add(k);
+            if ("couple".equals(k.theme.collection) || "love".equals(k.theme.collection)) couple.add(k);
+            if (ls.contains("NEW ARRIVAL")) fresh.add(k);
+            if (ls.contains("BEST SELLER") || ls.contains("MOST POPULAR")) best.add(k);
+        }
+        java.util.Collections.sort(featured, (x, y) -> DiceLux.rank(y.theme.rarity) - DiceLux.rank(x.theme.rarity));
+        if (!featured.isEmpty()) {
+            col.addView(Ui.heading(this, "✨ Featured Boards"));
+            col.addView(boardRow(featured, true));
+        }
+        if (!couple.isEmpty()) {
+            col.addView(Ui.heading(this, "💞 Couple & Romantic"));
+            TextView why = Ui.muted(this, "Made for two people who love playing and talking together — anyone can choose them.");
+            why.setPadding(Ui.dp(this, 2), 0, 0, Ui.dp(this, 6));
+            col.addView(why);
+            col.addView(boardRow(couple, false));
+        }
+        if (!best.isEmpty()) {
+            col.addView(Ui.heading(this, "🔥 Best Sellers"));
+            col.addView(boardRow(best, false));
+        }
+        if (!fresh.isEmpty()) {
+            col.addView(Ui.heading(this, "🆕 New Arrivals"));
+            col.addView(boardRow(fresh, false));
+        }
+
+        // Browse every board.
+        col.addView(Ui.heading(this, "🎲 All Boards"));
+        android.widget.EditText search = Ui.input(this, "🔍  Search boards", android.text.InputType.TYPE_CLASS_TEXT);
+        search.setText(boardQuery);
+        search.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+
+            @Override
+            public void onTextChanged(CharSequence s, int a, int b, int c) {}
+
+            @Override
+            public void afterTextChanged(android.text.Editable e) {
+                boardQuery = e.toString().trim().toLowerCase(java.util.Locale.ROOT);
+                fillBoardGrid();
+            }
+        });
+        col.addView(search);
+        String[] cols = new String[BoardLux.COLLECTIONS.length + 1];
+        String[] colNames = new String[cols.length];
+        cols[0] = "all";
+        colNames[0] = "All";
+        for (int i = 0; i < BoardLux.COLLECTIONS.length; i++) {
+            cols[i + 1] = BoardLux.COLLECTIONS[i];
+            colNames[i + 1] = BoardLux.collectionShort(BoardLux.COLLECTIONS[i]);
+        }
+        col.addView(boardChips(cols, colNames, true));
+        String[] rars = new String[DiceLux.RARITIES.length + 1];
+        String[] rarNames = new String[rars.length];
+        rars[0] = "all";
+        rarNames[0] = "Any rarity";
+        for (int i = 0; i < DiceLux.RARITIES.length; i++) {
+            rars[i + 1] = DiceLux.RARITIES[i];
+            rarNames[i + 1] = DiceLux.rarityName(DiceLux.RARITIES[i]);
+        }
+        col.addView(boardChips(rars, rarNames, false));
+        boardGrid = Ui.vbox(this);
+        col.addView(boardGrid, Ui.lpMatchWrap());
+        fillBoardGrid();
+        TextView note = Ui.muted(this, "Boards are bought once with coins and kept forever. Every board has the same paths, safe cells and rules — only the look changes.");
+        note.setGravity(Gravity.CENTER);
+        note.setPadding(0, Ui.dp(this, 14), 0, 0);
+        col.addView(note);
+    }
+
+    private View boardRow(List<Item> items, boolean big) {
+        android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout r = Ui.hbox(this);
+        for (Item k : items) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(Ui.dp(this, big ? 290 : 170), ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.rightMargin = Ui.dp(this, 10);
+            r.addView(boardCard(k, big), lp);
+        }
+        hs.addView(r);
+        return hs;
+    }
+
+    private View boardChips(String[] values, String[] names, boolean collection) {
+        android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout r = Ui.hbox(this);
+        List<TextView> all = new ArrayList<>();
+        for (int i = 0; i < values.length; i++) {
+            String v = values[i];
+            boolean on = v.equals(collection ? boardCollection : boardRarity);
+            TextView chip = Ui.bold(Ui.text(this, names[i], 12, on ? 0xff2a1400 : Ui.INK));
+            chip.setPadding(Ui.dp(this, 12), Ui.dp(this, 6), Ui.dp(this, 12), Ui.dp(this, 7));
+            styleChip(chip, on, collection || i == 0 ? 0 : DiceLux.color(v));
+            chip.setOnClickListener(x -> {
+                if (collection) boardCollection = v;
+                else boardRarity = v;
+                for (int j = 0; j < all.size(); j++) {
+                    boolean sel = values[j].equals(v);
+                    all.get(j).setTextColor(sel ? 0xff2a1400 : Ui.INK);
+                    styleChip(all.get(j), sel, collection || j == 0 ? 0 : DiceLux.color(values[j]));
+                }
+                fillBoardGrid();
+            });
+            all.add(chip);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, Ui.dp(this, 2), Ui.dp(this, 6), Ui.dp(this, 6));
+            r.addView(chip, lp);
+        }
+        hs.addView(r);
+        return hs;
+    }
+
+    private void fillBoardGrid() {
+        if (boardGrid == null) return;
+        boardGrid.removeAllViews();
+        List<Item> match = new ArrayList<>();
+        for (Item k : boards.items) {
+            if (k.theme == null) continue;
+            if (!"all".equals(boardCollection) && !boardCollection.equals(k.theme.collection)) continue;
+            if (!"all".equals(boardRarity) && !boardRarity.equals(k.theme.rarity)) continue;
+            if (!boardQuery.isEmpty()) {
+                String hay = (k.name + " " + k.theme.collection + " " + k.theme.rarity + " " + (k.blurb == null ? "" : k.blurb)).toLowerCase(java.util.Locale.ROOT);
+                if (!hay.contains(boardQuery)) continue;
+            }
+            match.add(k);
+        }
+        if (match.isEmpty()) {
+            TextView none = Ui.muted(this, "No boards match. Try another search or collection.");
+            none.setGravity(Gravity.CENTER);
+            none.setPadding(0, Ui.dp(this, 16), 0, Ui.dp(this, 16));
+            boardGrid.addView(none, Ui.lpMatchWrap());
+            return;
+        }
+        LinearLayout row = null;
+        for (int i = 0; i < match.size(); i++) {
+            if (i % 2 == 0) {
+                row = Ui.hbox(this);
+                boardGrid.addView(row, Ui.lpMatchWrap());
+            }
+            row.addView(boardCard(match.get(i), false), tileLp(i % 2, 2));
+        }
+        if (match.size() % 2 == 1) row.addView(new View(this), tileLp(1, 2));
+    }
+
+    /** One board for sale: its tilted 3D render, rarity, collection, coin price and actions. */
+    private View boardCard(Item k, boolean big) {
+        boolean using = k.id.equals(boards.equipped), have = boards.owned.contains(k.id);
+        LinearLayout card = Ui.vbox(this);
+        card.setBackground(DiceLux.card(this, k.theme.rarity, using || DiceLux.rank(k.theme.rarity) >= 3));
+        card.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10));
+        LinearLayout top = Ui.hbox(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(DiceLux.badge(this, k.theme.rarity));
+        top.addView(new View(this), Ui.weight(1));
+        if (using) top.addView(DiceLux.label(this, "✓ IN USE"));
+        else if (have) top.addView(Ui.bold(Ui.text(this, "OWNED", 10, 0xffb9f2ff)));
+        card.addView(top, Ui.lpMatchWrap());
+        ImageView iv = new ImageView(this);
+        int tw = Ui.dp(this, big ? 260 : 148);
+        BoardLux.thumb(iv, k.theme, tw);
+        LinearLayout.LayoutParams il = new LinearLayout.LayoutParams(tw, Math.round(tw * 0.78f));
+        il.gravity = Gravity.CENTER_HORIZONTAL;
+        il.topMargin = Ui.dp(this, 4);
+        card.addView(iv, il);
+        String ribbon = k.badge != null ? k.badge : labelsOf(k).isEmpty() ? null : labelsOf(k).get(0);
+        if (ribbon != null) {
+            LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            fl.gravity = Gravity.CENTER_HORIZONTAL;
+            card.addView(DiceLux.label(this, ribbon), fl);
+        }
+        TextView n = big ? new Fx.GoldText(this, k.name, 20) : Ui.bold(Ui.text(this, k.name, 15, Ui.INK));
+        n.setGravity(Gravity.CENTER);
+        n.setSingleLine(true);
+        n.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        n.setPadding(0, Ui.dp(this, 4), 0, 0);
+        card.addView(n, Ui.lpMatchWrap());
+        TextView c = Ui.text(this, BoardLux.collectionShort(k.theme.collection), 11, 0xffb8acdf);
+        c.setGravity(Gravity.CENTER);
+        card.addView(c, Ui.lpMatchWrap());
+        String priceText = using ? "In use" : have ? "Owned" : k.price == 0 ? "Free" : "🪙 " + Ui.fmt(k.price);
+        TextView price = Ui.bold(Ui.text(this, priceText, 15, have ? 0xffb9f2ff : Ui.GOLD));
+        price.setGravity(Gravity.CENTER);
+        price.setPadding(0, Ui.dp(this, 4), 0, 0);
+        card.addView(price, Ui.lpMatchWrap());
+        LinearLayout acts = Ui.hbox(this);
+        TextView pv = Ui.smallButton(this, "3D View", "glass", v -> previewBoard(k));
+        pv.setPadding(Ui.dp(this, 4), pv.getPaddingTop(), Ui.dp(this, 4), pv.getPaddingBottom());
+        TextView act;
+        if (using) {
+            act = Ui.smallButton(this, "✓ On", "ok", null);
+            Ui.setEnabled(act, false);
+        } else if (have) {
+            act = Ui.smallButton(this, "Use", "ok", v -> equip(boards, k.id));
+        } else {
+            act = Ui.smallButton(this, k.price == 0 ? "Get" : "Buy", "primary", v -> confirmBoardBuy(k));
+        }
+        act.setPadding(Ui.dp(this, 4), act.getPaddingTop(), Ui.dp(this, 4), act.getPaddingBottom());
+        LinearLayout.LayoutParams pl = Ui.weight(1);
+        pl.rightMargin = Ui.dp(this, 4);
+        LinearLayout.LayoutParams al = Ui.weight(1);
+        al.leftMargin = Ui.dp(this, 4);
+        acts.addView(pv, pl);
+        acts.addView(act, al);
+        LinearLayout.LayoutParams actsLp = Ui.lpMatchWrap();
+        actsLp.topMargin = Ui.dp(this, 8);
+        card.addView(acts, actsLp);
+        card.setOnClickListener(v -> previewBoard(k));
+        card.setContentDescription(k.name + ", " + DiceLux.rarityName(k.theme.rarity) + ", " + priceText);
+        return card;
+    }
+
+    private void previewBoard(Item k) {
+        boolean using = k.id.equals(boards.equipped), have = boards.owned.contains(k.id);
+        DicePreview.Offer o = new DicePreview.Offer();
+        if (using) {
+            o.status = "✓ In use";
+            o.action = "In use";
+            o.actionStyle = "ok";
+            o.note = "Rooms you host are played on this board.";
+        } else if (have) {
+            o.status = "Owned";
+            o.action = "Use this board";
+            o.actionStyle = "ok";
+            o.onAction = () -> equip(boards, k.id);
+        } else {
+            o.status = k.price == 0 ? "Free" : "🪙 " + Ui.fmt(k.price) + " coins";
+            o.note = "Opponents in your rooms play on it for free.";
+            o.action = k.price == 0 ? "Get it" : "Buy";
+            o.onAction = () -> confirmBoardBuy(k);
+        }
+        List<String> ls = new ArrayList<>(labelsOf(k));
+        if (k.badge != null) ls.add(0, k.badge);
+        BoardShowcase.show(this, k.theme, ls, o);
+    }
+
+    /** A clear confirmation: the board, the exact coin price, what pays, the balance after. */
+    private void confirmBoardBuy(Item k) {
+        if (busy) return;
+        long coins = app.wallet.optLong("balance");
+        if (coins < k.price) {
+            Sfx.get().play(Sfx.S.ERROR);
+            Popup.message(this, "Not enough coins", "🪙\nYou need " + Ui.fmt(k.price - coins) + " more coins for " + k.name + ". Win matches and collect your daily bonus to earn coins.",
+                    Popup.ok("OK", null));
+            return;
+        }
+        LinearLayout box = Ui.vbox(this);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        ImageView iv = new ImageView(this);
+        BoardLux.thumb(iv, k.theme, Ui.dp(this, 180));
+        box.addView(iv, new LinearLayout.LayoutParams(Ui.dp(this, 180), Ui.dp(this, 140)));
+        LinearLayout tags = Ui.hbox(this);
+        tags.setGravity(Gravity.CENTER);
+        tags.addView(DiceLux.badge(this, k.theme.rarity));
+        tags.addView(Ui.text(this, "  " + BoardLux.collectionName(k.theme.collection), 12, 0xffd9cfff));
+        box.addView(tags, Ui.lpMatchWrap());
+        box.addView(receiptLine("Price", "🪙 " + Ui.fmt(k.price) + " coins"));
+        box.addView(receiptLine("Paid with", "Coins in your wallet"));
+        box.addView(receiptLine("Your coins", Ui.fmt(coins) + "  →  " + Ui.fmt(coins - k.price)));
+        TextView fine = Ui.text(this, "Bought once, yours forever. No real money is charged. Opponents in rooms you host play on it for free.", 11, Ui.MUTED);
+        fine.setGravity(Gravity.CENTER);
+        fine.setPadding(0, Ui.dp(this, 8), 0, 0);
+        box.addView(fine, Ui.lpMatchWrap());
+        Popup.showModal(this, "Buy " + k.name + "?", box, Popup.plain("Cancel", null), Popup.ok("Pay 🪙 " + Ui.fmt(k.price), () -> buyBoard(k)));
+    }
+
+    private void buyBoard(Item k) {
+        if (busy) return;
+        busy = true;
+        app.api.post(boards.path + "/" + k.id + "/buy", new JSONObject(), new Api.Cb(this) {
+            @Override
+            public void ok(JSONObject r) {
+                busy = false;
+                apply(boards, r);
+                Sfx.get().play(Sfx.S.MATCH_FOUND);
+                render();
+                LinearLayout box = Ui.vbox(ShopActivity.this);
+                box.setGravity(Gravity.CENTER_HORIZONTAL);
+                ImageView iv = new ImageView(ShopActivity.this);
+                BoardLux.thumb(iv, k.theme, Ui.dp(ShopActivity.this, 200));
+                box.addView(iv, new LinearLayout.LayoutParams(Ui.dp(ShopActivity.this, 200), Ui.dp(ShopActivity.this, 156)));
+                TextView t = Ui.text(ShopActivity.this, k.name + " is yours and in use. Everyone in rooms you host will play on it.", 14, Ui.INK);
+                t.setGravity(Gravity.CENTER);
+                box.addView(t, Ui.lpMatchWrap());
+                Popup.showModal(ShopActivity.this, "🎉 It's yours!", box, Popup.ok("Great!", null));
+            }
+
+            @Override
+            public void err(Api.Error e) {
+                busy = false;
+                super.err(e);
+                load(boards);
             }
         });
     }
