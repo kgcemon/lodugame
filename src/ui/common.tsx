@@ -1,9 +1,10 @@
 import { motion } from 'framer-motion';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import type { Color } from '../../shared/types';
-import { sfx } from '../audio/audio';
-import { PLAYER_HEX } from '../three/layout';
 import { IconClose } from './icons';
+
+/** Player colours (as on the board). */
+const PLAYER_HEX: Record<Color, string> = { red: '#e53945', green: '#22b46b', yellow: '#f6bf26', blue: '#2f7cf0' };
 
 type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'primary' | 'glass' | 'ghost' | 'danger';
@@ -15,10 +16,7 @@ export function Button({ variant = 'glass', size = 'md', icon, children, classNa
   return (
     <button
       className={`btn btn-${variant} btn-${size} ${className}`}
-      onClick={(e) => {
-        sfx('click');
-        onClick?.(e);
-      }}
+      onClick={onClick}
       {...rest}
     >
       {icon}
@@ -33,10 +31,7 @@ export function IconButton({ label, children, onClick, active, className = '' }:
       className={`icon-btn ${active === false ? 'is-off' : ''} ${className}`}
       aria-label={label}
       title={label}
-      onClick={() => {
-        sfx('click');
-        onClick();
-      }}
+      onClick={onClick}
     >
       {children}
     </button>
@@ -91,10 +86,7 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
         role="switch"
         aria-checked={checked}
         className={`toggle ${checked ? 'on' : ''}`}
-        onClick={() => {
-          sfx('click');
-          onChange(!checked);
-        }}
+        onClick={() => onChange(!checked)}
       >
         <i />
       </button>
@@ -111,10 +103,7 @@ export function Segmented<T extends string | number>({ value, options, onChange 
           role="radio"
           aria-checked={o.value === value}
           className={o.value === value ? 'active' : ''}
-          onClick={() => {
-            sfx('click');
-            onChange(o.value);
-          }}
+          onClick={() => onChange(o.value)}
         >
           {o.label}
         </button>

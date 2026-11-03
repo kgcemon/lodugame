@@ -1,19 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ComponentType } from 'react';
 import { api, fmt, get, post, type MatchMode } from '../../lib/api';
-import { useGame } from '../../store/game';
+import { toast } from '../../store/toast';
 import { Avatar, Button, Segmented, Toggle } from '../common';
 import { EFFECTS, RARITIES } from '../../../shared/skins';
 import { PROFILE_FRAMES } from '../../../shared/frames';
 import { BOARD_AMBIENTS, BOARD_COLLECTIONS, BOARD_CURRENCIES, BOARD_DECORS, BOARD_EMBLEMS, BOARD_PATTERNS, BOARD_RARITIES } from '../../../shared/boards';
-import { Card, Confirm, Empty, ErrorNote, PageTitle, Spinner, useFetch } from './kit';
+import { Card, Confirm, Empty, ErrorNote, Spinner, useFetch } from './kit';
 
 /** Administrator tools. Every endpoint re-checks the admin role on the server. */
 
-type Tab = 'overview' | 'users' | 'transactions' | 'matches' | 'disputes' | 'popups' | 'dice' | 'boards' | 'settings' | 'audit';
-
 type Row = Record<string, string | number | boolean | null>;
 
-const toast = (t: string) => useGame.getState().toast(t);
 const d = (v: unknown) => (v ? new Date(String(v)).toLocaleString() : '—');
 
 function Overview() {
@@ -21,32 +18,55 @@ function Overview() {
   if (o.loading) return <Spinner />;
   if (!o.data) return <ErrorNote error={o.error} />;
   const x = o.data as Record<string, number> & { matchesByStatus: Record<string, number> };
-  const tiles: [string, string | number][] = [
-    ['Users', x.users],
-    ['Active today', x.activeToday],
-    ['Suspended', x.suspended],
-    ['Live rooms', x.liveRooms],
-    ['Coins in circulation', fmt(x.coinsInCirculation)],
-    ['Total payouts', fmt(x.totalPayouts)],
-    ['House total', fmt(x.houseTotal)],
-    ['Open disputes', x.openDisputes],
+  const tiles: { label: string; value: string | number; icon: string; tone: string; hint?: string }[] = [
+    { label: 'Players', value: fmt(x.users), icon: '👥', tone: 'violet' },
+    { label: 'Active today', value: fmt(x.activeToday), icon: '⚡', tone: 'green' },
+    { label: 'Live rooms', value: fmt(x.liveRooms), icon: '🎲', tone: 'blue' },
+    { label: 'Open disputes', value: fmt(x.openDisputes), icon: '⚖️', tone: x.openDisputes > 0 ? 'red' : 'violet', hint: x.openDisputes > 0 ? 'Needs a decision' : 'All clear' },
+    { label: 'Coins in circulation', value: fmt(x.coinsInCirculation), icon: '🪙', tone: 'gold' },
+    { label: 'Total payouts', value: fmt(x.totalPayouts), icon: '🏆', tone: 'gold' },
+    { label: 'House total', value: fmt(x.houseTotal), icon: '🏦', tone: 'gold' },
+    { label: 'Suspended', value: fmt(x.suspended), icon: '⛔', tone: 'red' },
   ];
+  const statuses: [string, string][] = [
+    ['in_progress', 'In progress'],
+    ['waiting', 'Waiting'],
+    ['completed', 'Completed'],
+    ['cancelled', 'Cancelled'],
+    ['abandoned', 'Abandoned'],
+  ];
+  const counts = statuses.map(([k]) => x.matchesByStatus[k] ?? 0);
+  const max = Math.max(1, ...counts);
+  const total = counts.reduce((a, b) => a + b, 0);
   return (
     <>
-      <div className="stat-row">
-        {tiles.map(([k, v]) => (
-          <div className="stat-tile glass" key={k}>
-            <span className="muted">{k}</span>
-            <b>{v}</b>
+      <div className="kpi-grid">
+        {tiles.map((t) => (
+          <div className={`kpi tone-${t.tone}`} key={t.label}>
+            <span className="kpi-icon" aria-hidden>
+              {t.icon}
+            </span>
+            <div>
+              <span className="kpi-label">{t.label}</span>
+              <b className="kpi-value">{t.value}</b>
+              {t.hint && <span className="kpi-hint">{t.hint}</span>}
+            </div>
           </div>
         ))}
       </div>
-      <Card title="Matches by status">
-        <div className="stat-row">
-          {['waiting', 'in_progress', 'completed', 'cancelled', 'abandoned'].map((s) => (
-            <div className="stat-tile glass" key={s}>
-              <span className="muted">{s.replace('_', ' ')}</span>
-              <b>{x.matchesByStatus[s] ?? 0}</b>
+      <Card title="Matches by status" action={<span className="muted">{fmt(total)} matches in all</span>}>
+        <div className="hbars" role="table" aria-label="Matches by status">
+          {statuses.map(([k, label], i) => (
+            <div className="hbar" role="row" key={k} title={`${label}: ${fmt(counts[i])} matches`}>
+              <span className="hbar-label" role="rowheader">
+                {label}
+              </span>
+              <span className="hbar-track" role="cell">
+                <i style={{ width: counts[i] ? `max(4px, ${(counts[i] / max) * 100}%)` : 0 }} />
+              </span>
+              <b className="hbar-value" role="cell">
+                {fmt(counts[i])}
+              </b>
             </div>
           ))}
         </div>
@@ -1137,39 +1157,16 @@ function Audit() {
   );
 }
 
-export function AdminPage() {
-  const [tab, setTab] = useState<Tab>('overview');
-  return (
-    <div className="page">
-      <PageTitle title="Administration" subtitle="Every change here is recorded in the audit log." />
-      <div className="admin-tabs">
-        <Segmented<Tab>
-          value={tab}
-          options={[
-            { value: 'overview', label: 'Overview' },
-            { value: 'users', label: 'Users' },
-            { value: 'transactions', label: 'Transactions' },
-            { value: 'matches', label: 'Matches' },
-            { value: 'disputes', label: 'Disputes' },
-            { value: 'popups', label: 'Popups' },
-            { value: 'dice', label: 'Dice' },
-            { value: 'boards', label: 'Boards' },
-            { value: 'settings', label: 'Settings' },
-            { value: 'audit', label: 'Audit log' },
-          ]}
-          onChange={setTab}
-        />
-      </div>
-      {tab === 'overview' && <Overview />}
-      {tab === 'users' && <Users />}
-      {tab === 'transactions' && <Transactions />}
-      {tab === 'matches' && <Matches />}
-      {tab === 'disputes' && <Disputes />}
-      {tab === 'popups' && <Popups />}
-      {tab === 'dice' && <DiceProducts />}
-      {tab === 'boards' && <BoardProducts />}
-      {tab === 'settings' && <SettingsTab />}
-      {tab === 'audit' && <Audit />}
-    </div>
-  );
-}
+/** The admin panel's sections, in sidebar order: path, label, icon and page. */
+export const ADMIN_SECTIONS: { path: string; label: string; icon: string; group: string; hint: string; page: ComponentType }[] = [
+  { path: 'overview', label: 'Overview', icon: '📊', group: 'Dashboard', hint: 'Players, coins and matches at a glance.', page: Overview },
+  { path: 'users', label: 'Players', icon: '👥', group: 'People', hint: 'Find players, adjust coins and diamonds, suspend accounts.', page: Users },
+  { path: 'disputes', label: 'Disputes', icon: '⚖️', group: 'People', hint: 'Match reports waiting for a decision.', page: Disputes },
+  { path: 'transactions', label: 'Transactions', icon: '🧾', group: 'Money', hint: 'Every coin movement, newest first.', page: Transactions },
+  { path: 'matches', label: 'Matches', icon: '🎲', group: 'Money', hint: 'Matches, their players and payouts.', page: Matches },
+  { path: 'boards', label: 'Boards', icon: '👑', group: 'Shop', hint: 'Board prices (coins or diamonds), looks, publishing and sales.', page: BoardProducts },
+  { path: 'dice', label: 'Dice', icon: '🎯', group: 'Shop', hint: 'Dice prices, rarity, stock and sales.', page: DiceProducts },
+  { path: 'popups', label: 'Popups', icon: '📣', group: 'App', hint: 'Announcements shown on the app home screen.', page: Popups },
+  { path: 'settings', label: 'Settings', icon: '⚙️', group: 'App', hint: 'Bonuses, match modes, payouts and frame prices.', page: SettingsTab },
+  { path: 'audit', label: 'Audit log', icon: '🛡️', group: 'App', hint: 'Every change an administrator made.', page: Audit },
+];

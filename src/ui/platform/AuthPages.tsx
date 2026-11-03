@@ -4,9 +4,9 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { post } from '../../lib/api';
 import { refreshMe, useAuth } from '../../store/auth';
 import { Button } from '../common';
-import { CoinIcon, ErrorNote, Field } from './kit';
+import { ErrorNote, Field } from './kit';
 
-/** Register / login / forgot / reset / verify. The server enforces every rule; the client mirrors them for instant feedback. */
+/** Admin sign-in, and the pages emails link to (forgot / reset password, verify email). The server enforces every rule; the client mirrors them for instant feedback. */
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -29,9 +29,12 @@ function AuthLayout({ title, subtitle, children, footer }: { title: string; subt
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ type: 'spring', stiffness: 240, damping: 24 }}
       >
-        <div className="logo small auth-logo">
-          <span className="logo-ludo">LUDO</span>
-          <span className="logo-3d">3D</span>
+        <div className="auth-brand">
+          <span className="admin-logo" aria-hidden>
+            👑
+          </span>
+          <b>LudoX</b>
+          <span>Admin</span>
         </div>
         <h1>{title}</h1>
         {subtitle && <p className="muted auth-sub">{subtitle}</p>}
@@ -39,73 +42,6 @@ function AuthLayout({ title, subtitle, children, footer }: { title: string; subt
         {footer && <div className="auth-footer">{footer}</div>}
       </motion.div>
     </div>
-  );
-}
-
-export function RegisterPage() {
-  const nav = useNavigate();
-  const [params] = useSearchParams();
-  const bonus = useAuth((s) => s.config?.welcomeBonus ?? 1000);
-  const [f, setF] = useState({ fullName: '', email: '', password: '', confirmPassword: '' });
-  const [touched, setTouched] = useState<Record<string, boolean>>({});
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const errors = {
-    fullName: f.fullName.trim().length < 2 ? 'Enter your name (at least 2 characters)' : null,
-    email: !EMAIL_RE.test(f.email.trim()) ? 'Enter a valid email address' : null,
-    password: passwordIssue(f.password),
-    confirmPassword: f.confirmPassword !== f.password ? 'Passwords do not match' : null,
-  };
-  const valid = !Object.values(errors).some(Boolean);
-  const show = (k: keyof typeof errors) => (touched[k] ? errors[k] : null);
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setTouched({ fullName: true, email: true, password: true, confirmPassword: true });
-    if (!valid || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await post('/auth/register', { ...f, email: f.email.trim(), fullName: f.fullName.trim() });
-      await refreshMe();
-      nav(safeNext(params.get('next')), { replace: true });
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
-  };
-
-  return (
-    <AuthLayout
-      title="Create your account"
-      subtitle={
-        <span className="bonus-note">
-          <CoinIcon size={18} /> Get <b>{bonus.toLocaleString()} free coins</b> when you join
-        </span>
-      }
-      footer={
-        <>
-          Already have an account? <Link to={`/login${params.get('next') ? `?next=${encodeURIComponent(params.get('next')!)}` : ''}`}>Sign in</Link>
-        </>
-      }
-    >
-      <form className="stack" onSubmit={submit} noValidate>
-        <Field label="Full name" autoComplete="name" maxLength={60} value={f.fullName} error={show('fullName')}
-          onChange={(e) => setF({ ...f, fullName: e.target.value })} onBlur={() => setTouched({ ...touched, fullName: true })} />
-        <Field label="Email address" type="email" autoComplete="email" inputMode="email" maxLength={254} value={f.email} error={show('email')}
-          onChange={(e) => setF({ ...f, email: e.target.value })} onBlur={() => setTouched({ ...touched, email: true })} />
-        <Field label="Password" type="password" autoComplete="new-password" maxLength={128} value={f.password} error={show('password')}
-          hint="At least 8 characters with letters and numbers"
-          onChange={(e) => setF({ ...f, password: e.target.value })} onBlur={() => setTouched({ ...touched, password: true })} />
-        <Field label="Confirm password" type="password" autoComplete="new-password" maxLength={128} value={f.confirmPassword} error={show('confirmPassword')}
-          onChange={(e) => setF({ ...f, confirmPassword: e.target.value })} onBlur={() => setTouched({ ...touched, confirmPassword: true })} />
-        <ErrorNote error={error} />
-        <Button variant="primary" size="lg" type="submit" disabled={busy}>
-          {busy ? 'Creating account…' : 'Create account'}
-        </Button>
-      </form>
-    </AuthLayout>
   );
 }
 
@@ -138,13 +74,8 @@ export function LoginPage() {
 
   return (
     <AuthLayout
-      title="Welcome back"
-      subtitle={params.get('reset') ? 'Your password was changed. Sign in with the new one.' : 'Sign in to play, earn coins and challenge friends.'}
-      footer={
-        <>
-          New here? <Link to={`/register${next ? `?next=${encodeURIComponent(next)}` : ''}`}>Create an account</Link>
-        </>
-      }
+      title="Admin sign in"
+      subtitle={params.get('reset') ? 'Your password was changed. Sign in with the new one.' : 'For LudoX administrators. Players play in the Android app.'}
     >
       <form className="stack" onSubmit={submit} noValidate>
         <Field label="Email address" type="email" autoComplete="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -255,7 +186,7 @@ export function VerifyEmailPage() {
     );
   }, [params]);
   return (
-    <AuthLayout title="Email verification" footer={<Link to="/">Go to the dashboard</Link>}>
+    <AuthLayout title="Email verification" footer="You can close this page and go back to the LudoX app.">
       {state === 'working' ? (
         <p className="muted">Verifying…</p>
       ) : state === 'ok' ? (

@@ -47,14 +47,9 @@ export default defineConfig({
     chunkSizeWarningLimit: 1800,
     rollupOptions: {
       output: {
-        // 3D libraries load with the game; everything else (React, router, state) is the app vendor chunk.
+        // Libraries (React, router, state, motion) in one vendor chunk, the admin panel in its own.
         manualChunks(id) {
-          // Vite's preload helper is shared with drei's lazy imports; keep it out of the 3D chunk.
-          if (id.includes('vite/preload-helper') || id.includes('commonjsHelpers')) return 'vendor';
-          if (!id.includes('node_modules')) return undefined;
-          if (/node_modules[\/]three[\/]/.test(id)) return 'three';
-          if (/@react-three|three-stdlib|three-mesh-bvh|troika|camera-controls|maath|meshline|stats-gl|@monogrid|detect-gpu|hls\.js|suspend-react|its-fine|tunnel-rat/.test(id)) return 'r3f';
-          return 'vendor';
+          return id.includes('node_modules') ? 'vendor' : undefined;
         },
       },
     },
