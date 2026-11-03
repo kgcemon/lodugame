@@ -12,6 +12,7 @@ import { buyItem, equipItem, shopState, type ShopKind } from './skins';
 import { DICE_SKINS } from '../shared/skins';
 import { PROFILE_FRAMES } from '../shared/frames';
 import { BOARDS, DEFAULT_BOARD } from '../shared/boards';
+import { diceProducts, diceSales, stockSold, type DiceProduct } from './dice';
 import { payoutPolicy } from './settings';
 import { spin, spinState } from './spin';
 import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type TxType } from './wallet';
@@ -143,6 +144,9 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
     }));
   /** The seat field each shop changes. */
   const seatField = { dice: 'diceSkin', frame: 'frame', board: 'board' } as const;
+  /** Every die with the administrator's changes, prices, stock left and data-backed labels. */
+  const allDice = async (): Promise<DiceProduct[]> =>
+    diceProducts(settings.get().diceProducts, (id) => settings.price('dice', id), await diceSales(db), await stockSold(db));
 
   // ---------------------------------------------------------------- public config
 
@@ -161,7 +165,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         gemPacks: GEM_PACKS,
         rerollCosts: REROLL_COSTS,
         purchasesEnabled: !!ctx.play,
-        diceSkins: shopCatalogue('dice'),
+        // Every die (also unpublished ones): the app needs any die a player shows at the table.
+        diceSkins: await allDice(),
         frames: shopCatalogue('frame'),
         boards: shopCatalogue('board'),
       };
@@ -320,14 +325,24 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
 
   /** One shop (dice skins, profile frames or boards): list, buy (once) and put on. */
   const shop = (path: string, kind: ShopKind, list: string) => {
-    r.get(path, h(async (req) => ({ ok: true, [list]: shopCatalogue(kind), ...(await shopState(db, kind, req.user!.id)) })));
+    r.get(
+      path,
+      h(async (req) => {
+        const state = await shopState(db, kind, req.user!.id);
+        // Dice: what's on sale, plus unpublished dice the player already owns.
+        const items = kind === 'dice' ? (await allDice()).filter((d) => d.published || state.owned.includes(d.id)) : shopCatalogue(kind);
+        return { ok: true, [list]: items, ...state };
+      }),
+    );
 
     r.post(
       `${path}/:id/buy`,
       rateLimit(20, 60_000, (req) => req.user!.id),
       h(async (req) => {
         const id = String(req.params.id);
-        const state = await buyItem(db, kind, req.user!.id, id, settings.price(kind, id));
+        const product = kind === 'dice' ? (await allDice()).find((d) => d.id === id) : undefined;
+        const terms = product ? { published: product.published, limit: product.limit } : undefined;
+        const state = await buyItem(db, kind, req.user!.id, id, settings.price(kind, id), terms);
         const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
         presence.emit(req.user!.id, 'wallet', wallet);
         rooms().setCosmetics(req.user!.id, { [seatField[kind]]: state.equipped });
@@ -1029,6 +1044,24 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   );
 
   admin.get('/settings', h(async () => ({ ok: true, settings: settings.get(), policy: payoutPolicy(settings.get()) })));
+
+  /** Dice products as the shop sells them, with real sales per die (owners, last 30 days, diamonds earned). */
+  admin.get(
+    '/dice',
+    h(async () => {
+      const sales = await diceSales(db);
+      const products = await allDice();
+      return {
+        ok: true,
+        products: products.map((p) => ({ ...p, sales: sales.get(p.id) ?? { owners: 0, recent: 0, diamonds: 0 } })),
+        totals: {
+          owners: [...sales.values()].reduce((a, x) => a + x.owners, 0),
+          recent: [...sales.values()].reduce((a, x) => a + x.recent, 0),
+          diamonds: [...sales.values()].reduce((a, x) => a + x.diamonds, 0),
+        },
+      };
+    }),
+  );
 
   admin.put(
     '/settings',

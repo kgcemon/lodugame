@@ -169,6 +169,15 @@ final class DiceView extends View {
                 value = result;
                 invalidate();
                 if (cancelled) return;
+                // Premium dice put on their landing show (looks only).
+                if (DiceFx.has(skin.effect)) {
+                    int[] at = new int[2];
+                    int[] o = new int[2];
+                    getLocationInWindow(at);
+                    overlay.getLocationInWindow(o);
+                    float bx = at[0] - o[0] + boxLeft() + boxSize() / 2f, by = at[1] - o[1] + getHeight() / 2f;
+                    DiceFx.burstIn(overlay, skin.effect, bx, by, boxSize());
+                }
                 // Landing thump in the box.
                 setScaleX(1.16f);
                 setScaleY(0.88f);
@@ -351,103 +360,25 @@ final class DiceView extends View {
         drawDie(canvas, paint, path, x0 + (box - d) / 2f, y0 + (box - d) / 2f - box * 0.02f, d, value, active || ready, skin);
     }
 
-    private static final float[] AT = {0.27f, 0.5f, 0.73f};
-    private static final int[][][] FACE_PIPS = {
-            {},
-            {{1, 1}},
-            {{2, 0}, {0, 2}},
-            {{2, 0}, {1, 1}, {0, 2}},
-            {{0, 0}, {2, 0}, {0, 2}, {2, 2}},
-            {{0, 0}, {2, 0}, {1, 1}, {0, 2}, {2, 2}},
-            {{0, 0}, {2, 0}, {0, 1}, {2, 1}, {0, 2}, {2, 2}},
-    };
-
     /**
-     * A resting die seen face-on, fitted in the square at x, y: soft drop shadow, a rounded
-     * white face with a gentle top-lit gradient and a thin darker rim, and slightly recessed
-     * pips. Its outline matches the last frame of the 3D throw, so the landing is seamless.
+     * A resting die seen face-on, fitted in the square at x, y (drawn by DiceArt in the die's
+     * own material). Its outline matches the last frame of the 3D throw, so the landing is seamless.
      */
     static void drawDie(Canvas canvas, Paint paint, Path path, float x, float y, float s, int value, boolean lit) {
         drawDie(canvas, paint, path, x, y, s, value, lit, Skin.CLASSIC);
     }
 
     static void drawDie(Canvas canvas, Paint paint, Path path, float x, float y, float s, int value, boolean lit, Skin skin) {
-        float r = s * 0.22f;
-        paint.setShader(null);
-        paint.setStyle(Paint.Style.FILL);
-        // Shadow.
-        paint.setColor(0x40000000);
-        canvas.drawRoundRect(x + s * 0.03f, y + s * 0.07f, x + s * 1.03f, y + s * 1.07f, r, r, paint);
-        // Rim, then the face.
-        int top = skin.shade(skin.face, lit);
-        int bottom = skin.shade(skin.faceBottom, lit);
-        paint.setColor(skin.shade(skin.rim, lit));
-        canvas.drawRoundRect(x, y, x + s, y + s, r, r, paint);
-        float in = s * 0.035f;
-        paint.setShader(new LinearGradient(0, y, 0, y + s, top, bottom, Shader.TileMode.CLAMP));
-        canvas.drawRoundRect(x + in, y + in, x + s - in, y + s - in * 1.6f, r * 0.85f, r * 0.85f, paint);
-        paint.setShader(null);
-        if (skin.flag != null) {
-            // Flag dice: the flag fills the face inside the rim.
-            path.reset();
-            path.addRoundRect(x + in, y + in, x + s - in, y + s - in * 1.6f, r * 0.85f, r * 0.85f, Path.Direction.CW);
-            canvas.save();
-            canvas.clipPath(path);
-            canvas.drawBitmap(Flags.bitmap(skin.flag), null, new android.graphics.RectF(x + in, y + in, x + s - in, y + s - in * 1.6f), flagPaint(lit ? 1f : 0.72f));
-            canvas.restore();
-        }
-        // A soft highlight across the upper part of the face.
-        paint.setColor(0x33ffffff);
-        canvas.drawRoundRect(x + s * 0.12f, y + s * 0.08f, x + s * 0.88f, y + s * 0.4f, r * 0.6f, r * 0.6f, paint);
-        if (value < 1 || value > 6) return;
-        float pr = s * (value == 1 ? 0.12f : 0.088f);
-        int pip = skin.shade(skin.pip, lit);
-        for (int[] p : FACE_PIPS[value]) {
-            float cx = x + s * AT[p[0]], cy = y + s * AT[p[1]];
-            paint.setColor(0x55ffffff);
-            canvas.drawCircle(cx, cy + pr * 0.28f, pr, paint);
-            if (skin.flag != null) {
-                // A dark ring keeps white pips readable on any flag.
-                paint.setColor(0xaa000000);
-                canvas.drawCircle(cx, cy, pr * 1.3f, paint);
-            }
-            paint.setColor(value == 1 ? skin.shade(skin.one, lit) : pip);
-            canvas.drawCircle(cx, cy, pr, paint);
-        }
-    }
-
-    private static final Paint FLAG_PAINT = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-
-    /** Paint for a flag face, darkened by `light` (1 = as is). Drawing happens on the UI thread. */
-    private static Paint flagPaint(float light) {
-        int k = Math.round(255 * Math.max(0f, Math.min(1f, light)));
-        FLAG_PAINT.setColorFilter(new android.graphics.LightingColorFilter(Color.rgb(k, k, k), 0));
-        return FLAG_PAINT;
+        com.ludo3d.game.gl.DiceArt.drawFlat(canvas, paint, x, y, s, value, lit, skin.look());
     }
 
     // ---------------------------------------------------------------- the 3D cube
 
     /**
-     * A die as a real cube: six faces with pips, rotated by a 3x3 matrix, drawn with
-     * perspective and simple lighting (back faces culled, the rest painted far to near).
-     * Opposite faces sum to seven.
+     * A die as a real cube rotated by a 3x3 matrix (drawn by DiceArt with perspective,
+     * bevelled edges and lighting). Opposite faces sum to seven.
      */
     static final class Cube {
-        // Face normal, u axis, v axis (v points "up" on the face), and its value.
-        private static final float[][] N = {{0, 0, 1}, {0, 0, -1}, {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}};
-        private static final float[][] U = {{1, 0, 0}, {-1, 0, 0}, {0, 0, -1}, {0, 0, 1}, {1, 0, 0}, {1, 0, 0}};
-        private static final float[][] V = {{0, 1, 0}, {0, 1, 0}, {0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
-        private static final int[] VAL = {1, 6, 2, 5, 3, 4};
-        private static final float[][][] PIPS = {
-                {},
-                {{0, 0}},
-                {{-0.5f, 0.5f}, {0.5f, -0.5f}},
-                {{-0.5f, 0.5f}, {0, 0}, {0.5f, -0.5f}},
-                {{-0.5f, 0.5f}, {0.5f, 0.5f}, {-0.5f, -0.5f}, {0.5f, -0.5f}},
-                {{-0.5f, 0.5f}, {0.5f, 0.5f}, {0, 0}, {-0.5f, -0.5f}, {0.5f, -0.5f}},
-                {{-0.5f, 0.5f}, {0.5f, 0.5f}, {-0.5f, 0}, {0.5f, 0}, {-0.5f, -0.5f}, {0.5f, -0.5f}},
-        };
-        private static final float[] LIGHT = norm(new float[]{-0.35f, 0.65f, 0.7f});
         /** Orientation that shows `value` on the front face (where a throw comes to rest). */
         static float[] rest(int value) {
             return face(value);
@@ -466,109 +397,7 @@ final class DiceView extends View {
         }
 
         static void draw(Canvas c, Paint paint, Path path, float cx, float cy, float half, float[] m, boolean lit, Skin skin) {
-            float persp = 9f;
-            // Order the visible faces far to near.
-            int[] order = new int[6];
-            float[] depth = new float[6];
-            int count = 0;
-            for (int f = 0; f < 6; f++) {
-                float[] n = apply(m, N[f]);
-                if (n[2] <= 0.02f) continue;
-                order[count] = f;
-                depth[count] = n[2];
-                count++;
-            }
-            for (int i = 1; i < count; i++) {
-                for (int j = i; j > 0 && depth[j - 1] > depth[j]; j--) {
-                    float td = depth[j];
-                    depth[j] = depth[j - 1];
-                    depth[j - 1] = td;
-                    int to = order[j];
-                    order[j] = order[j - 1];
-                    order[j - 1] = to;
-                }
-            }
-            int base = skin.shade(skin.face, lit);
-            int pipColor = skin.shade(skin.pip, lit);
-            float[] p = new float[2];
-            for (int k = 0; k < count; k++) {
-                int f = order[k];
-                float[] n = apply(m, N[f]);
-                float[] u = apply(m, U[f]);
-                float[] v = apply(m, V[f]);
-                float shade = 0.62f + 0.38f * Math.max(0f, dot(n, LIGHT));
-                int col = Color.rgb((int) (Color.red(base) * shade), (int) (Color.green(base) * shade), (int) (Color.blue(base) * shade));
-                path.reset();
-                float[][] corners = {{1, 1}, {-1, 1}, {-1, -1}, {1, -1}};
-                for (int i = 0; i < 4; i++) {
-                    project(n, u, v, corners[i][0] * 0.94f, corners[i][1] * 0.94f, 1f, cx, cy, half, persp, p);
-                    if (i == 0) path.moveTo(p[0], p[1]);
-                    else path.lineTo(p[0], p[1]);
-                }
-                path.close();
-                // Fill plus a fat round-joined stroke of the same colour: rounded edges.
-                paint.setShader(null);
-                paint.setStyle(Paint.Style.FILL_AND_STROKE);
-                paint.setStrokeJoin(Paint.Join.ROUND);
-                paint.setStrokeWidth(half * 0.22f);
-                paint.setColor(col);
-                c.drawPath(path, paint);
-                paint.setStyle(Paint.Style.FILL);
-                if (skin.flag != null) {
-                    // Map the flag picture onto the face (corners: top-left, top-right, bottom-right, bottom-left).
-                    Bitmap flag = Flags.bitmap(skin.flag);
-                    float[] dst = new float[8];
-                    float[][] fc = {{-1, 1}, {1, 1}, {1, -1}, {-1, -1}};
-                    for (int i = 0; i < 4; i++) {
-                        project(n, u, v, fc[i][0] * 0.94f, fc[i][1] * 0.94f, 1.001f, cx, cy, half, persp, p);
-                        dst[i * 2] = p[0];
-                        dst[i * 2 + 1] = p[1];
-                    }
-                    float fw = flag.getWidth(), fh = flag.getHeight();
-                    android.graphics.Matrix mx = new android.graphics.Matrix();
-                    mx.setPolyToPoly(new float[]{0, 0, fw, 0, fw, fh, 0, fh}, 0, dst, 0, 4);
-                    c.save();
-                    c.clipPath(path);
-                    c.concat(mx);
-                    c.drawBitmap(flag, 0, 0, flagPaint(lit ? shade : shade * 0.72f));
-                    c.restore();
-                }
-
-                // Pips, foreshortened with the face.
-                int value = VAL[f];
-                float pr = value == 1 ? 0.27f : 0.19f;
-                for (float[] pip : PIPS[value]) {
-                    path.reset();
-                    for (int i = 0; i < 14; i++) {
-                        double ang = Math.PI * 2 * i / 14;
-                        project(n, u, v, pip[0] * 1.15f + (float) Math.cos(ang) * pr, pip[1] * 1.15f + (float) Math.sin(ang) * pr, 1.002f,
-                                cx, cy, half, persp, p);
-                        if (i == 0) path.moveTo(p[0], p[1]);
-                        else path.lineTo(p[0], p[1]);
-                    }
-                    path.close();
-                    if (skin.flag != null) {
-                        paint.setStyle(Paint.Style.STROKE);
-                        paint.setStrokeWidth(half * 0.06f);
-                        paint.setColor(0xaa000000);
-                        c.drawPath(path, paint);
-                        paint.setStyle(Paint.Style.FILL);
-                    }
-                    paint.setColor(value == 1 ? skin.shade(skin.one, lit) : pipColor);
-                    c.drawPath(path, paint);
-                }
-            }
-        }
-
-        /** Screen position of the point n*out + u*a + v*b on a cube of half-size 1. */
-        private static void project(float[] n, float[] u, float[] v, float a, float b, float outward, float cx, float cy,
-                                    float half, float persp, float[] out) {
-            float x = n[0] * outward + u[0] * a + v[0] * b;
-            float y = n[1] * outward + u[1] * a + v[1] * b;
-            float z = n[2] * outward + u[2] * a + v[2] * b;
-            float k = persp / (persp - z);
-            out[0] = cx + x * half * k;
-            out[1] = cy - y * half * k;
+            com.ludo3d.game.gl.DiceArt.drawCube(c, paint, path, cx, cy, half, m, lit, skin.look(), -1f);
         }
 
         // ---- tiny 3x3 matrix helpers (row-major)
@@ -670,10 +499,23 @@ final class DiceView extends View {
         static final Skin CLASSIC = new Skin("classic", "Classic", 0, 0xffffffff, 0xffe4e1ee, 0xffc9c5d8, 0xff23202e, 0xffd62839, null);
         private static final java.util.Map<String, Skin> CACHE = new java.util.HashMap<>();
 
+        static {
+            com.ludo3d.game.gl.DiceArt.flags = Flags::bitmap;
+        }
+
         final String id, name;
         final int price, face, faceBottom, rim, pip, one;
         /** Country whose flag covers the faces (flag dice), or null. */
         final String flag;
+        /** Shop data: rarity, collection, landing effect and a line about it. */
+        String rarity = "common", collection = "classic", effect = "none", blurb = "";
+        private com.ludo3d.game.gl.DiceArt.Look look;
+
+        /** How this die is drawn (premium dice by id, others from their colours). */
+        com.ludo3d.game.gl.DiceArt.Look look() {
+            if (look == null) look = com.ludo3d.game.gl.DiceArt.look(id, face, faceBottom, rim, pip, one, flag);
+            return look;
+        }
 
         Skin(String id, String name, int price, int face, int faceBottom, int rim, int pip, int one, String flag) {
             this.flag = flag;
@@ -693,10 +535,15 @@ final class DiceView extends View {
 
         static Skin from(JSONObject o) {
             try {
-                return new Skin(o.getString("id"), o.optString("name", o.getString("id")), o.optInt("price"),
+                Skin k = new Skin(o.getString("id"), o.optString("name", o.getString("id")), o.optInt("price"),
                         Color.parseColor(o.getString("face")), Color.parseColor(o.getString("faceBottom")),
                         Color.parseColor(o.getString("rim")), Color.parseColor(o.getString("pip")), Color.parseColor(o.getString("one")),
                         o.isNull("flag") ? null : o.optString("flag", null));
+                k.rarity = o.optString("rarity", "common");
+                k.collection = o.optString("collection", "classic");
+                k.effect = o.optString("effect", "none");
+                k.blurb = o.optString("blurb", "");
+                return k;
             } catch (Exception e) {
                 return null;
             }

@@ -43,6 +43,10 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     private Mesh boardTop, boardBase, pawn, dice, flat, unitBox;
     private int texBoard, texDice, texShadow, texRing;
     private BoardThemes.Theme theme = BoardThemes.CLASSIC;
+    /** Each player's dice skin (by colour), and the board die's texture per skin (GL thread). */
+    private volatile Map<String, DiceArt.Look> diceLooks = new HashMap<>();
+    private final Map<String, Integer> diceTex = new HashMap<>();
+    private int dieOwner = -1;
 
     private final float[] proj = new float[16], view = new float[16], vp = new float[16], model = new float[16], mvp = new float[16];
     private final float[] eye = new float[3];
@@ -124,6 +128,24 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
 
     public void setMyColor(String color) {
         myColor = color;
+    }
+
+    /** The die each colour throws (its dice skin); the board's die shows the roller's. */
+    public void setDiceLooks(Map<String, DiceArt.Look> looks) {
+        diceLooks = looks;
+    }
+
+    /** The board die's texture for this player's skin (painted once per skin). */
+    private int diceTexture(int player) {
+        if (state == null || player < 0 || player >= state.players.size()) return texDice;
+        DiceArt.Look l = diceLooks.get(state.players.get(player).color);
+        if (l == null) return texDice;
+        Integer t = diceTex.get(l.id);
+        if (t == null) {
+            t = Textures.upload(DiceArt.atlas(l, 256), false);
+            diceTex.put(l.id, t);
+        }
+        return t;
     }
 
     /** Play on this board theme (the room's: its host's); repaints the board face if it changed. */
@@ -526,6 +548,8 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         unitBox = Mesh.box(0.5f, 0.5f, 0.5f, false);
         texBoard = Textures.upload(BoardThemes.bitmap(theme, 1024), true);
         texDice = Textures.upload(Textures.dice(), false);
+        // A new GL context: textures painted for the old one are gone.
+        diceTex.clear();
         texShadow = Textures.upload(Textures.shadow(), false);
         texRing = Textures.upload(Textures.ring(), false);
     }
@@ -737,6 +761,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         if (state != null) {
             if (idle) diceOwner = -1;
             int owner = diceOwner >= 0 && diceOwner < state.players.size() ? diceOwner : state.current;
+            dieOwner = owner;
             float[] o = Board.yardOrigin(state.players.get(owner).ci);
             float tx = o[0] + 2.5f - 7f, tz = o[1] + 2.5f - 7f;
             float k = 0.15f;
@@ -758,7 +783,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         }
         faceUp(diceValue);
         if (boardDice) {
-            use(texDice, 1, 1, 1, 1, false, 0.35f);
+            use(diceTexture(dieOwner), 1, 1, 1, 1, false, 0.35f);
             draw(dice);
         }
 

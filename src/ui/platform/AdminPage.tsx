@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import { api, fmt, get, post, type MatchMode } from '../../lib/api';
 import { useGame } from '../../store/game';
 import { Avatar, Button, Segmented, Toggle } from '../common';
-import { DICE_SKINS } from '../../../shared/skins';
+import { EFFECTS, RARITIES } from '../../../shared/skins';
 import { PROFILE_FRAMES } from '../../../shared/frames';
 import { BOARDS, DEFAULT_BOARD } from '../../../shared/boards';
 import { Card, Confirm, Empty, ErrorNote, PageTitle, Spinner, useFetch } from './kit';
 
 /** Administrator tools. Every endpoint re-checks the admin role on the server. */
 
-type Tab = 'overview' | 'users' | 'transactions' | 'matches' | 'disputes' | 'popups' | 'settings' | 'audit';
+type Tab = 'overview' | 'users' | 'transactions' | 'matches' | 'disputes' | 'popups' | 'dice' | 'settings' | 'audit';
 
 type Row = Record<string, string | number | boolean | null>;
 
@@ -613,7 +613,7 @@ interface AdminSettings {
   shopPrices: Record<string, number>;
 }
 
-/** Diamond prices of everything in the app's shop (the classic dice and board are always free). */
+/** Diamond prices of frames and boards (dice are priced in the Dice tab; the classic board is always free). */
 function ShopPrices({ prices, onChange }: { prices: Record<string, number>; onChange: (p: Record<string, number>) => void }) {
   const group = (title: string, kind: 'dice' | 'frame' | 'board', items: { id: string; name: string }[]) => (
     <>
@@ -636,11 +636,168 @@ function ShopPrices({ prices, onChange }: { prices: Record<string, number>; onCh
   );
   return (
     <>
-      {group('Shop · dice prices (💎 diamonds)', 'dice', DICE_SKINS.filter((d) => d.id !== 'classic'))}
       {group('Shop · profile frame prices (💎 diamonds)', 'frame', PROFILE_FRAMES)}
       {group('Shop · royal board prices (💎 diamonds)', 'board', BOARDS.filter((b) => b.id !== DEFAULT_BOARD))}
-      <p className="hint">0 makes an item free. Players who already own an item keep it when its price changes.</p>
+      <p className="hint">0 makes an item free. Players who already own an item keep it when its price changes. Dice prices are in the Dice tab.</p>
     </>
+  );
+}
+
+type DiceRow = {
+  id: string;
+  name: string;
+  price: number;
+  rarity: string;
+  collection: string;
+  effect: string;
+  published: boolean;
+  featured: boolean;
+  limit: number | null;
+  left: number | null;
+  labels: string[];
+  sales: { owners: number; recent: number; diamonds: number };
+};
+
+/** Dice products: name, price, rarity, effect, on sale or not, featured, limited stock — and real sales. */
+function DiceProducts() {
+  const [rows, setRows] = useState<DiceRow[] | null>(null);
+  const [totals, setTotals] = useState<{ owners: number; recent: number; diamonds: number } | null>(null);
+  const [orig, setOrig] = useState<Record<string, DiceRow>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = () =>
+    get<{ products: DiceRow[]; totals: { owners: number; recent: number; diamonds: number } }>('/admin/dice').then(
+      (r) => {
+        setRows(r.products);
+        setTotals(r.totals);
+        setOrig(Object.fromEntries(r.products.map((p) => [p.id, p])));
+      },
+      (e: Error) => setError(e.message),
+    );
+  useEffect(() => {
+    load();
+  }, []);
+  if (!rows) return error ? <ErrorNote error={error} /> : <Spinner />;
+  const upd = (id: string, patch: Partial<DiceRow>) => setRows(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    const diceProducts: Record<string, unknown> = {};
+    const shopPrices: Record<string, number> = {};
+    for (const r of rows) {
+      const o = orig[r.id];
+      const ch: Record<string, unknown> = {};
+      for (const k of ['name', 'rarity', 'effect', 'published', 'featured', 'limit'] as const) if (r[k] !== o[k]) ch[k] = r[k];
+      if (Object.keys(ch).length) diceProducts[r.id] = ch;
+      if (r.price !== o.price && r.id !== 'classic') shopPrices[`dice:${r.id}`] = r.price;
+    }
+    try {
+      await api('PUT', '/admin/settings', { diceProducts, shopPrices });
+      toast('Dice saved — the shop shows the changes right away');
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card>
+      {totals && (
+        <p className="hint">
+          <b>{fmt(totals.owners)}</b> dice owned by players · <b>{fmt(totals.recent)}</b> bought in the last 30 days · <b>💎 {fmt(totals.diamonds)}</b> diamonds spent on dice
+        </p>
+      )}
+      <p className="hint">
+        Labels follow real data: NEW for 30 days after release, BEST SELLER / MOST POPULAR from actual sales, LIMITED EDITION only with a limit. Hidden dice leave the
+        shop; players who own them keep them. Rarity and effects are looks only — every die rolls the same.
+      </p>
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Dice</th>
+              <th>Price 💎</th>
+              <th>Rarity</th>
+              <th>Effect</th>
+              <th>On sale</th>
+              <th>Featured</th>
+              <th>Limit</th>
+              <th>Owners</th>
+              <th>30 days</th>
+              <th>💎 earned</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td>
+                  <input className="input" value={r.name} aria-label={`Name of ${r.id}`} onChange={(e) => upd(r.id, { name: e.target.value })} />
+                  <div className="small muted">
+                    {r.id} · {r.collection}
+                    {r.labels.length ? ` · ${r.labels.join(', ')}` : ''}
+                  </div>
+                </td>
+                <td>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    disabled={r.id === 'classic'}
+                    aria-label={`Price of ${r.id}`}
+                    value={r.price}
+                    onChange={(e) => upd(r.id, { price: Number(e.target.value) })}
+                  />
+                </td>
+                <td>
+                  <select className="input" aria-label={`Rarity of ${r.id}`} value={r.rarity} onChange={(e) => upd(r.id, { rarity: e.target.value })}>
+                    {RARITIES.map((x) => (
+                      <option key={x} value={x}>
+                        {x}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td>
+                  <select className="input" aria-label={`Effect of ${r.id}`} value={r.effect} onChange={(e) => upd(r.id, { effect: e.target.value })}>
+                    {EFFECTS.map((x) => (
+                      <option key={x} value={x}>
+                        {x}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td>
+                  <Toggle label="" checked={r.published} onChange={(v) => r.id !== 'classic' && upd(r.id, { published: v })} />
+                </td>
+                <td>
+                  <Toggle label="" checked={r.featured} onChange={(v) => upd(r.id, { featured: v })} />
+                </td>
+                <td>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    placeholder="∞"
+                    aria-label={`Stock limit of ${r.id}`}
+                    value={r.limit ?? ''}
+                    onChange={(e) => upd(r.id, { limit: e.target.value === '' ? null : Number(e.target.value) })}
+                  />
+                  {r.limit !== null && <div className="small muted">{r.left} left</div>}
+                </td>
+                <td>{fmt(r.sales.owners)}</td>
+                <td>{fmt(r.sales.recent)}</td>
+                <td>{fmt(r.sales.diamonds)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ErrorNote error={error} />
+      <Button variant="primary" onClick={save} disabled={busy}>
+        {busy ? 'Saving…' : 'Save dice'}
+      </Button>
+    </Card>
   );
 }
 
@@ -770,6 +927,7 @@ export function AdminPage() {
             { value: 'matches', label: 'Matches' },
             { value: 'disputes', label: 'Disputes' },
             { value: 'popups', label: 'Popups' },
+            { value: 'dice', label: 'Dice' },
             { value: 'settings', label: 'Settings' },
             { value: 'audit', label: 'Audit log' },
           ]}
@@ -782,6 +940,7 @@ export function AdminPage() {
       {tab === 'matches' && <Matches />}
       {tab === 'disputes' && <Disputes />}
       {tab === 'popups' && <Popups />}
+      {tab === 'dice' && <DiceProducts />}
       {tab === 'settings' && <SettingsTab />}
       {tab === 'audit' && <Audit />}
     </div>

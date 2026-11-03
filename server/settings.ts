@@ -3,6 +3,7 @@ import { HttpError } from './security';
 import { DICE_SKINS } from '../shared/skins';
 import { PROFILE_FRAMES } from '../shared/frames';
 import { BOARDS } from '../shared/boards';
+import { validateDiceOverrides, type DiceOverride } from './dice';
 
 /** Trusted game configuration, stored in game_settings and editable by administrators. */
 
@@ -28,6 +29,8 @@ export interface GameSettings {
   modes: MatchMode[];
   /** Diamond price of each shop item, keyed `dice:<id>` / `frame:<id>` / `board:<id>` (0 = free). */
   shopPrices: Record<string, number>;
+  /** The administrator's changes to dice products (name, rarity, effect, publishing, featuring, stock). */
+  diceProducts: Record<string, DiceOverride>;
 }
 
 /** Every shop item at its catalogue price: what the shop costs until an administrator changes it. */
@@ -57,6 +60,7 @@ const KEYS: Record<keyof GameSettings, string> = {
   suspiciousAmount: 'suspicious_amount',
   modes: 'match_modes',
   shopPrices: 'shop_prices',
+  diceProducts: 'dice_products',
 };
 
 export function payoutPolicy(s: Pick<GameSettings, 'payoutMultiplier'>): string {
@@ -118,6 +122,7 @@ export class Settings {
       modes: get('modes'),
       // Stored prices over the catalogue's, so items added later start at their default.
       shopPrices: { ...defaultShopPrices(), ...((get('shopPrices') as Record<string, number> | undefined) ?? {}) },
+      diceProducts: (get('diceProducts') as Record<string, DiceOverride> | undefined) ?? {},
     };
     return this.cache;
   }
@@ -156,6 +161,7 @@ export class Settings {
     }
     if (patch.modes !== undefined) next.modes = validateModes(patch.modes, cur.modes);
     if (patch.shopPrices !== undefined) next.shopPrices = validateShopPrices(patch.shopPrices, cur.shopPrices);
+    if (patch.diceProducts !== undefined) next.diceProducts = validateDiceOverrides(patch.diceProducts, cur.diceProducts);
 
     await this.db.tx(async (q: Queryable) => {
       for (const k of Object.keys(KEYS) as (keyof GameSettings)[]) {

@@ -181,6 +181,7 @@ public class GameActivity extends BaseActivity {
         onGl(() -> renderer.setMyColor(color));
         String board = boardId();
         onGl(() -> renderer.setBoard(board));
+        syncDiceLooks();
         // Animations left over from before the pause would replay old rolls and their sounds.
         onGl(renderer::skipAnimations);
         JSONObject last = local != null ? localUpdate : app.socket.lastUpdate;
@@ -226,6 +227,7 @@ public class GameActivity extends BaseActivity {
                     // The host may have put on another board.
                     String board = room.optString("board", null);
                     onGl(() -> renderer.setBoard(board));
+                    syncDiceLooks();
                     renderChips();
                 }
                 break;
@@ -329,6 +331,18 @@ public class GameActivity extends BaseActivity {
     private boolean isMyTurn(GameState s) {
         // Offline, every seat is played on this phone.
         return s != null && !"over".equals(s.phase) && (local != null || s.currentPlayer().color.equals(myColor()));
+    }
+
+    /** Tell the 3D board which die each colour throws (each player's own dice skin). */
+    private void syncDiceLooks() {
+        java.util.Map<String, com.ludo3d.game.gl.DiceArt.Look> looks = new java.util.HashMap<>();
+        JSONObject room = local != null ? null : app.socket.room;
+        JSONArray seats = room != null ? room.optJSONArray("seats") : null;
+        for (int i = 0; seats != null && i < seats.length(); i++) {
+            JSONObject s = seats.optJSONObject(i);
+            if (s != null) looks.put(s.optString("color"), DiceView.Skin.byId(s.optString("diceSkin", null)).look());
+        }
+        renderer.setDiceLooks(looks);
     }
 
     /** The board this match is played on: the host's online, my own offline. */

@@ -4,6 +4,7 @@ import { HttpError } from './security';
 import { DEFAULT_DICE_SKIN, diceSkin } from '../shared/skins';
 import { NO_FRAME, profileFrame } from '../shared/frames';
 import { DEFAULT_BOARD, boardTheme } from '../shared/boards';
+import { forgetDiceSales, takeStock } from './dice';
 
 /**
  * The shop: dice skins, profile frames and board themes, each bought once with diamonds and then shown
@@ -35,23 +36,39 @@ export async function shopState(q: Queryable, kind: ShopKind, userId: string): P
   return { owned: [...ids], equipped: on && ids.has(on) ? on : k.free };
 }
 
-/** Buy an item with diamonds at `price` and put it on. Buying one you already own changes nothing. */
-export async function buyItem(db: Db, kind: ShopKind, userId: string, id: string, price: number): Promise<SkinState> {
+/** Whether an item is on sale, and how many copies may ever be sold (null = no limit). */
+export interface SaleTerms {
+  published: boolean;
+  limit: number | null;
+}
+
+/**
+ * Buy an item with diamonds at `price` and put it on. Buying one you already own changes
+ * nothing. An unpublished item can't be bought; a limited one takes a copy from its stock in
+ * the same transaction as the charge (a sold-out item charges nothing).
+ */
+export async function buyItem(db: Db, kind: ShopKind, userId: string, id: string, price: number, terms?: SaleTerms): Promise<SkinState> {
   const k = KINDS[kind];
   const item = k.find(id);
   if (!item) throw new HttpError(404, `No such ${k.label}`);
   if (id === k.free) return equipItem(db, kind, userId, id);
-  return db.tx(async (q) => {
+  const state = await db.tx(async (q) => {
     const has = await q.query(`select 1 from ${k.table} where user_id = $1 and ${k.col} = $2`, [userId, item.id]);
     if (!has.rows.length) {
+      if (terms && !terms.published) throw new HttpError(404, `This ${k.label} is not on sale`);
       const tx = price > 0
         ? await applyGemTx(q, { userId, type: 'skin_purchase', amount: -price, key: `${k.key}:${item.id}`, note: `${item.name} ${k.label}` })
         : null;
-      await q.query(`insert into ${k.table} (user_id, ${k.col}, gem_tx_id) values ($1, $2, $3) on conflict do nothing`, [userId, item.id, tx?.id ?? null]);
+      const added = await q.query(`insert into ${k.table} (user_id, ${k.col}, gem_tx_id) values ($1, $2, $3) on conflict do nothing`, [userId, item.id, tx?.id ?? null]);
+      // Only a copy that really went to this player counts against a limited stock (a
+      // retried tap lands on the row above and is not charged twice either).
+      if (added.rowCount > 0 && terms && terms.limit !== null) await takeStock(q, item.id, terms.limit);
     }
     await q.query(`update profiles set ${k.profileCol} = $2 where user_id = $1`, [userId, item.id]);
     return shopState(q, kind, userId);
   });
+  if (kind === 'dice') forgetDiceSales();
+  return state;
 }
 
 /** Show an item the player owns (or the free dice; `none` takes the frame off). */
