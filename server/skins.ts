@@ -10,7 +10,7 @@ import { applyWalletTx } from './wallet';
 
 /**
  * The shop: dice skins and profile frames (bought with diamonds) and board themes (bought
- * with coins), each bought once and then shown
+ * with coins, or the rarest with diamonds), each bought once and then shown
  * in every match. A purchase is one transaction: the diamond debit (idempotency key
  * `skin:<id>` / `frame:<id>` / `board:<id>`, so a retried tap never charges twice) and the ownership row
  * together, then it is put on. Prices come from the caller (game settings).
@@ -43,6 +43,8 @@ export async function shopState(q: Queryable, kind: ShopKind, userId: string): P
 export interface SaleTerms {
   published: boolean;
   limit: number | null;
+  /** Boards only: what pays for it (dice and frames are always diamonds). */
+  currency?: 'coins' | 'gems';
 }
 
 /**
@@ -59,9 +61,10 @@ export async function buyItem(db: Db, kind: ShopKind, userId: string, id: string
     const has = await q.query(`select 1 from ${k.table} where user_id = $1 and ${k.col} = $2`, [userId, item.id]);
     if (!has.rows.length) {
       if (terms && !terms.published) throw new HttpError(404, `This ${k.label} is not on sale`);
-      // Boards are paid in coins, the rest in diamonds; the key makes a retried tap free.
+      // Boards are paid in coins (or diamonds when the board says so), the rest in
+      // diamonds; the key makes a retried tap free.
       let gemTx: string | null = null;
-      if (price > 0 && kind === 'board') {
+      if (price > 0 && kind === 'board' && terms?.currency !== 'gems') {
         await applyWalletTx(q, { userId, type: 'shop_purchase', amount: -price, key: `${k.key}:${item.id}`, note: `${item.name} ${k.label}` });
       } else if (price > 0) {
         gemTx = (await applyGemTx(q, { userId, type: 'skin_purchase', amount: -price, key: `${k.key}:${item.id}`, note: `${item.name} ${k.label}` })).id;

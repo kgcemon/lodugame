@@ -55,6 +55,7 @@ final class HomeTab {
         col.addView(small);
 
         diceShopBanner();
+        collectionBanner();
         offlineBanner();
         banner();
         onlineFriends();
@@ -103,6 +104,27 @@ final class HomeTab {
         row.addView(Fx.GoldText.label(a, "▶", 20, 0xff0b5a9e));
         t.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         t.setOnClickListener(v -> a.startActivity(new android.content.Intent(a, ShopActivity.class)));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 78));
+        lp.topMargin = Ui.dp(a, 14);
+        col.addView(t, lp);
+    }
+
+    /** A wide 3D banner into My Collection: every board, die and frame I own, by collection. */
+    private void collectionBanner() {
+        Fx.Tile t = new Fx.Tile(a, Fx.YELLOW, 18, 6);
+        LinearLayout row = Ui.hbox(a);
+        row.setPadding(Ui.dp(a, 16), 0, Ui.dp(a, 16), 0);
+        row.addView(emoji("📚", 32));
+        LinearLayout txt = Ui.vbox(a);
+        txt.setPadding(Ui.dp(a, 12), 0, 0, 0);
+        txt.addView(Fx.GoldText.label(a, "MY COLLECTION", 17, 0xffa66f00));
+        TextView sub = Ui.bold(Ui.text(a, "Boards, dice & frames — all in one place", 12, 0xff5a3200));
+        sub.setPadding(Ui.dp(a, 4), 0, 0, 0);
+        txt.addView(sub);
+        row.addView(txt, Ui.weight(1));
+        row.addView(Fx.GoldText.label(a, "▶", 20, 0xffa66f00));
+        t.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        t.setOnClickListener(v -> a.startActivity(new android.content.Intent(a, CollectionActivity.class)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 78));
         lp.topMargin = Ui.dp(a, 14);
         col.addView(t, lp);

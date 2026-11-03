@@ -4,7 +4,7 @@ import { useGame } from '../../store/game';
 import { Avatar, Button, Segmented, Toggle } from '../common';
 import { EFFECTS, RARITIES } from '../../../shared/skins';
 import { PROFILE_FRAMES } from '../../../shared/frames';
-import { BOARD_AMBIENTS, BOARD_COLLECTIONS, BOARD_DECORS, BOARD_EMBLEMS, BOARD_PATTERNS, BOARD_RARITIES } from '../../../shared/boards';
+import { BOARD_AMBIENTS, BOARD_COLLECTIONS, BOARD_CURRENCIES, BOARD_DECORS, BOARD_EMBLEMS, BOARD_PATTERNS, BOARD_RARITIES } from '../../../shared/boards';
 import { Card, Confirm, Empty, ErrorNote, PageTitle, Spinner, useFetch } from './kit';
 
 /** Administrator tools. Every endpoint re-checks the admin role on the server. */
@@ -804,6 +804,7 @@ type BoardRow = {
   id: string;
   name: string;
   price: number;
+  currency: string;
   rarity: string;
   collection: string;
   badge?: string;
@@ -814,25 +815,25 @@ type BoardRow = {
   labels: string[];
   added: string;
   look: Record<string, unknown> & { emblem: string; pattern: string; decor: string; ambient: string; panel: string; base: string; sky: string };
-  sales: { owners: number; recent: number; coins: number };
+  sales: { owners: number; recent: number; coins: number; gems: number };
 };
 
 const BOARD_LOOK_KEYS = ['emblem', 'pattern', 'decor', 'ambient'] as const;
 
 /**
- * Boards: edit any board (name, coin price, rarity, collection, ribbon, on sale, featured and
+ * Boards: edit any board (name, price in coins or diamonds, rarity, collection, ribbon, on sale, featured and
  * its emblem, pattern, decorations and ambient effect), see real sales, and create new boards
  * from an existing one's look with new colours and ornaments.
  */
 function BoardProducts() {
   const [rows, setRows] = useState<BoardRow[] | null>(null);
   const [orig, setOrig] = useState<Record<string, BoardRow>>({});
-  const [totals, setTotals] = useState<{ owners: number; recent: number; coins: number } | null>(null);
+  const [totals, setTotals] = useState<{ owners: number; recent: number; coins: number; gems: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState({ id: 'custom_', name: '', price: 3000, rarity: 'epic', collection: 'couple', template: 'love_story', panel: '#fff1f6', base: '#f6c6dc', sky: '#4a1452', emblem: 'heart', pattern: 'hearts', ambient: 'hearts', badge: '' });
+  const [draft, setDraft] = useState({ id: 'custom_', name: '', price: 3000, currency: 'coins', rarity: 'epic', collection: 'couple', template: 'love_story', panel: '#fff1f6', base: '#f6c6dc', sky: '#4a1452', emblem: 'heart', pattern: 'hearts', ambient: 'hearts', badge: '' });
   const load = () =>
-    get<{ products: BoardRow[]; totals: { owners: number; recent: number; coins: number } }>('/admin/boards').then(
+    get<{ products: BoardRow[]; totals: { owners: number; recent: number; coins: number; gems: number } }>('/admin/boards').then(
       (r) => {
         setRows(r.products);
         setTotals(r.totals);
@@ -847,7 +848,7 @@ function BoardProducts() {
   const upd = (id: string, patch: Partial<BoardRow>) => setRows(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const updLook = (id: string, k: string, v: string) => setRows(rows.map((r) => (r.id === id ? { ...r, look: { ...r.look, [k]: v } } : r)));
   const customOut = (list: BoardRow[]) =>
-    list.filter((r) => r.custom).map((r) => ({ id: r.id, name: r.name, price: r.price, rarity: r.rarity, collection: r.collection, badge: r.badge, blurb: r.blurb, added: r.added, look: r.look }));
+    list.filter((r) => r.custom).map((r) => ({ id: r.id, name: r.name, price: r.price, currency: r.currency, rarity: r.rarity, collection: r.collection, badge: r.badge, blurb: r.blurb, added: r.added, look: r.look }));
   const save = async (extraCustom?: ReturnType<typeof customOut>) => {
     setBusy(true);
     setError(null);
@@ -856,7 +857,7 @@ function BoardProducts() {
     for (const r of rows.filter((x) => !x.custom)) {
       const o = orig[r.id];
       const ch: Record<string, unknown> = {};
-      for (const k of ['name', 'rarity', 'collection', 'published', 'featured'] as const) if (r[k] !== o[k]) ch[k] = r[k];
+      for (const k of ['name', 'currency', 'rarity', 'collection', 'published', 'featured'] as const) if (r[k] !== o[k]) ch[k] = r[k];
       if ((r.badge ?? '') !== (o.badge ?? '')) ch.badge = r.badge ? r.badge : null;
       const look: Record<string, unknown> = {};
       for (const k of [...BOARD_LOOK_KEYS, 'panel', 'base', 'sky'] as const) if (r.look[k] !== o.look[k]) look[k] = r.look[k];
@@ -881,6 +882,7 @@ function BoardProducts() {
       id: draft.id.trim(),
       name: draft.name.trim(),
       price: draft.price,
+      currency: draft.currency,
       rarity: draft.rarity,
       collection: draft.collection,
       badge: draft.badge.trim() || undefined,
@@ -904,11 +906,11 @@ function BoardProducts() {
     <Card>
       {totals && (
         <p className="hint">
-          <b>{fmt(totals.owners)}</b> boards owned by players · <b>{fmt(totals.recent)}</b> bought in the last 30 days · <b>🪙 {fmt(totals.coins)}</b> coins spent on boards
+          <b>{fmt(totals.owners)}</b> boards owned by players · <b>{fmt(totals.recent)}</b> bought in the last 30 days · <b>🪙 {fmt(totals.coins)}</b> coins and <b>💎 {fmt(totals.gems)}</b> diamonds spent on boards
         </p>
       )}
       <p className="hint">
-        Boards are paid in coins. A room plays on its host's board (locked for the match); opponents never pay for it. Hidden boards leave the shop; owners keep them.
+        Boards are paid in coins or diamonds (pick per board; the price is in that currency). A room plays on its host's board (locked for the match); opponents never pay for it. Hidden boards leave the shop; owners keep them.
         Every board keeps the same paths and rules — only the look changes. Labels follow real data (NEW for 30 days, BEST SELLER / MOST POPULAR from sales).
       </p>
       <div className="table-wrap">
@@ -916,7 +918,7 @@ function BoardProducts() {
           <thead>
             <tr>
               <th>Board</th>
-              <th>Price 🪙</th>
+              <th>Price</th>
               <th>Rarity</th>
               <th>Collection</th>
               <th>Emblem</th>
@@ -928,7 +930,7 @@ function BoardProducts() {
               <th>Featured</th>
               <th>Owners</th>
               <th>30 days</th>
-              <th>🪙 earned</th>
+              <th>Earned</th>
             </tr>
           </thead>
           <tbody>
@@ -950,6 +952,7 @@ function BoardProducts() {
                 </td>
                 <td>
                   <input className="input" type="number" min={0} disabled={r.id === 'classic'} aria-label={`Price of ${r.id}`} value={r.price} onChange={(e) => upd(r.id, { price: Number(e.target.value) })} />
+                  {r.id !== 'classic' && sel(r.currency, BOARD_CURRENCIES, (v) => upd(r.id, { currency: v }), `Currency of ${r.id}`)}
                 </td>
                 <td>{sel(r.rarity, BOARD_RARITIES, (v) => upd(r.id, { rarity: v }), `Rarity of ${r.id}`)}</td>
                 <td>{sel(r.collection, BOARD_COLLECTIONS, (v) => upd(r.id, { collection: v }), `Collection of ${r.id}`)}</td>
@@ -970,7 +973,10 @@ function BoardProducts() {
                 </td>
                 <td>{fmt(r.sales.owners)}</td>
                 <td>{fmt(r.sales.recent)}</td>
-                <td>{fmt(r.sales.coins)}</td>
+                <td>
+                  🪙 {fmt(r.sales.coins)}
+                  <br />💎 {fmt(r.sales.gems)}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -990,8 +996,9 @@ function BoardProducts() {
           Name <input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
         </label>
         <label>
-          Price 🪙 <input className="input" type="number" min={0} value={draft.price} onChange={(e) => setDraft({ ...draft, price: Number(e.target.value) })} />
+          Price <input className="input" type="number" min={0} value={draft.price} onChange={(e) => setDraft({ ...draft, price: Number(e.target.value) })} />
         </label>
+        <label>Paid in {sel(draft.currency, BOARD_CURRENCIES, (v) => setDraft({ ...draft, currency: v }), 'New board currency')}</label>
         <label>Start from {sel(draft.template, rows.map((r) => r.id), (v) => setDraft({ ...draft, template: v }), 'Template board')}</label>
         <label>Rarity {sel(draft.rarity, BOARD_RARITIES, (v) => setDraft({ ...draft, rarity: v }), 'New board rarity')}</label>
         <label>Collection {sel(draft.collection, BOARD_COLLECTIONS, (v) => setDraft({ ...draft, collection: v }), 'New board collection')}</label>

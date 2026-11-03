@@ -73,7 +73,11 @@ public class GameActivity extends BaseActivity {
     private int boardSize = -1;
     private TextView status, chatBtn, titleView, feeView, connView;
     /** Mic on/off for voice with friends in the room (hidden without friends). */
-    private TextView micBtn;
+    private TextView micBtn, muteBtn, emoteBtn;
+    /** The screen in the board's colours (the classic board keeps the purple look). */
+    private MatchLook look = MatchLook.CLASSIC;
+    private MatchLook.Backdrop backdrop;
+    private String lookBoard;
     private LinearLayout statusBox;
     /** Turn timer drawn over the current player's avatar. */
     private TimerRing timerPie;
@@ -182,6 +186,7 @@ public class GameActivity extends BaseActivity {
         String board = boardId();
         onGl(() -> renderer.setBoard(board));
         syncAmbient(board);
+        applyLook(board);
         syncDiceLooks();
         // Animations left over from before the pause would replay old rolls and their sounds.
         onGl(renderer::skipAnimations);
@@ -229,6 +234,7 @@ public class GameActivity extends BaseActivity {
                     String board = room.optString("board", null);
                     onGl(() -> renderer.setBoard(board));
                     syncAmbient(board);
+                    applyLook(board);
                     syncDiceLooks();
                     renderChips();
                 }
@@ -348,6 +354,49 @@ public class GameActivity extends BaseActivity {
         if (!BoardAmbient.has(kind)) return;
         ambientView = new BoardAmbient(this, kind);
         boardArea.addView(ambientView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    /**
+     * Dress the screen in the board's colours: its sky behind everything (the 3D view clears
+     * to the same colour, so the board sits in it with no box round it), its trim on the
+     * lines, timer and match info, and its tones on the panels and buttons.
+     */
+    private void applyLook(String boardId) {
+        String id = boardId == null ? "" : boardId;
+        if (id.equals(lookBoard)) return;
+        lookBoard = id;
+        look = MatchLook.of(com.ludo3d.game.gl.BoardThemes.get(boardId));
+        if (look.themed) {
+            backdrop = new MatchLook.Backdrop(this, look);
+            root.setBackground(backdrop);
+            updateBand();
+        } else {
+            backdrop = null;
+            root.setBackground(Fx.background(this));
+        }
+        feeView.setTextColor(look.accent);
+        connView.setBackground(Ui.round((look.button[1] & 0x00ffffff) | 0x66000000, Ui.dp(this, 999)));
+        statusBox.setBackground(Ui.roundStroke(look.panel, Ui.dp(this, 16), look.themed ? Ui.dp(this, 1) : 0, look.themed ? look.stroke : 0));
+        int panel = look.panel | 0xff000000;
+        chatPanel.setBackground(Ui.roundStroke(look.themed ? panel : 0xff2e1065, Ui.dp(this, 20), Ui.dp(this, 1), look.themed ? look.stroke : Ui.STROKE));
+        emotePanel.setBackground(Ui.roundStroke(look.themed ? panel : 0xff2e1065, Ui.dp(this, 20), Ui.dp(this, 1), look.themed ? look.stroke : Ui.STROKE));
+        for (TextView b : new TextView[]{muteBtn, chatBtn, emoteBtn}) {
+            b.setPadding(0, 0, 0, Fx.bevel(b, look.button, b == muteBtn ? 20 : 29, b == muteBtn ? 3 : 4, true));
+        }
+        com.ludo3d.game.audio.VoiceChat voice = com.ludo3d.game.audio.VoiceChat.get();
+        micBtn.setPadding(0, 0, 0, Fx.bevel(micBtn, voice.micOn() ? Fx.GREEN : look.button, 29, 4, true));
+        timerBar.setTag(null);
+        renderStatus();
+    }
+
+    /** Tell the backdrop where the board is, so its sky lines up with the 3D view's. */
+    private void updateBand() {
+        if (backdrop == null || boardArea.getHeight() == 0) return;
+        int[] a = new int[2], r = new int[2];
+        boardArea.getLocationInWindow(a);
+        root.getLocationInWindow(r);
+        int top = a[1] - r[1];
+        backdrop.setBand(top, top + boardArea.getHeight());
     }
 
     /** Tell the 3D board which die each colour throws (each player's own dice skin). */
@@ -646,7 +695,7 @@ public class GameActivity extends BaseActivity {
         connView.setPadding(Ui.dp(this, 10), Ui.dp(this, 5), Ui.dp(this, 10), Ui.dp(this, 5));
         connView.setBackground(Ui.round(0x664c1d95, Ui.dp(this, 999)));
         bar.addView(connView);
-        TextView mute = Ui.text(this, Sfx.get().isEnabled() ? "🔊" : "🔇", 18, Ui.INK);
+        TextView mute = muteBtn = Ui.text(this, Sfx.get().isEnabled() ? "🔊" : "🔇", 18, Ui.INK);
         mute.setGravity(Gravity.CENTER);
         mute.setContentDescription("Sound on or off");
         mute.setPadding(0, 0, 0, Fx.bevel(mute, Fx.PURPLE, 20, 3, true));
@@ -670,6 +719,7 @@ public class GameActivity extends BaseActivity {
         bottomRow = cornerRow(0, 3);
         boardArea = new FrameLayout(this);
         boardArea.addView(gl, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        boardArea.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateBand());
         stack.addView(topRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         stack.addView(boardArea, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 300)));
         stack.addView(bottomRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -738,7 +788,8 @@ public class GameActivity extends BaseActivity {
             reactions.addView(r, new LinearLayout.LayoutParams(0, Ui.dp(this, ctl()), 1));
         }
         controls.addView(reactions, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        controls.addView(roundIcon("😀", "Emotes", v -> openEmotes()), new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl())));
+        emoteBtn = roundIcon("😀", "Emotes", v -> openEmotes());
+        controls.addView(emoteBtn, new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl())));
         bottom.addView(controls, Ui.lpMatchWrap());
         column.addView(bottom, Ui.lpMatchWrap());
 
@@ -807,7 +858,7 @@ public class GameActivity extends BaseActivity {
         TextView t = Ui.text(this, emoji, 22, Ui.INK);
         t.setGravity(Gravity.CENTER);
         t.setContentDescription(label);
-        int depth = Fx.bevel(t, Fx.PURPLE, 29, 4, true);
+        int depth = Fx.bevel(t, look.button, 29, 4, true);
         t.setPadding(0, 0, 0, depth);
         t.setOnClickListener(onClick);
         return t;
@@ -829,7 +880,7 @@ public class GameActivity extends BaseActivity {
         String label = voice.micOn() ? "🎙" : "🔇";
         if (!label.contentEquals(micBtn.getText())) {
             micBtn.setText(label);
-            int depth = Fx.bevel(micBtn, voice.micOn() ? Fx.GREEN : Fx.PURPLE, 29, 4, true);
+            int depth = Fx.bevel(micBtn, voice.micOn() ? Fx.GREEN : look.button, 29, 4, true);
             micBtn.setPadding(0, 0, 0, depth);
         }
         float me = voice.meSpeaking() ? 1.12f : 1f;
@@ -950,7 +1001,7 @@ public class GameActivity extends BaseActivity {
         GradientDrawable dg = new GradientDrawable();
         dg.setShape(GradientDrawable.OVAL);
         dg.setColor(online ? Ui.SUCCESS : 0xff8a8fb0);
-        dg.setStroke(Ui.dp(this, 2), 0xff2e1065);
+        dg.setStroke(Ui.dp(this, 2), look.themed ? look.sky : 0xff2e1065);
         dot.setBackground(dg);
         av.addView(dot, new FrameLayout.LayoutParams(Ui.dp(this, 12), Ui.dp(this, 12), Gravity.BOTTOM | (right ? Gravity.START : Gravity.END)));
         // Level from the public profile (fetched once, then the cards redraw); bots say BOT.
@@ -1146,7 +1197,7 @@ public class GameActivity extends BaseActivity {
         float frac = deadline > 0 && deadlineTotal > 0 ? Math.max(0f, Math.min(1f, (deadline - System.currentTimeMillis()) / (float) deadlineTotal)) : 0f;
         timerBar.setScaleX(frac);
         // Runs 4x a second: only build a new drawable when the bar changes colour.
-        int barColor = frac < 0.25f ? Ui.DANGER : Ui.GOLD;
+        int barColor = frac < 0.25f ? Ui.DANGER : look.accent;
         if (!Integer.valueOf(barColor).equals(timerBar.getTag())) {
             timerBar.setTag(barColor);
             timerBar.setBackground(Ui.round(barColor, Ui.dp(this, 2)));

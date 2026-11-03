@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { RoomView } from '../shared/protocol';
+import type { PlayPurchase, PlayVerifier } from '../server/googleplay';
 import { BOARDS } from '../shared/boards';
 import { bootServer, emit, nextUpdate, registerUser, socketFor, type TestServer } from './helpers';
 
@@ -9,13 +10,21 @@ import { bootServer, emit, nextUpdate, registerUser, socketFor, type TestServer 
  * the board never changes the rules.
  */
 
+/** Test Google Play: every purchase token is valid (for buying diamonds). */
+const play: PlayVerifier = {
+  async verify(_p: string, token: string): Promise<PlayPurchase> {
+    return { purchaseState: 0, consumptionState: 0, orderId: `GPA.${token}`, obfuscatedExternalAccountId: token.split(':')[1] };
+  },
+  async consume() {},
+};
+
 let t: TestServer;
 beforeAll(async () => {
-  t = await bootServer();
+  t = await bootServer({ playVerifier: play });
 });
 afterAll(() => t.stop());
 
-type Board = { id: string; name: string; price: number; rarity: string; collection: string; labels: string[]; published: boolean; featured: boolean; custom: boolean; look: { emblem: string } };
+type Board = { id: string; name: string; price: number; currency: 'coins' | 'gems'; rarity: string; collection: string; labels: string[]; published: boolean; featured: boolean; custom: boolean; look: { emblem: string } };
 type Boards = { boards: Board[]; owned: string[]; equipped: string; wallet?: { balance: number } };
 
 let adminApi: Awaited<ReturnType<typeof registerUser>> | null = null;
@@ -45,6 +54,12 @@ describe('board shop', () => {
     expect(r.body.boards.find((b) => b.id === 'royal_gold')!.price).toBe(5000);
     expect(r.body.boards.find((b) => b.id === 'love_story')!.price).toBe(3500);
     expect(r.body.boards.find((b) => b.id === 'classic')!.price).toBe(0);
+    // Most boards cost coins; the rarest cost diamonds.
+    expect(r.body.boards.find((b) => b.id === 'royal_gold')!.currency).toBe('coins');
+    expect(r.body.boards.find((b) => b.id === 'ludox_legend')).toMatchObject({ currency: 'gems', price: 1500 });
+    const gemBoards = r.body.boards.filter((b) => b.currency === 'gems');
+    expect(gemBoards.length).toBeGreaterThanOrEqual(5);
+    expect(r.body.boards.filter((b) => b.currency === 'coins').length).toBeGreaterThan(gemBoards.length);
     expect(r.body.owned).toEqual(['classic']);
     // Every board has its own identity: no two share the same colours and emblem.
     const looks = new Set(BOARDS.map((b) => `${b.look.panel}|${b.look.base}|${b.look.emblem}|${b.look.pattern}`));
@@ -69,6 +84,30 @@ describe('board shop', () => {
     const ledger = await u.call<{ items: { type: string; amount: number }[] }>('GET', '/wallet/transactions?type=shop_purchase');
     expect(ledger.body.items.map((x) => x.amount)).toEqual([-3500]);
     expect((await u.call('POST', '/boards/moonlight_love/equip')).status).toBe(403);
+  });
+
+  it('charges diamonds (not coins) for a diamond board, once', async () => {
+    const u = await registerUser(t, 'GemBuyer');
+    const wallet = async () => (await u.call<{ wallet: { balance: number; gems: number } }>('GET', '/wallet')).body.wallet;
+    const start = await wallet();
+    expect((await u.call('POST', '/boards/heart_kingdom/buy')).status).toBe(402);
+    for (let i = 0; i < 3 && (await wallet()).gems < 650; i++) {
+      await u.call('POST', '/gems/purchase', { productId: 'gems_500', purchaseToken: `ok:${u.id}:7700000${i}` });
+    }
+    const before = await wallet();
+    expect(before.gems).toBeGreaterThanOrEqual(650);
+    const both = await Promise.all([u.call<Boards>('POST', '/boards/heart_kingdom/buy'), u.call<Boards>('POST', '/boards/heart_kingdom/buy')]);
+    expect(both.some((x) => x.status === 200)).toBe(true);
+    const after = await wallet();
+    expect(after.gems).toBe(before.gems - 650);
+    expect(after.balance).toBe(start.balance);
+    expect((await u.call<Boards>('GET', '/boards')).body.equipped).toBe('heart_kingdom');
+    // An administrator can switch a board to diamonds; sales count the diamonds.
+    const admin = await getAdmin();
+    expect((await admin.call('PUT', '/admin/settings', { boardProducts: { classic: { currency: 'gems' } } })).status).toBe(400);
+    expect((await admin.call('PUT', '/admin/settings', { boardProducts: { love_story: { currency: 'rupees' } } })).status).toBe(400);
+    const sales = await admin.call<{ products: (Board & { sales: { gems: number } })[] }>('GET', '/admin/boards');
+    expect(sales.body.products.find((b) => b.id === 'heart_kingdom')!.sales.gems).toBe(650);
   });
 
   it('the host\'s board is everyone\'s, opponents pay nothing, and it stays locked for the match', async () => {

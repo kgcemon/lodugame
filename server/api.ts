@@ -146,7 +146,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   /** The seat field each shop changes. */
   const seatField = { dice: 'diceSkin', frame: 'frame', board: 'board' } as const;
   /** Every die with the administrator's changes, prices, stock left and data-backed labels. */
-  /** Every board (catalogue and custom) with the administrator's changes, coin prices and labels. */
+  /** Every board (catalogue and custom) with the administrator's changes, prices (coins or diamonds) and labels. */
   const allBoards = async (): Promise<BoardProduct[]> =>
     boardProducts(settings.get().boardProducts, settings.get().boardCustom, (id) => settings.price('board', id), await boardSales(db));
   const allDice = async (): Promise<DiceProduct[]> =>
@@ -350,7 +350,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         const id = String(req.params.id);
         const product = kind === 'dice' ? (await allDice()).find((d) => d.id === id) : undefined;
         const board = kind === 'board' ? (await allBoards()).find((b) => b.id === id) : undefined;
-        const terms = product ? { published: product.published, limit: product.limit } : board ? { published: board.published, limit: null } : undefined;
+        const terms = product ? { published: product.published, limit: product.limit } : board ? { published: board.published, limit: null, currency: board.currency } : undefined;
         const cost = board ? board.price : settings.price(kind, id);
         const state = await buyItem(db, kind, req.user!.id, id, cost, terms);
         const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
@@ -1055,7 +1055,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
 
   admin.get('/settings', h(async () => ({ ok: true, settings: settings.get(), policy: payoutPolicy(settings.get()) })));
 
-  /** Boards as the shop sells them, with real sales per board (owners, last 30 days, coins earned). */
+  /** Boards as the shop sells them, with real sales per board (owners, last 30 days, coins and diamonds earned). */
   admin.get(
     '/boards',
     h(async () => {
@@ -1063,11 +1063,12 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const products = await allBoards();
       return {
         ok: true,
-        products: products.map((p) => ({ ...p, sales: sales.get(p.id) ?? { owners: 0, recent: 0, coins: 0 } })),
+        products: products.map((p) => ({ ...p, sales: sales.get(p.id) ?? { owners: 0, recent: 0, coins: 0, gems: 0 } })),
         totals: {
           owners: [...sales.values()].reduce((a, x) => a + x.owners, 0),
           recent: [...sales.values()].reduce((a, x) => a + x.recent, 0),
           coins: [...sales.values()].reduce((a, x) => a + x.coins, 0),
+          gems: [...sales.values()].reduce((a, x) => a + x.gems, 0),
         },
       };
     }),

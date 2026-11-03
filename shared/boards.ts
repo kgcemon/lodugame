@@ -1,5 +1,6 @@
 /**
- * Board skins: looks for the Ludo board, bought with coins in the shop. A room plays on its
+ * Board skins: looks for the Ludo board, bought in the shop with coins or (the rarest) with
+ * diamonds. A room plays on its
  * host's board (locked when the match starts), so everyone at the table sees it; opponents
  * never need to own it. The server owns the catalogue, prices and publishing (an
  * administrator can change them and add new boards). Every board keeps the same 15x15 grid,
@@ -52,6 +53,8 @@ export interface BoardLook {
   ambient: BoardAmbient;
 }
 
+/** What a board is paid with: coins from the wallet or diamonds. */
+export type BoardCurrency = 'coins' | 'gems';
 export type BoardRarity = 'common' | 'rare' | 'epic' | 'legendary' | 'mythic' | 'ultimate';
 export type BoardCollection =
   | 'royal' | 'luxury' | 'couple' | 'love' | 'nature' | 'fantasy' | 'neon' | 'seasonal' | 'exclusive' | 'free';
@@ -59,8 +62,9 @@ export type BoardCollection =
 export interface BoardTheme {
   id: string;
   name: string;
-  /** Default price in coins (0 = everyone has it). */
+  /** Default price, in `currency` (0 = everyone has it). */
   price: number;
+  currency: BoardCurrency;
   /** One line for the shop. */
   blurb: string;
   /** Shown with a crown ribbon in the shop (any premium board). */
@@ -76,6 +80,7 @@ export interface BoardTheme {
 
 export const DEFAULT_BOARD = 'classic';
 export const BOARD_COLLECTIONS: BoardCollection[] = ['couple', 'love', 'royal', 'luxury', 'nature', 'fantasy', 'neon', 'seasonal', 'exclusive', 'free'];
+export const BOARD_CURRENCIES: BoardCurrency[] = ['coins', 'gems'];
 export const BOARD_RARITIES: BoardRarity[] = ['common', 'rare', 'epic', 'legendary', 'mythic', 'ultimate'];
 export const BOARD_EMBLEMS: BoardEmblem[] = [
   'none', 'crown', 'palace', 'throne', 'diamond', 'heart', 'twin_hearts', 'moon', 'rose', 'eiffel', 'blossom', 'castle', 'flower',
@@ -113,8 +118,8 @@ function look(l: LookIn): BoardLook {
   } as BoardLook;
 }
 
-type Def = Omit<BoardTheme, 'royal' | 'added'> & { added?: string };
-const board = (d: Def): BoardTheme => ({ ...d, royal: d.price > 0, added: d.added ?? NEW });
+type Def = Omit<BoardTheme, 'royal' | 'added' | 'currency'> & { added?: string; currency?: BoardCurrency };
+const board = (d: Def): BoardTheme => ({ ...d, currency: d.currency ?? 'coins', royal: d.price > 0, added: d.added ?? NEW });
 
 export const BOARDS: BoardTheme[] = [
   // ------------------------------------------------------------------ Free
@@ -154,7 +159,7 @@ export const BOARDS: BoardTheme[] = [
       decor: 'pillar', decorColor: '#f0c24a', ambient: 'hearts' }),
   }),
   board({
-    id: 'pink_diamond', name: 'Pink Diamond', price: 5500, rarity: 'legendary', collection: 'couple', badge: '💗 FOR COUPLES',
+    id: 'pink_diamond', name: 'Pink Diamond', price: 550, currency: 'gems', rarity: 'legendary', collection: 'couple', badge: '💗 FOR COUPLES',
     blurb: 'Pink crystal, diamonds and rose-gold rims, softly glowing.',
     look: look({ base: '#f7c8dc', panel: '#fff0f7', panelEdge: '#f5aecd', track: '#fff4f9', grid: '#40c2185b', safe: '#ff5fa2', edge: '#8a2a55', trim: '#eab0a0',
       emblem: 'diamond', pattern: 'crystals', safeMark: 'diamond', wood: [0.6, 0.3, 0.42], rim: [0.95, 0.7, 0.66], rimSpec: 1.2, sky: '#5a1d44',
@@ -168,7 +173,7 @@ export const BOARDS: BoardTheme[] = [
       decor: 'lantern', decorColor: '#ffb347', ambient: 'fireflies' }),
   }),
   board({
-    id: 'paris_romance', name: 'Paris Romance', price: 6000, rarity: 'legendary', collection: 'couple', badge: '🗼 FOR COUPLES',
+    id: 'paris_romance', name: 'Paris Romance', price: 600, currency: 'gems', rarity: 'legendary', collection: 'couple', badge: '🗼 FOR COUPLES',
     blurb: 'Eiffel Tower evenings, street lamps and French romance.',
     look: look({ base: '#2a2f55', panel: '#f3ecff', panelEdge: '#c3b6e6', track: '#fbf8ff', grid: '#40303070', safe: '#e05a7a', edge: '#151938', trim: '#d9b968',
       emblem: 'eiffel', pattern: 'lights', safeMark: 'heart', wood: [0.12, 0.13, 0.26], rim: [0.85, 0.72, 0.42], sky: '#151938',
@@ -182,7 +187,7 @@ export const BOARDS: BoardTheme[] = [
       decor: 'tree', decorColor: '#ffb7cf', ambient: 'petals' }),
   }),
   board({
-    id: 'heart_kingdom', name: 'Heart Kingdom', price: 6500, rarity: 'mythic', collection: 'couple', badge: '🏰 FOR COUPLES',
+    id: 'heart_kingdom', name: 'Heart Kingdom', price: 650, currency: 'gems', rarity: 'mythic', collection: 'couple', badge: '🏰 FOR COUPLES',
     blurb: 'A fairy-tale castle of pink and gold around a glowing heart.',
     look: look({ base: '#e9a3c9', panel: '#fff0f8', panelEdge: '#e8a8cc', track: '#fff7fb', grid: '#409a3a70', safe: '#ff3d8b', edge: '#6a1a4a', trim: '#f2c75a',
       emblem: 'castle', pattern: 'hearts', safeMark: 'heart', wood: [0.5, 0.16, 0.36], rim: [0.98, 0.78, 0.32], rimSpec: 1.2, sky: '#3d0f33',
@@ -218,7 +223,7 @@ export const BOARDS: BoardTheme[] = [
       emblem: 'crown', pattern: 'damask', wood: [0.42, 0.08, 0.1], rim: [0.92, 0.72, 0.22], rimSpec: 1, sky: '#3a1a06', decor: 'pillar', decorColor: '#e0b23a', ambient: 'sparkles' }),
   }),
   board({
-    id: 'royal_palace', name: 'Royal Palace', price: 7500, rarity: 'mythic', collection: 'royal',
+    id: 'royal_palace', name: 'Royal Palace', price: 750, currency: 'gems', rarity: 'mythic', collection: 'royal',
     blurb: 'Golden pillars, red velvet and the light of a grand palace.',
     look: look({ base: '#8a0f22', panel: '#a8172e', panelEdge: '#5a0612', track: '#fff6e6', grid: '#55600010', safe: '#f0c24a', edge: '#3a0208', trim: '#f0c24a',
       emblem: 'palace', pattern: 'damask', wood: [0.36, 0.03, 0.07], rim: [0.96, 0.76, 0.26], rimSpec: 1.2, sky: '#2a0206', decor: 'pillar', decorColor: '#f0c24a', ambient: 'sparkles' }),
@@ -230,13 +235,13 @@ export const BOARDS: BoardTheme[] = [
       emblem: 'crown', pattern: 'veins', wood: [0.06, 0.06, 0.07], rim: [0.92, 0.72, 0.22], rimSpec: 1.1, sky: '#08070a', decor: 'pillar', decorColor: '#e8b923' }),
   }),
   board({
-    id: 'emperor_kingdom', name: 'Emperor Kingdom', price: 7000, rarity: 'mythic', collection: 'royal',
+    id: 'emperor_kingdom', name: 'Emperor Kingdom', price: 700, currency: 'gems', rarity: 'mythic', collection: 'royal',
     blurb: 'An ancient kingdom with a throne at its heart.',
     look: look({ base: '#5a3a1a', panel: '#f6e6c4', panelEdge: '#c9a46a', track: '#fff8ea', grid: '#55603a10', safe: '#a8323a', edge: '#2a1808', trim: '#d9a83a',
       emblem: 'throne', pattern: 'scales', wood: [0.3, 0.17, 0.07], rim: [0.86, 0.64, 0.22], sky: '#1f1206', decor: 'pillar', decorColor: '#d9a83a', ambient: 'embers' }),
   }),
   board({
-    id: 'royal_diamond', name: 'Royal Diamond', price: 6500, rarity: 'legendary', collection: 'royal',
+    id: 'royal_diamond', name: 'Royal Diamond', price: 650, currency: 'gems', rarity: 'legendary', collection: 'royal',
     blurb: 'Crystal and diamonds with gold and blue accents.',
     look: look({ base: '#c9e8ff', panel: '#f4fbff', panelEdge: '#b4dcf5', track: '#ffffff', grid: '#40305a8a', safe: '#1e88e5', edge: '#0d2a6e', trim: '#e0b23a',
       emblem: 'diamond', pattern: 'crystals', safeMark: 'diamond', wood: [0.1, 0.18, 0.4], rim: [0.92, 0.74, 0.26], rimSpec: 1.2, sky: '#0d1a3a', decor: 'crystal', decorColor: '#9adfff', ambient: 'sparkles' }),
@@ -244,7 +249,7 @@ export const BOARDS: BoardTheme[] = [
 
   // ------------------------------------------------------------------ Luxury
   board({
-    id: 'billionaire', name: 'Billionaire', price: 9000, rarity: 'mythic', collection: 'luxury', added: OLD, badge: '💎 VIP',
+    id: 'billionaire', name: 'Billionaire', price: 900, currency: 'gems', rarity: 'mythic', collection: 'luxury', added: OLD, badge: '💎 VIP',
     blurb: "Black leather, solid gold and diamonds. Show them who's boss.",
     look: look({ base: '#0b0b0d', panel: '#26221a', panelEdge: '#0a0906', track: '#fff6dc', grid: '#77b8860b', safe: '#7fe3ff', edge: '#000000', trim: '#ffcf40',
       emblem: 'diamond', pattern: 'quilt', safeMark: 'diamond', wood: [0.05, 0.05, 0.05], rim: [1, 0.8, 0.26], rimSpec: 1.2, sky: '#050505', decor: 'crystal', decorColor: '#ffcf40', ambient: 'sparkles' }),
@@ -320,7 +325,7 @@ export const BOARDS: BoardTheme[] = [
 
   // ------------------------------------------------------------------ Fantasy
   board({
-    id: 'dragon_kingdom', name: 'Dragon Kingdom', price: 8000, rarity: 'mythic', collection: 'fantasy',
+    id: 'dragon_kingdom', name: 'Dragon Kingdom', price: 800, currency: 'gems', rarity: 'mythic', collection: 'fantasy',
     blurb: 'Dragon scales, dark stone and a golden dragon at the heart.',
     look: look({ base: '#2a1a14', panel: '#3a2a22', panelEdge: '#140c08', track: '#f6eee2', grid: '#66000000', safe: '#ff6a1e', edge: '#0a0604', trim: '#e0a020',
       emblem: 'dragon', pattern: 'scales', safeMark: 'flame', wood: [0.12, 0.07, 0.05], rim: [0.86, 0.6, 0.12], rimSpec: 1.1, sky: '#140604', decor: 'crystal', decorColor: '#ff6a1e', ambient: 'embers' }),
@@ -338,7 +343,7 @@ export const BOARDS: BoardTheme[] = [
       emblem: 'flame', pattern: 'flames', safeMark: 'flame', wood: [0.14, 0.05, 0.03], rim: [0.9, 0.36, 0.08], rimSpec: 0.8, sky: '#1a0402', decor: 'crystal', decorColor: '#ff5a1e', ambient: 'embers' }),
   }),
   board({
-    id: 'galaxy_universe', name: 'Galaxy Universe', price: 7000, rarity: 'mythic', collection: 'fantasy',
+    id: 'galaxy_universe', name: 'Galaxy Universe', price: 700, currency: 'gems', rarity: 'mythic', collection: 'fantasy',
     blurb: 'Nebulae, stars and a ringed planet at the centre of it all.',
     look: look({ base: '#0a0620', panel: '#2a1a6e', panelEdge: '#07041a', track: '#f2f0ff', grid: '#55403a80', safe: '#9ef0ff', edge: '#030210', trim: '#b49aff',
       emblem: 'planet', pattern: 'nebula', safeMark: 'star', wood: [0.05, 0.03, 0.12], rim: [0.6, 0.5, 0.95], rimSpec: 1.1, sky: '#030210', decor: 'orb', decorColor: '#c77dff', ambient: 'stars' }),
@@ -410,7 +415,7 @@ export const BOARDS: BoardTheme[] = [
       emblem: 'flag', pattern: 'flag', wood: [0, 0.24, 0.17], rim: [0, 0.45, 0.32], rimSpec: 0.6, sky: '#00261b', decor: 'orb', decorColor: '#f42a41' }),
   }),
   board({
-    id: 'ludox_legend', name: 'LudoX Legend', price: 15000, rarity: 'ultimate', collection: 'exclusive', badge: '👑 ULTIMATE',
+    id: 'ludox_legend', name: 'LudoX Legend', price: 1500, currency: 'gems', rarity: 'ultimate', collection: 'exclusive', badge: '👑 ULTIMATE',
     blurb: 'The LudoX signature board: royal purple, gold and gems.',
     look: look({ base: '#2a0a5e', panel: '#5a2ab0', panelEdge: '#1e0548', track: '#fbf6ff', grid: '#556a1fd0', safe: '#ffcf40', edge: '#0f0228', trim: '#ffcf40',
       emblem: 'lx', pattern: 'damask', wood: [0.12, 0.04, 0.3], rim: [1, 0.8, 0.26], rimSpec: 1.3, sky: '#0f0228', decor: 'crystal', decorColor: '#c77dff', ambient: 'sparkles' }),

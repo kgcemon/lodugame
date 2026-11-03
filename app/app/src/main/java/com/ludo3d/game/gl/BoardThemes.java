@@ -37,7 +37,8 @@ public final class BoardThemes {
         /** Board face behind everything, the yards' inner panels (centre, edge), the path cells. */
         final int base, panel, panelEdge, track;
         /** Cell lines, safe-cell marks, the painted outer edge; trim 0 = plain (classic) board. */
-        final int grid, safe, edge, trim;
+        final int grid, safe, edge;
+        public final int trim;
         final String emblem, pattern, safeMark;
         /** The 3D base and raised rim (0..1 RGB) and how shiny the rim is. */
         public final float[] wood, rim;

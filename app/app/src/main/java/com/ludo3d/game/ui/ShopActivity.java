@@ -96,7 +96,7 @@ public class ShopActivity extends BaseActivity {
     private final Shop boards = new Shop("/boards", "board", "boards", 2);
     private Shop tab = dice;
     private LinearLayout col;
-    private TextView balance;
+    private TextView balance, boardGems;
     private boolean busy;
 
     @Override
@@ -117,6 +117,17 @@ public class ShopActivity extends BaseActivity {
         super.onResume();
         // Back from the diamond shop: show the new balance.
         if (balance != null) balance.setText(Ui.fmt(app.wallet.optLong(tab == boards ? "balance" : "gems")));
+        if (boardGems != null) boardGems.setText("💎 " + Ui.fmt(app.wallet.optLong("gems")));
+    }
+
+    /** A board paid in diamonds (the rest are paid in coins). */
+    private static boolean paidInGems(Item k) {
+        return "gems".equals(k.data.optString("currency"));
+    }
+
+    /** A board's price with its currency: "🪙 3,500" or "💎 650". */
+    private static String boardPrice(Item k) {
+        return (paidInGems(k) ? "💎 " : "🪙 ") + Ui.fmt(k.price);
     }
 
     private void load(Shop s) {
@@ -189,13 +200,19 @@ public class ShopActivity extends BaseActivity {
         // Diamonds and a way to get more.
         LinearLayout bar = Ui.hbox(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
+        boardGems = null;
         if (tab == boards) {
-            // Boards are paid in coins.
-            bar.addView(Ui.text(this, "🪙", 26, Ui.INK));
-            balance = new Fx.GoldText(this, Ui.fmt(app.wallet.optLong("balance")), 24);
-            balance.setPadding(Ui.dp(this, 8), 0, 0, 0);
+            // Boards are paid in coins, the rarest in diamonds: show both purses.
+            bar.addView(Ui.text(this, "🪙", 24, Ui.INK));
+            balance = new Fx.GoldText(this, Ui.fmt(app.wallet.optLong("balance")), 22);
+            balance.setPadding(Ui.dp(this, 6), 0, 0, 0);
             bar.addView(balance, Ui.weight(1));
-            bar.addView(Ui.text(this, "💎 " + Ui.fmt(app.wallet.optLong("gems")), 14, 0xffb9f2ff));
+            boardGems = Ui.bold(Ui.text(this, "💎 " + Ui.fmt(app.wallet.optLong("gems")), 15, 0xffb9f2ff));
+            boardGems.setPadding(Ui.dp(this, 12), Ui.dp(this, 5), Ui.dp(this, 12), Ui.dp(this, 5));
+            boardGems.setBackground(Ui.roundStroke(0x660b2a4f, Ui.dp(this, 999), Ui.dp(this, 1), 0x884fd8ff));
+            boardGems.setOnClickListener(v -> startActivity(new Intent(this, GemShopActivity.class)));
+            boardGems.setContentDescription("Diamonds — tap to get more");
+            bar.addView(boardGems);
         } else {
             bar.addView(Ui.text(this, "💎", 26, Ui.INK));
             balance = new Fx.GoldText(this, Ui.fmt(app.wallet.optLong("gems")), 24, new int[]{0xffffffff, 0xffb9f2ff, 0xff4fd8ff}, 0xff0b4f8a);
@@ -204,6 +221,12 @@ public class ShopActivity extends BaseActivity {
             bar.addView(Ui.smallButton(this, "+ Get diamonds", "blue", v -> startActivity(new Intent(this, GemShopActivity.class))));
         }
         col.addView(bar, Ui.lpMatchWrap());
+
+        // Everything I own, organised by collection.
+        TextView mine = Ui.smallButton(this, "📚  My Collection — everything you own", "primary", v -> startActivity(new Intent(this, CollectionActivity.class)));
+        LinearLayout.LayoutParams mlp = Ui.lpMatchWrap();
+        mlp.topMargin = Ui.dp(this, 10);
+        col.addView(mine, mlp);
 
         // Dice | Frames | Boards.
         LinearLayout tabs = Ui.hbox(this);
@@ -930,11 +953,12 @@ public class ShopActivity extends BaseActivity {
         ml.topMargin = Ui.dp(this, 12);
         col.addView(mine, ml);
 
-        List<Item> featured = new ArrayList<>(), couple = new ArrayList<>(), fresh = new ArrayList<>(), best = new ArrayList<>();
+        List<Item> featured = new ArrayList<>(), couple = new ArrayList<>(), fresh = new ArrayList<>(), best = new ArrayList<>(), diamond = new ArrayList<>();
         for (Item k : boards.items) {
             if (k.theme == null) continue;
             List<String> ls = labelsOf(k);
             if (k.data.optBoolean("featured")) featured.add(k);
+            if (paidInGems(k)) diamond.add(k);
             if ("couple".equals(k.theme.collection) || "love".equals(k.theme.collection)) couple.add(k);
             if (ls.contains("NEW ARRIVAL")) fresh.add(k);
             if (ls.contains("BEST SELLER") || ls.contains("MOST POPULAR")) best.add(k);
@@ -943,6 +967,14 @@ public class ShopActivity extends BaseActivity {
         if (!featured.isEmpty()) {
             col.addView(Ui.heading(this, "✨ Featured Boards"));
             col.addView(boardRow(featured, true));
+        }
+        if (!diamond.isEmpty()) {
+            java.util.Collections.sort(diamond, (x, y) -> y.price - x.price);
+            col.addView(Ui.heading(this, "💎 Diamond Boards"));
+            TextView why = Ui.muted(this, "The rarest boards in LudoX, paid with diamonds.");
+            why.setPadding(Ui.dp(this, 2), 0, 0, Ui.dp(this, 6));
+            col.addView(why);
+            col.addView(boardRow(diamond, false));
         }
         if (!couple.isEmpty()) {
             col.addView(Ui.heading(this, "💞 Couple & Romantic"));
@@ -999,7 +1031,7 @@ public class ShopActivity extends BaseActivity {
         boardGrid = Ui.vbox(this);
         col.addView(boardGrid, Ui.lpMatchWrap());
         fillBoardGrid();
-        TextView note = Ui.muted(this, "Boards are bought once with coins and kept forever. Every board has the same paths, safe cells and rules — only the look changes.");
+        TextView note = Ui.muted(this, "Boards are bought once — with 🪙 coins, or 💎 diamonds for the rarest — and kept forever. Every board has the same paths, safe cells and rules — only the look changes.");
         note.setGravity(Gravity.CENTER);
         note.setPadding(0, Ui.dp(this, 14), 0, 0);
         col.addView(note);
@@ -1057,7 +1089,7 @@ public class ShopActivity extends BaseActivity {
             if (!"all".equals(boardCollection) && !boardCollection.equals(k.theme.collection)) continue;
             if (!"all".equals(boardRarity) && !boardRarity.equals(k.theme.rarity)) continue;
             if (!boardQuery.isEmpty()) {
-                String hay = (k.name + " " + k.theme.collection + " " + k.theme.rarity + " " + (k.blurb == null ? "" : k.blurb)).toLowerCase(java.util.Locale.ROOT);
+                String hay = (k.name + " " + k.theme.collection + " " + k.theme.rarity + " " + (paidInGems(k) ? "diamond gems" : "coins") + " " + (k.blurb == null ? "" : k.blurb)).toLowerCase(java.util.Locale.ROOT);
                 if (!hay.contains(boardQuery)) continue;
             }
             match.add(k);
@@ -1080,7 +1112,7 @@ public class ShopActivity extends BaseActivity {
         if (match.size() % 2 == 1) row.addView(new View(this), tileLp(1, 2));
     }
 
-    /** One board for sale: its tilted 3D render, rarity, collection, coin price and actions. */
+    /** One board for sale: its tilted 3D render, rarity, collection, price (coins or diamonds) and actions. */
     private View boardCard(Item k, boolean big) {
         boolean using = k.id.equals(boards.equipped), have = boards.owned.contains(k.id);
         LinearLayout card = Ui.vbox(this);
@@ -1115,8 +1147,8 @@ public class ShopActivity extends BaseActivity {
         TextView c = Ui.text(this, BoardLux.collectionShort(k.theme.collection), 11, 0xffb8acdf);
         c.setGravity(Gravity.CENTER);
         card.addView(c, Ui.lpMatchWrap());
-        String priceText = using ? "In use" : have ? "Owned" : k.price == 0 ? "Free" : "🪙 " + Ui.fmt(k.price);
-        TextView price = Ui.bold(Ui.text(this, priceText, 15, have ? 0xffb9f2ff : Ui.GOLD));
+        String priceText = using ? "In use" : have ? "Owned" : k.price == 0 ? "Free" : boardPrice(k);
+        TextView price = Ui.bold(Ui.text(this, priceText, 15, have ? 0xffb9f2ff : paidInGems(k) ? 0xff7fe3ff : Ui.GOLD));
         price.setGravity(Gravity.CENTER);
         price.setPadding(0, Ui.dp(this, 4), 0, 0);
         card.addView(price, Ui.lpMatchWrap());
@@ -1161,7 +1193,7 @@ public class ShopActivity extends BaseActivity {
             o.actionStyle = "ok";
             o.onAction = () -> equip(boards, k.id);
         } else {
-            o.status = k.price == 0 ? "Free" : "🪙 " + Ui.fmt(k.price) + " coins";
+            o.status = k.price == 0 ? "Free" : boardPrice(k) + (paidInGems(k) ? " diamonds" : " coins");
             o.note = "Opponents in your rooms play on it for free.";
             o.action = k.price == 0 ? "Get it" : "Buy";
             o.onAction = () -> confirmBoardBuy(k);
@@ -1171,14 +1203,21 @@ public class ShopActivity extends BaseActivity {
         BoardShowcase.show(this, k.theme, ls, o);
     }
 
-    /** A clear confirmation: the board, the exact coin price, what pays, the balance after. */
+    /** A clear confirmation: the board, the exact price, what pays (coins or diamonds), the balance after. */
     private void confirmBoardBuy(Item k) {
         if (busy) return;
-        long coins = app.wallet.optLong("balance");
+        boolean gems = paidInGems(k);
+        String sym = gems ? "💎" : "🪙", word = gems ? "diamonds" : "coins";
+        long coins = app.wallet.optLong(gems ? "gems" : "balance");
         if (coins < k.price) {
             Sfx.get().play(Sfx.S.ERROR);
-            Popup.message(this, "Not enough coins", "🪙\nYou need " + Ui.fmt(k.price - coins) + " more coins for " + k.name + ". Win matches and collect your daily bonus to earn coins.",
-                    Popup.ok("OK", null));
+            if (gems) {
+                Popup.message(this, "Not enough diamonds", "💎\nYou need " + Ui.fmt(k.price - coins) + " more diamonds for " + k.name + ".",
+                        Popup.plain("Close", null), new Popup.Btn("Diamond shop", "gold", () -> startActivity(new Intent(this, GemShopActivity.class))));
+            } else {
+                Popup.message(this, "Not enough coins", "🪙\nYou need " + Ui.fmt(k.price - coins) + " more coins for " + k.name + ". Win matches and collect your daily bonus to earn coins.",
+                        Popup.ok("OK", null));
+            }
             return;
         }
         LinearLayout box = Ui.vbox(this);
@@ -1191,14 +1230,14 @@ public class ShopActivity extends BaseActivity {
         tags.addView(DiceLux.badge(this, k.theme.rarity));
         tags.addView(Ui.text(this, "  " + BoardLux.collectionName(k.theme.collection), 12, 0xffd9cfff));
         box.addView(tags, Ui.lpMatchWrap());
-        box.addView(receiptLine("Price", "🪙 " + Ui.fmt(k.price) + " coins"));
-        box.addView(receiptLine("Paid with", "Coins in your wallet"));
-        box.addView(receiptLine("Your coins", Ui.fmt(coins) + "  →  " + Ui.fmt(coins - k.price)));
+        box.addView(receiptLine("Price", sym + " " + Ui.fmt(k.price) + " " + word));
+        box.addView(receiptLine("Paid with", gems ? "Your diamonds" : "Coins in your wallet"));
+        box.addView(receiptLine(gems ? "Your diamonds" : "Your coins", Ui.fmt(coins) + "  →  " + Ui.fmt(coins - k.price)));
         TextView fine = Ui.text(this, "Bought once, yours forever. No real money is charged. Opponents in rooms you host play on it for free.", 11, Ui.MUTED);
         fine.setGravity(Gravity.CENTER);
         fine.setPadding(0, Ui.dp(this, 8), 0, 0);
         box.addView(fine, Ui.lpMatchWrap());
-        Popup.showModal(this, "Buy " + k.name + "?", box, Popup.plain("Cancel", null), Popup.ok("Pay 🪙 " + Ui.fmt(k.price), () -> buyBoard(k)));
+        Popup.showModal(this, "Buy " + k.name + "?", box, Popup.plain("Cancel", null), Popup.ok("Pay " + sym + " " + Ui.fmt(k.price), () -> buyBoard(k)));
     }
 
     private void buyBoard(Item k) {

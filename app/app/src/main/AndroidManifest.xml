@@ -67,5 +67,8 @@
         <activity
             android:name=".ui.DiceCollectionActivity"
             android:screenOrientation="portrait" />
+        <activity
+            android:name=".ui.CollectionActivity"
+            android:screenOrientation="portrait" />
     </application>
 </manifest>

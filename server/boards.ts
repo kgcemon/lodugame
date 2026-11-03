@@ -1,9 +1,9 @@
 import type { Queryable } from './db';
 import { HttpError } from './security';
 import {
-  BOARD_AMBIENTS, BOARD_COLLECTIONS, BOARD_DECORS, BOARD_EMBLEMS, BOARD_PATTERNS, BOARD_RARITIES, BOARD_SAFE_MARKS, BOARDS,
+  BOARD_AMBIENTS, BOARD_COLLECTIONS, BOARD_CURRENCIES, BOARD_DECORS, BOARD_EMBLEMS, BOARD_PATTERNS, BOARD_RARITIES, BOARD_SAFE_MARKS, BOARDS,
   CUSTOM_BOARDS, DEFAULT_BOARD,
-  type BoardCollection, type BoardLook, type BoardRarity, type BoardTheme,
+  type BoardCollection, type BoardCurrency, type BoardLook, type BoardRarity, type BoardTheme,
 } from '../shared/boards';
 
 /**
@@ -11,7 +11,8 @@ import {
  * created, with what an administrator changed (name, rarity, collection, ribbon, look,
  * publishing, featuring) and real sales. Shop labels are only shown when data backs them:
  * NEW ARRIVAL for 30 days after a board went on sale, BEST SELLER / MOST POPULAR from real
- * purchases, EXCLUSIVE / LEGENDARY from the board. Boards are paid in coins.
+ * purchases, EXCLUSIVE / LEGENDARY from the board. Boards are paid in coins, or the rarest in
+ * diamonds (an administrator can switch any board's currency).
  */
 
 export interface BoardOverride {
@@ -20,6 +21,7 @@ export interface BoardOverride {
   badge?: string | null;
   rarity?: BoardRarity;
   collection?: BoardCollection;
+  currency?: BoardCurrency;
   /** Unpublished boards are not sold or listed (owners keep and can use them). */
   published?: boolean;
   featured?: boolean;
@@ -40,6 +42,7 @@ export interface BoardSales {
   owners: number;
   recent: number;
   coins: number;
+  gems: number;
 }
 
 const NEW_DAYS = 30;
@@ -112,6 +115,10 @@ export function validateBoardOverrides(v: unknown, current: Record<string, Board
     if (o.badge !== undefined) next.badge = o.badge === null || o.badge === '' ? null : text(o.badge, 'Ribbon', 1, 24);
     if (o.rarity !== undefined) next.rarity = oneOf(o.rarity, BOARD_RARITIES, 'rarity');
     if (o.collection !== undefined) next.collection = oneOf(o.collection, BOARD_COLLECTIONS, 'collection');
+    if (o.currency !== undefined) {
+      if (id === DEFAULT_BOARD) throw new HttpError(400, 'The classic board is free');
+      next.currency = oneOf(o.currency, BOARD_CURRENCIES, 'currency');
+    }
     for (const k of ['published', 'featured'] as const) {
       if (o[k] === undefined) continue;
       if (typeof o[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false`);
@@ -137,12 +144,13 @@ export function validateCustomBoards(v: unknown): BoardTheme[] {
     if (seen.has(id) || BOARDS.some((b) => b.id === id)) throw new HttpError(400, `Board id ${id} is taken`);
     seen.add(id);
     const price = o.price;
-    if (typeof price !== 'number' || !Number.isInteger(price) || price < 0 || price > 10_000_000) throw new HttpError(400, 'Price must be a whole number of coins');
+    if (typeof price !== 'number' || !Number.isInteger(price) || price < 0 || price > 10_000_000) throw new HttpError(400, 'Price must be a whole number');
     return {
       id,
       name: text(o.name, 'Board name', 1, 30),
       price,
       blurb: typeof o.blurb === 'string' && o.blurb.trim() ? text(o.blurb, 'Description', 1, 140) : 'A LudoX special board.',
+      currency: oneOf(o.currency ?? 'coins', BOARD_CURRENCIES, 'currency'),
       royal: price > 0,
       badge: typeof o.badge === 'string' && o.badge.trim() ? text(o.badge, 'Ribbon', 1, 24) : undefined,
       rarity: oneOf(o.rarity ?? 'epic', BOARD_RARITIES, 'rarity'),
@@ -168,16 +176,18 @@ export async function boardSales(q: Queryable): Promise<Map<string, BoardSales>>
   if (salesCache && Date.now() - salesCache.at < 60_000) return salesCache.byId;
   const since = new Date(Date.now() - NEW_DAYS * 86_400_000);
   const rows = (
-    await q.query<{ id: string; owners: number; recent: number; coins: number }>(
+    await q.query<{ id: string; owners: number; recent: number; coins: number; gems: number }>(
       `select b.board_id as id, count(*)::int as owners,
               sum(case when b.created_at >= $1 then 1 else 0 end)::int as recent,
-              coalesce(sum(-w.amount), 0)::int as coins
+              coalesce(sum(-w.amount), 0)::int as coins,
+              coalesce(sum(-g.amount), 0)::int as gems
        from user_boards b left join wallet_transactions w on w.user_id = b.user_id and w.idempotency_key = concat('board:', b.board_id)
+       left join gem_transactions g on g.id = b.gem_tx_id
        group by b.board_id`,
       [since],
     )
   ).rows;
-  const byId = new Map(rows.map((r) => [r.id, { owners: Number(r.owners), recent: Number(r.recent), coins: Number(r.coins) }]));
+  const byId = new Map(rows.map((r) => [r.id, { owners: Number(r.owners), recent: Number(r.recent), coins: Number(r.coins), gems: Number(r.gems) }]));
   salesCache = { at: Date.now(), byId };
   return byId;
 }
@@ -219,6 +229,7 @@ export function boardProducts(
       badge,
       rarity,
       collection,
+      currency: b.id === DEFAULT_BOARD ? 'coins' : o.currency ?? b.currency ?? 'coins',
       look: { ...b.look, ...(o.look ?? {}) },
       price: b.id === DEFAULT_BOARD ? 0 : isCustom ? b.price : price(b.id),
       published: b.id === DEFAULT_BOARD || o.published !== false,
