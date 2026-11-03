@@ -284,12 +284,12 @@ final class FriendPopups {
 
     // ------------------------------------------------------------------ pieces
 
-    private static void sound(Sfx.S s, float v, float r) {
+    static void sound(Sfx.S s, float v, float r) {
         Sfx sfx = Sfx.get();
         if (sfx != null) sfx.play(s, v, r);
     }
 
-    private static void spin(View v, long ms) {
+    static void spin(View v, long ms) {
         ObjectAnimator turn = ObjectAnimator.ofFloat(v, "rotation", 0, 360);
         turn.setDuration(ms);
         turn.setRepeatCount(ValueAnimator.INFINITE);
@@ -297,7 +297,7 @@ final class FriendPopups {
         turn.start();
     }
 
-    private static void breathe(View v) {
+    static void breathe(View v) {
         ObjectAnimator pulse = ObjectAnimator.ofPropertyValuesHolder(v,
                 PropertyValuesHolder.ofFloat("scaleX", 1f, 1.06f, 1f), PropertyValuesHolder.ofFloat("scaleY", 1f, 1.06f, 1f));
         pulse.setDuration(1000);
@@ -331,7 +331,7 @@ final class FriendPopups {
         return card;
     }
 
-    private static View button(Context c, String label, int[] colors, int outline) {
+    static View button(Context c, String label, int[] colors, int outline) {
         Fx.Tile t = new Fx.Tile(c, colors, 16, 5);
         Fx.GoldText l = Fx.GoldText.label(c, label, 17, outline);
         l.setGravity(Gravity.CENTER);
@@ -344,7 +344,7 @@ final class FriendPopups {
      * A full-screen, see-through window with a dark backdrop that centres its content
      * itself (no dialog theme can shift it), and flies it in and out.
      */
-    private static final class Shell extends Dialog {
+    static final class Shell extends Dialog {
         private final FrameLayout root;
         private final View scrim;
         private final FrameLayout safe;
@@ -413,7 +413,7 @@ final class FriendPopups {
     }
 
     /** Slowly turning golden rays. */
-    private static final class Rays extends View {
+    static final class Rays extends View {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final int color;
 
@@ -434,7 +434,7 @@ final class FriendPopups {
     /**
      * Emoji drifting up (hearts, sparkles), falling (tears), or bursting out (confetti).
      */
-    private static final class Floaters extends View {
+    static final class Floaters extends View {
         private final String[] glyphs;
         private final boolean burst;
         boolean falling;

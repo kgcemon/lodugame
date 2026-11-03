@@ -95,7 +95,7 @@ public class GameActivity extends BaseActivity {
     private FrameLayout effects;
     private LinearLayout chatPanel, emotePanel, chatList;
     private ScrollView chatScroll;
-    private Popup resultDialog;
+    private android.app.Dialog resultDialog;
     /** The offline pass-and-play match, or null for an online one. */
     private LocalGame local;
     private JSONObject localUpdate;
@@ -1193,8 +1193,6 @@ public class GameActivity extends BaseActivity {
         boolean firstTime = resultShownFor != state.seq;
         resultShownFor = state.seq;
         dismissResult();
-        LinearLayout box = Ui.vbox(this);
-        box.setGravity(Gravity.CENTER_HORIZONTAL);
         String me = local != null ? "" : app.socket.myColor();
         int winnerIdx = state.ranking.isEmpty() ? -1 : state.ranking.get(0);
         GameState.Player winner = winnerIdx >= 0 ? state.players.get(winnerIdx) : null;
@@ -1202,53 +1200,45 @@ public class GameActivity extends BaseActivity {
         // 2 vs 2: both partners win (ranked 1st and 2nd).
         boolean iWon = winner != null && (winner.color.equals(me) || (teamMatch && teamOf(winner.color) == teamOf(me)));
         if (firstTime) Sfx.get().play(iWon || local != null ? Sfx.S.VICTORY : Sfx.S.DEFEAT);
-        TextView big = Ui.text(this, iWon ? "🏆" : "🎲", 60, Ui.INK);
-        big.setGravity(Gravity.CENTER);
-        box.addView(big);
-        JSONObject s = local != null ? null : app.socket.settlement;
-        if (s != null && s.optLong("entryFee") > 0) {
-            Fx.GoldText pay = new Fx.GoldText(this, iWon ? "+🪙 " + Ui.fmt(s.optLong("payout"))
-                    : (teamMatch ? "Each winner got 🪙 " : "Winner got 🪙 ") + Ui.fmt(s.optLong("payout")), iWon ? 26 : 18);
-            pay.setGravity(Gravity.CENTER);
-            box.addView(pay, Ui.lpMatchWrap());
-        }
-        // Finishing order on 3D ribbons in each player's colour.
+
+        VictoryPopup.Spec spec = new VictoryPopup.Spec();
+        // Offline everyone shares the phone: every result is a celebration.
+        spec.win = iWon || local != null;
+        spec.ranking = new java.util.ArrayList<>();
+        JSONArray seats = local != null || app.socket.room == null ? null : app.socket.room.optJSONArray("seats");
         for (int r = 0; r < state.ranking.size(); r++) {
             GameState.Player p = state.players.get(state.ranking.get(r));
-            int col = Board.colorArgb(p.color);
-            LinearLayout ribbon = Ui.hbox(this);
-            int depth = Fx.bevel(ribbon, new int[]{Fx.blend(col, Color.WHITE, 0.25f), col, Fx.blend(col, Color.BLACK, 0.45f)}, 12, 3, false);
-            ribbon.setPadding(Ui.dp(this, 12), Ui.dp(this, 6), Ui.dp(this, 12), Ui.dp(this, 6) + depth);
-            ribbon.addView(Fx.GoldText.label(this, (r == 0 ? "🥇" : r == 1 ? "🥈" : r == 2 ? "🥉" : "#" + (r + 1)) + "  " + p.name
-                    + (p.color.equals(me) ? " (you)" : ""), 15, 0x99000000));
-            LinearLayout.LayoutParams lp = Ui.lpMatchWrap();
-            lp.topMargin = Ui.dp(this, 8);
-            box.addView(ribbon, lp);
+            JSONObject seat = seatFor(seats, p.color);
+            spec.ranking.add(new VictoryPopup.Row(p.name, p.color, seat, p.color.equals(me), seat != null && "ai".equals(seat.optString("kind"))));
         }
+        JSONObject s = local != null ? null : app.socket.settlement;
+        if (s != null && s.optLong("entryFee") > 0) {
+            if (iWon) spec.coinsWon = s.optLong("payout");
+            else spec.payoutNote = (teamMatch ? "Each winner got 🪙 " : "Winner got 🪙 ") + Ui.fmt(s.optLong("payout"));
+        }
+        GameState.Player mate = teamMatch && state.ranking.size() > 1 ? state.players.get(state.ranking.get(1)) : null;
+        String winners = winner == null ? "" : winner.name + (mate != null ? " & " + mate.name : "");
         if (local != null) {
-            resultDialog = Popup.showModal(this, winner != null ? winner.name + " wins!" : "Match over", box,
-                    Popup.ok("Play again", this::localRematch),
-                    Popup.plain("View board", null),
-                    Popup.danger("Leave", this::finish));
-            return;
-        }
-        String title;
-        if (teamMatch && winner != null) {
-            GameState.Player mate = state.ranking.size() > 1 ? state.players.get(state.ranking.get(1)) : null;
-            title = iWon ? "Your team won!" : winner.name + (mate != null ? " & " + mate.name : "") + " win";
+            spec.headline = "VICTORY!";
+            spec.sub = winner != null ? "👑 " + winner.name + " wins the match!" : "Match over";
+            spec.primary = "PLAY AGAIN";
+            spec.onPrimary = this::localRematch;
+            spec.onLeave = this::finish;
         } else {
-            title = iWon ? "You won!" : winner != null ? winner.name + " wins" : "Match over";
+            spec.headline = iWon ? "VICTORY!" : "GOOD GAME";
+            spec.sub = iWon ? (teamMatch ? "Your team won the match!" : "You won the match!")
+                    : winner != null ? "👑 " + winners + (mate != null ? " win" : " wins") + " this one. Next time!" : "Match over";
+            spec.primary = "REMATCH";
+            spec.onPrimary = () -> app.socket.emit("game:rematch", new JSONObject(), res -> {
+                if (!res.optBoolean("ok")) {
+                    LudoApp.toast(res.optString("error", "Rematch failed"));
+                    resultShownFor = -1;
+                    showResult(true);
+                }
+            });
+            spec.onLeave = () -> app.socket.leave(res -> finish());
         }
-        resultDialog = Popup.showModal(this, title, box,
-                Popup.ok("Rematch", () -> app.socket.emit("game:rematch", new JSONObject(), res -> {
-                    if (!res.optBoolean("ok")) {
-                        LudoApp.toast(res.optString("error", "Rematch failed"));
-                        resultShownFor = -1;
-                        showResult(true);
-                    }
-                })),
-                Popup.plain("View board", null),
-                Popup.danger("Leave", () -> app.socket.leave(res -> finish())));
+        resultDialog = VictoryPopup.show(this, spec);
     }
 
     private void dismissResult() {

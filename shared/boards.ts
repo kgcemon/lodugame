@@ -13,6 +13,8 @@ export interface BoardTheme {
   blurb: string;
   /** Shown with a crown ribbon in the shop. */
   royal: boolean;
+  /** A ribbon for the shop instead of the plain "royal" one (e.g. for couples). */
+  badge?: string;
 }
 
 export const DEFAULT_BOARD = 'classic';
@@ -20,6 +22,9 @@ export const DEFAULT_BOARD = 'classic';
 export const BOARDS: BoardTheme[] = [
   { id: 'classic', name: 'Classic', price: 0, blurb: 'The wooden board everyone knows.', royal: false },
   { id: 'royal_gold', name: 'Royal Gold', price: 200, blurb: 'Ivory and gold, fit for a king.', royal: true },
+  { id: 'love_story', name: 'Love Story', price: 300, blurb: 'Hearts and rose gold — play it with your love.', royal: true, badge: '💞 FOR COUPLES' },
+  { id: 'billionaire', name: 'Billionaire', price: 999, blurb: "Black leather, solid gold and diamonds. Show them who's boss.", royal: true, badge: '💎 VIP' },
+  { id: 'bangladesh', name: 'Bangladesh', price: 150, blurb: 'Green and the red sun — play for your country.', royal: true, badge: '🇧🇩 DESH' },
   { id: 'maharaja', name: 'Maharaja', price: 250, blurb: 'Crimson silk and a golden palace rim.', royal: true },
   { id: 'emerald_palace', name: 'Emerald Palace', price: 250, blurb: 'Jade halls trimmed with gold.', royal: true },
   { id: 'sapphire_throne', name: 'Sapphire Throne', price: 300, blurb: 'Deep blue velvet and silver.', royal: true },

@@ -45,6 +45,8 @@ public class ShopActivity extends BaseActivity {
     /** One thing for sale: a dice skin, a profile frame or a board. */
     private static final class Item {
         final String id, name, blurb;
+        /** Shop ribbon instead of the plain royal one (null: none). */
+        String badge;
         final int price;
         final boolean royal;
         final DiceView.Skin skin;
@@ -125,7 +127,9 @@ public class ShopActivity extends BaseActivity {
                         DiceView.Skin k = DiceView.Skin.from(o);
                         if (k != null) s.items.add(new Item(k.id, k.name, o.optInt("price"), k, null, k.price >= 80));
                     } else if (s == frames ? AvatarView.Frames.known(id) : BoardThemes.known(id)) {
-                        s.items.add(new Item(id, o.optString("name"), o.optInt("price"), null, o.optString("blurb", null), o.optBoolean("royal")));
+                        Item it = new Item(id, o.optString("name"), o.optInt("price"), null, o.optString("blurb", null), o.optBoolean("royal"));
+                        it.badge = o.isNull("badge") ? null : o.optString("badge", null);
+                        s.items.add(it);
                     }
                 }
                 if (s == dice && s.items.isEmpty()) {
@@ -232,8 +236,8 @@ public class ShopActivity extends BaseActivity {
         LinearLayout hero = Ui.card(this);
         Ui.margins(hero, this, 0, 12, 0, 0);
         hero.setGravity(Gravity.CENTER_HORIZONTAL);
-        if (pick.royal) {
-            TextView ribbon = Ui.tag(this, tab == boards ? "👑 ROYAL BOARD" : "✨ PREMIUM", Ui.GOLD);
+        if (pick.royal || pick.badge != null) {
+            TextView ribbon = Ui.tag(this, pick.badge != null ? pick.badge : tab == boards ? "👑 ROYAL BOARD" : "✨ PREMIUM", Ui.GOLD);
             LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             rl.bottomMargin = Ui.dp(this, 8);
             hero.addView(ribbon, rl);
@@ -330,8 +334,9 @@ public class ShopActivity extends BaseActivity {
         box.addView(p, Ui.lpMatchWrap());
         t.addView(box, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         if (k.royal && tab == boards) {
-            // A little crown in the corner of royal boards.
-            TextView crown = Ui.text(this, "👑", 16, Ui.INK);
+            // A little crown (or the badge's own symbol) in the corner of royal boards.
+            String mark = k.badge != null ? k.badge.substring(0, k.badge.offsetByCodePoints(0, k.badge.startsWith("🇧") ? 2 : 1)) : "👑";
+            TextView crown = Ui.text(this, mark, 16, Ui.INK);
             FrameLayout.LayoutParams cl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
             cl.topMargin = Ui.dp(this, 4);
             cl.rightMargin = Ui.dp(this, 6);
