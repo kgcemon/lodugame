@@ -41,14 +41,14 @@ settings on the server.
 
 Before publishing, also:
 
-* Set `applicationId` / `namespace` in `app/build.gradle` (now `com.ludo3d.game`; it can't
+* Set `applicationId` / `namespace` in `app/build.gradle` (now `com.ludox.game`; it can't
   change after release).
 * Remove `android:usesCleartextTraffic="true"` from `AndroidManifest.xml` if you only use https.
 
 ## Code map
 
 ```
-app/src/main/java/com/ludo3d/game/
+app/src/main/java/com/ludox/game/
   LudoApp.java          app-wide session: API client, socket, user, wallet, config
   net/Api.java          REST client (cookie session + x-requested-with header)
   net/CookieStore.java  keeps the login cookie across restarts

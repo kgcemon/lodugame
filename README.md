@@ -146,7 +146,7 @@ Gems are a second currency, bought in the Android app through Google Play
   1. Play Console → Setup → API access: link a Google Cloud project, create a service account,
      grant it *View financial data* and *Manage orders* for the app, download its JSON key.
   2. On the server: `GOOGLE_PLAY_SERVICE_ACCOUNT=/path/to/key.json` (keep it out of git) and
-     `GOOGLE_PLAY_PACKAGE=com.ludo3d.game`, then restart.
+     `GOOGLE_PLAY_PACKAGE=com.ludox.game`, then restart.
   3. Purchases only work for builds installed from Play (internal testing track is enough).
 * **Support:** admins can add or remove gems with `POST /api/admin/users/:id/gems`.
 

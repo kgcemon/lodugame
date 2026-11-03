@@ -57,7 +57,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     },
     staticDir: env.STATIC_DIR === 'none' ? null : undefined,
     googlePlayServiceAccount: env.GOOGLE_PLAY_SERVICE_ACCOUNT || undefined,
-    googlePlayPackage: env.GOOGLE_PLAY_PACKAGE ?? 'com.ludo3d.game',
+    googlePlayPackage: env.GOOGLE_PLAY_PACKAGE ?? 'com.ludox.game',
     googleClientIds: list(env.GOOGLE_CLIENT_IDS),
     authLimits: { registrationsPer10Min: Number(env.REGISTER_LIMIT ?? 5), loginsPerMin: Number(env.LOGIN_LIMIT ?? 10) },
   };
