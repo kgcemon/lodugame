@@ -202,7 +202,7 @@ public class RoomActivity extends BaseActivity {
             col.addView(vc);
         }
 
-        // The board everyone plays on: the host's.
+        // The board everyone plays on: the host's paid one, else that of whoever sat down first.
         com.ludo3d.game.gl.BoardThemes.Theme board = com.ludo3d.game.gl.BoardThemes.get(room.optString("board", null));
         LinearLayout bc = Ui.card(this);
         Ui.margins(bc, this, 0, 12, 0, 14);
@@ -211,7 +211,10 @@ public class RoomActivity extends BaseActivity {
         LinearLayout bt = Ui.vbox(this);
         bt.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 6), 0);
         bt.addView(Ui.bold(Ui.text(this, (board.royal() ? "👑 " : "🎲 ") + board.name + " board", 15, board.royal() ? Ui.GOLD : Ui.INK)));
-        bt.addView(Ui.muted(this, isHost ? "Everyone here plays on your board." : "The host's board — everyone plays on it."));
+        String by = room.isNull("boardBy") ? null : room.optString("boardBy", null);
+        bt.addView(Ui.muted(this, by == null ? "The free board. A paid board shows here when the host or anyone who joins has one."
+                : me != null && by.equals(me.optString("name")) ? "Your board — everyone here plays on it, free for them."
+                : by + "'s board — everyone here plays on it."));
         br.addView(bt, Ui.weight(1));
         if (isHost) {
             br.addView(Ui.smallButton(this, board.royal() ? "Change" : "👑 Royal", "glass",

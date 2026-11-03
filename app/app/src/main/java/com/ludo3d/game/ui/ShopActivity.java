@@ -35,13 +35,14 @@ import java.util.Set;
 
 /**
  * The shop: dice skins, profile frames and royal boards, each bought once with diamonds
- * and then shown in every match (opponents see them too; a room plays on its host's
+ * and then shown in every match (opponents see them too; a room plays on its host's paid board,
+ * else on the paid board of whoever sat down first
  * board). The big preview at the top shows what you picked; tap any tile below to look at
  * it there. The server sets the prices (an administrator can change them) and keeps what
  * you own.
  */
 public class ShopActivity extends BaseActivity {
-    /** The board I play on offline (online the room plays on its host's). */
+    /** The board I play on offline (online see RoomActivity: the host's paid board, else the first one seated). */
     public static final String PREF_BOARD = "board";
 
     /** One thing for sale: a dice skin, a profile frame or a board. */
@@ -249,7 +250,7 @@ public class ShopActivity extends BaseActivity {
         col.addView(tabs, Ui.lpMatchWrap());
         TextView intro = Ui.muted(this, tab == dice ? "The LudoX Dice Collection — every opponent sees your die. Looks only: every die rolls the same."
                 : tab == frames ? "A ring round your picture: on your profile, with friends and at every table."
-                : "Premium 3D boards. When you host a room, everyone in it plays on your board — they don't need to buy it.");
+                : "Premium 3D boards. Host a room — or be the first to join with a paid board — and everyone plays on yours, free for them.");
         intro.setGravity(Gravity.CENTER);
         intro.setPadding(Ui.dp(this, 8), Ui.dp(this, 10), Ui.dp(this, 8), 0);
         col.addView(intro, Ui.lpMatchWrap());
@@ -321,7 +322,7 @@ public class ShopActivity extends BaseActivity {
         boolean using = pick.id.equals(tab.equipped);
         String inUse = tab == dice ? "✓ On your die now — everyone at the table sees it."
                 : tab == frames ? "✓ Round your picture now — friends and every table see it."
-                : "✓ Your board now — everyone in rooms you host plays on it.";
+                : "✓ Your board now — everyone at your table plays on it.";
         TextView sub = Ui.muted(this, using ? inUse : have ? "You own this " + tab.word + ". Put it on any time."
                 : pick.price == 0 ? "Free — take it!" : "Buy once, keep forever.");
         sub.setGravity(Gravity.CENTER);
@@ -431,7 +432,7 @@ public class ShopActivity extends BaseActivity {
         }
         String where = s == dice ? "It goes on your die right away."
                 : s == frames ? "It goes round your picture right away."
-                : "It's your board right away — everyone in rooms you host plays on it.";
+                : "It's your board right away — everyone at your table plays on it.";
         Popup.message(this, "Buy " + k.name + " " + s.word + "?", "💎 " + k.price + " diamonds. It's yours forever. " + where,
                 Popup.plain("Cancel", null), Popup.ok("Buy", () -> buy(s, k)));
     }
@@ -947,7 +948,7 @@ public class ShopActivity extends BaseActivity {
         LinearLayout mt = Ui.vbox(this);
         mt.setPadding(Ui.dp(this, 10), 0, 0, 0);
         mt.addView(Ui.bold(Ui.text(this, "My Boards · " + have + " of " + boards.items.size(), 15, Ui.INK)));
-        mt.addView(Ui.text(this, (on != null ? "Using " + on.name + ". " : "") + "Everyone in rooms you host plays on your board — free for them.", 12, 0xffd9cfff));
+        mt.addView(Ui.text(this, (on != null ? "Using " + on.name + ". " : "") + "Host or join first, and everyone plays on your board — free for them.", 12, 0xffd9cfff));
         mine.addView(mt, Ui.weight(1));
         LinearLayout.LayoutParams ml = Ui.lpMatchWrap();
         ml.topMargin = Ui.dp(this, 12);
@@ -1186,7 +1187,7 @@ public class ShopActivity extends BaseActivity {
             o.status = "✓ In use";
             o.action = "In use";
             o.actionStyle = "ok";
-            o.note = "Rooms you host are played on this board.";
+            o.note = "Rooms you host, or join first, are played on this board.";
         } else if (have) {
             o.status = "Owned";
             o.action = "Use this board";
@@ -1233,7 +1234,7 @@ public class ShopActivity extends BaseActivity {
         box.addView(receiptLine("Price", sym + " " + Ui.fmt(k.price) + " " + word));
         box.addView(receiptLine("Paid with", gems ? "Your diamonds" : "Coins in your wallet"));
         box.addView(receiptLine(gems ? "Your diamonds" : "Your coins", Ui.fmt(coins) + "  →  " + Ui.fmt(coins - k.price)));
-        TextView fine = Ui.text(this, "Bought once, yours forever. No real money is charged. Opponents in rooms you host play on it for free.", 11, Ui.MUTED);
+        TextView fine = Ui.text(this, "Bought once, yours forever. No real money is charged. Everyone at your table plays on it for free.", 11, Ui.MUTED);
         fine.setGravity(Gravity.CENTER);
         fine.setPadding(0, Ui.dp(this, 8), 0, 0);
         box.addView(fine, Ui.lpMatchWrap());
@@ -1255,7 +1256,7 @@ public class ShopActivity extends BaseActivity {
                 ImageView iv = new ImageView(ShopActivity.this);
                 BoardLux.thumb(iv, k.theme, Ui.dp(ShopActivity.this, 200));
                 box.addView(iv, new LinearLayout.LayoutParams(Ui.dp(ShopActivity.this, 200), Ui.dp(ShopActivity.this, 156)));
-                TextView t = Ui.text(ShopActivity.this, k.name + " is yours and in use. Everyone in rooms you host will play on it.", 14, Ui.INK);
+                TextView t = Ui.text(ShopActivity.this, k.name + " is yours and in use. Everyone at your table will play on it.", 14, Ui.INK);
                 t.setGravity(Gravity.CENTER);
                 box.addView(t, Ui.lpMatchWrap());
                 Popup.showModal(ShopActivity.this, "🎉 It's yours!", box, Popup.ok("Great!", null));

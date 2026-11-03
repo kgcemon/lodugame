@@ -44,8 +44,10 @@ export interface RoomView {
   /** Official fee every player in this room paid (set by the server from game settings). */
   entryFee: number;
   payoutMultiplier: number;
-  /** The board everyone plays on: the host's (shared/boards.ts). */
+  /** The board everyone plays on (shared/boards.ts): the host's paid board, else the paid board of whoever sat down first. */
   board: string;
+  /** Whose board it is (their name), or null for the free classic board. */
+  boardBy: string | null;
 }
 
 /** What a player sees before confirming a join (and paying). */

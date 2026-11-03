@@ -910,7 +910,7 @@ function BoardProducts() {
         </p>
       )}
       <p className="hint">
-        Boards are paid in coins or diamonds (pick per board; the price is in that currency). A room plays on its host's board (locked for the match); opponents never pay for it. Hidden boards leave the shop; owners keep them.
+        Boards are paid in coins or diamonds (pick per board; the price is in that currency). A room plays on its host's paid board, or else on the paid board of whoever sat down first (locked for the match); opponents never pay for it. Hidden boards leave the shop; owners keep them.
         Every board keeps the same paths and rules — only the look changes. Labels follow real data (NEW for 30 days, BEST SELLER / MOST POPULAR from sales).
       </p>
       <div className="table-wrap">

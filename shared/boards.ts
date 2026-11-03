@@ -1,8 +1,8 @@
 /**
  * Board skins: looks for the Ludo board, bought in the shop with coins or (the rarest) with
- * diamonds. A room plays on its
- * host's board (locked when the match starts), so everyone at the table sees it; opponents
- * never need to own it. The server owns the catalogue, prices and publishing (an
+ * diamonds. A room plays on its host's paid board or, when the host has only the free one, on
+ * the paid board of whoever sat down first (locked when the match starts), so everyone at the
+ * table sees it; opponents never need to own it. The server owns the catalogue, prices and publishing (an
  * administrator can change them and add new boards). Every board keeps the same 15x15 grid,
  * paths, safe cells, yards and home: only paint, decoration and lighting change.
  *

@@ -149,6 +149,42 @@ describe('board shop', () => {
     expect(await balance(guest)).toBe(guestCoins);
   });
 
+  it('with a free host, the room plays on the paid board of whoever sat down first', async () => {
+    const host = await registerUser(t, 'FreeHost');
+    const first = await registerUser(t, 'FirstPaid');
+    const second = await registerUser(t, 'SecondPaid');
+    await coins(first.id, 10_000);
+    await coins(second.id, 10_000);
+    expect((await first.call('POST', '/boards/rose_garden/buy')).status).toBe(200);
+    expect((await second.call('POST', '/boards/sunset_date/buy')).status).toBe(200);
+    const hs = await socketFor(t, host.cookie);
+    const created = await emit<{ room: RoomView }>(hs, 'room:create', { modeId: 'friendly', maxPlayers: 3 });
+    const code = created.ok ? created.room.code : '';
+    expect(created.ok && created.room.board).toBe('classic');
+    expect(created.ok && created.room.boardBy).toBeNull();
+    const fs = await socketFor(t, first.cookie);
+    expect((await emit(fs, 'room:join', { code })).ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 30));
+    const ss = await socketFor(t, second.cookie);
+    expect((await emit(ss, 'room:join', { code })).ok).toBe(true);
+    let view: RoomView | null = null;
+    for (let i = 0; i < 20 && view?.board !== 'rose_garden'; i++) {
+      const h = await emit<{ room: RoomView }>(hs, 'session:hello');
+      view = h.ok ? h.room : null;
+    }
+    // The first to sit down with a paid board wins over later ones.
+    expect(view?.board).toBe('rose_garden');
+    expect(view?.boardBy).toMatch(/^FirstPaid/);
+    // A host with a paid board always comes first.
+    await coins(host.id, 10_000);
+    expect((await host.call('POST', '/boards/valentine/buy')).status).toBe(200);
+    for (let i = 0; i < 20 && view?.board !== 'valentine'; i++) {
+      const h = await emit<{ room: RoomView }>(fs, 'session:hello');
+      view = h.ok ? h.room : null;
+    }
+    expect(view?.board).toBe('valentine');
+  });
+
   it('a board the host doesn\'t own can\'t be put on, so a room never shows it', async () => {
     const cheeky = await registerUser(t, 'Cheeky');
     expect((await cheeky.call('POST', '/boards/dragon_kingdom/equip')).status).toBe(403);

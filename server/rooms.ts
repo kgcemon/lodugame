@@ -90,8 +90,10 @@ interface Seat {
   gems: number | null;
   /** Dice skin shown for this seat. */
   diceSkin: string;
-  /** This player's board: the whole room plays on it while they host. */
+  /** This player's board: the room plays on it while they host (or, with a free host, sat down first). */
   board: string;
+  /** When this seat was taken (ms): who sat down first picks the board if the host has none. */
+  seatedAt: number;
   avatarUrl: string | null;
   frame: string | null;
   country: string | null;
@@ -100,8 +102,9 @@ interface Seat {
 interface Room {
   code: string;
   hostPid: string | null;
-  /** The board this match is played on: the host's when it started, locked until it ends. */
+  /** The board this match is played on (see roomBoard) when it started, locked until it ends, and whose it is. */
   matchBoard?: string;
+  matchBoardBy?: string | null;
   isPublic: boolean;
   quick: boolean;
   mode: MatchMode;
@@ -199,7 +202,7 @@ export class RoomManager {
       mode: { id: room.mode.id, name: room.mode.name },
       entryFee: room.entryFee,
       payoutMultiplier: room.payoutMultiplier,
-      board: room.status !== 'lobby' && room.matchBoard ? room.matchBoard : this.hostBoard(room),
+      ...this.boardOf(room),
       you: pid ? room.seats.findIndex((s) => s.playerId === pid) : -1,
       waitMsLeft: room.waitUntil ? Math.max(0, room.waitUntil - Date.now()) : null,
       seats: room.seats.map((s, i) => ({
@@ -221,9 +224,25 @@ export class RoomManager {
     };
   }
 
-  /** The host's board (it is only ever one they own: the server looked it up from their profile). */
-  private hostBoard(room: Room): string {
-    return room.seats.find((s) => s.playerId !== null && s.playerId === room.hostPid)?.board ?? DEFAULT_BOARD;
+  /** The board shown to the room: the locked one during a match, otherwise today's pick. */
+  private boardOf(room: Room): { board: string; boardBy: string | null } {
+    if (room.status !== 'lobby' && room.matchBoard) return { board: room.matchBoard, boardBy: room.matchBoardBy ?? null };
+    const now = this.roomBoard(room);
+    return { board: now.board, boardBy: now.by };
+  }
+
+  /**
+   * The board the room plays on: the host's paid board; when the host has only the free one,
+   * the paid board of whoever sat down first. A seat's board is only ever one its player owns
+   * (the server looked it up from their profile); opponents never need to own it.
+   */
+  private roomBoard(room: Room): { board: string; by: string | null } {
+    const host = room.seats.find((s) => s.playerId !== null && s.playerId === room.hostPid);
+    const paid = room.seats
+      .filter((s) => s.playerId !== null && !s.pending && s.board !== DEFAULT_BOARD)
+      .sort((a, b) => a.seatedAt - b.seatedAt);
+    const from = host && host.board !== DEFAULT_BOARD ? host : paid[0];
+    return from ? { board: from.board, by: from.name } : { board: DEFAULT_BOARD, by: null };
   }
 
   preview(code: unknown): RoomPreview {
@@ -381,6 +400,7 @@ export class RoomManager {
       gems: null,
       diceSkin: DEFAULT_DICE_SKIN,
       board: DEFAULT_BOARD,
+      seatedAt: Date.now(),
       avatarUrl: u.avatarUrl,
       frame: null,
       country: u.country,
@@ -602,6 +622,7 @@ export class RoomManager {
       gems: null,
       diceSkin: DEFAULT_DICE_SKIN,
       board: DEFAULT_BOARD,
+      seatedAt: Date.now(),
       avatarUrl: null,
       frame: null,
       country: null,
@@ -674,6 +695,7 @@ export class RoomManager {
     room.payoutMultiplier = info.payoutMultiplier;
     room.status = 'lobby';
     room.matchBoard = undefined;
+    room.matchBoardBy = undefined;
     room.game = null;
     room.deadline = null;
     if (room.timer) clearTimeout(room.timer);
@@ -723,7 +745,9 @@ export class RoomManager {
     room.status = 'playing';
     // Lock the board: a host changing boards (or leaving) mid-match changes nothing, and
     // anyone reconnecting gets the same one.
-    room.matchBoard = this.hostBoard(room);
+    const locked = this.roomBoard(room);
+    room.matchBoard = locked.board;
+    room.matchBoardBy = locked.by;
     room.lastEvents = [];
     room.rerollable = null;
     for (const s of room.seats) s.rerolls = 0;

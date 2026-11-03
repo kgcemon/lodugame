@@ -155,7 +155,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         return t;
     }
 
-    /** Play on this board theme (the room's: its host's); repaints the board face if it changed. */
+    /** Play on this board theme (the room's: the host's paid one, else the first seated player's); repaints the board face if it changed. */
     public void setBoard(String id) {
         BoardThemes.Theme next = BoardThemes.get(id);
         if (next == theme || next.key().equals(theme.key())) return;
