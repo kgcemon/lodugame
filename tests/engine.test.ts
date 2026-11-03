@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FINISH, HOME_COLUMN, SAFE_INDICES, START_OFFSET, TRACK, absIndex, cellOf } from '../shared/board';
-import { applyAction, createGame, distinctMoves, RuleError, validMoves } from '../shared/engine';
+import { applyAction, createGame, distinctMoves, dropPlayer, RuleError, validMoves } from '../shared/engine';
 import { chooseMove } from '../shared/ai';
 import type { GameState, RuleConfig } from '../shared/types';
 import { COLORS } from '../shared/types';
@@ -279,5 +279,39 @@ describe('2 vs 2 teams', () => {
     expect(end.state.phase).toBe('over');
     expect(end.state.ranking.slice(0, 2).sort()).toEqual([0, 2]);
     expect(end.state.players[1].rank).toBe(3);
+  });
+});
+
+describe('a player dropping out', () => {
+  it('ends a 2-player match: the one left wins', () => {
+    const { state, events } = dropPlayer(game(2), 0);
+    expect(events.map((e) => e.type)).toEqual(['playerLeft', 'gameOver']);
+    expect(state.phase).toBe('over');
+    expect(state.ranking).toEqual([1, 0]);
+  });
+
+  it('in a 3-player match the others play on, skipping them, and they rank last', () => {
+    let s = withTokens(game(3), 0, [5, -1, -1, FINISH]);
+    s = dropPlayer(s, 0).state;
+    expect(s.phase).toBe('roll');
+    expect(s.current).toBe(1);
+    expect(s.players[0].tokens).toEqual([-1, -1, -1, FINISH]);
+    // Player 1 rolls a 1 with nothing out: the turn skips player 0.
+    s = roll(s, 1).state;
+    expect(s.current).toBe(2);
+    s = roll(s, 1).state;
+    expect(s.current).toBe(1);
+    // Player 2 drops too: player 1 wins, player 0 (who left first) is still last.
+    const end = dropPlayer(s, 2).state;
+    expect(end.phase).toBe('over');
+    expect(end.ranking[0]).toBe(1);
+    expect(end.ranking).toHaveLength(3);
+  });
+
+  it('in 2 vs 2 the other team wins', () => {
+    const { state } = dropPlayer(game(4, { teams: true }), 0);
+    expect(state.phase).toBe('over');
+    const winners = state.ranking.slice(0, 2).map((i) => state.players[i].color).sort();
+    expect(winners).toEqual(['blue', 'green']);
   });
 });

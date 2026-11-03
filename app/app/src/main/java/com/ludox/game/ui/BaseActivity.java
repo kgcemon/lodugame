@@ -138,6 +138,12 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
             case "room:closed":
                 if (!(this instanceof GameActivity) && !(this instanceof RoomActivity)) LudoApp.toast(String.valueOf(data));
                 break;
+            case "match:dropped":
+                // Back online after being put out of a match (GameActivity shows its own).
+                if (!(this instanceof GameActivity)) {
+                    Popup.message(this, "📶 You left the match", ((JSONObject) data).optString("message"), Popup.ok("OK", null));
+                }
+                break;
             case "unauthorized":
                 app.user = null;
                 Intent i = new Intent(this, AuthActivity.class);

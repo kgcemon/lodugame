@@ -1,7 +1,7 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import type { Server, Socket } from 'socket.io';
 import { chooseMove } from '../shared/ai';
-import { applyAction, colorsForCount, createGame, distinctMoves, RuleError, teamOf } from '../shared/engine';
+import { applyAction, colorsForCount, createGame, distinctMoves, dropPlayer, RuleError, teamOf } from '../shared/engine';
 import type {
   ClientToServerEvents,
   GameUpdate,
@@ -37,8 +37,14 @@ export type ClientSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 export interface Timings {
   /** How long a connected human has to act. */
   turnMs: number;
-  /** How long to wait before auto-playing for a disconnected human. */
+  /** How long to wait before auto-playing for a disconnected human (who has no drop clock). */
   disconnectedTurnMs: number;
+  /**
+   * Mid-match, how long a player who lost their connection has to come back. The match
+   * waits for them on their turn; after this they are out and the others play on (in a
+   * 2-player match the opponent wins).
+   */
+  dropMs: number;
   /** Pause before a bot acts, on top of the client animation time. */
   botThinkMs: number;
   /** Lobby seats of disconnected players are released after this. */
@@ -58,6 +64,7 @@ export interface Timings {
 export const DEFAULT_TIMINGS: Timings = {
   turnMs: 8_000,
   disconnectedTurnMs: 6_000,
+  dropMs: 45_000,
   botThinkMs: 650,
   lobbyGraceMs: 30_000,
   emptyRoomMs: 120_000,
@@ -84,7 +91,12 @@ interface Seat {
   socketId: string | null;
   connected: boolean;
   color: Color;
+  /** Lobby: frees the seat; mid-match: puts the player out (see Timings.dropMs). */
   graceTimer?: NodeJS.Timeout;
+  /** Mid-match: when this player lost their connection (null while connected). */
+  offlineSince: number | null;
+  /** Dropped out of this match for being offline too long. */
+  left: boolean;
   /** Gem re-rolls used this match, and the last known gem balance (null = not loaded). */
   rerolls: number;
   gems: number | null;
@@ -175,6 +187,8 @@ export function animationMs(events: GameEvent[]): number {
 export class RoomManager {
   private rooms = new Map<string, Room>();
   private pidRoom = new Map<string, string>();
+  /** Players put out of a match for being offline, until they come back and are told why. */
+  private drops = new Map<string, { at: number; message: string }>();
   private botCounter = 0;
 
   constructor(
@@ -204,6 +218,7 @@ export class RoomManager {
       payoutMultiplier: room.payoutMultiplier,
       ...this.boardOf(room),
       you: pid ? room.seats.findIndex((s) => s.playerId === pid) : -1,
+      dropAfterMs: this.t.dropMs,
       waitMsLeft: room.waitUntil ? Math.max(0, room.waitUntil - Date.now()) : null,
       seats: room.seats.map((s, i) => ({
         id: s.id,
@@ -214,6 +229,8 @@ export class RoomManager {
         avatarHue: s.avatarHue,
         ready: s.kind === 'ai' || ((s.ready || s.playerId === room.hostPid) && !s.pending),
         connected: s.kind === 'ai' || (s.connected && !s.pending),
+        reconnectMsLeft: s.offlineSince !== null ? Math.max(0, s.offlineSince + this.t.dropMs - Date.now()) : null,
+        left: s.left,
         isHost: s.playerId !== null && s.playerId === room.hostPid,
         team: room.teams ? this.teamOfSeat(room, s, i) : null,
         diceSkin: s.diceSkin,
@@ -314,13 +331,22 @@ export class RoomManager {
   hello(socket: ClientSocket): RoomView | null {
     const u = this.user(socket);
     const room = this.roomOf(u.id);
-    if (!room) return null;
+    if (!room) {
+      // Back after being put out of a match: say what happened.
+      const dropped = this.drops.get(u.id);
+      this.drops.delete(u.id);
+      if (dropped && Date.now() - dropped.at < 10 * 60_000) socket.emit('match:dropped', { message: dropped.message });
+      return null;
+    }
     const seat = room.seats.find((s) => s.playerId === u.id)!;
     // A newer tab replaces an older connection for the same player.
     if (seat.socketId && seat.socketId !== socket.id) this.io.sockets.sockets.get(seat.socketId)?.leave(room.code);
     seat.socketId = socket.id;
     seat.connected = true;
+    seat.offlineSince = null;
     if (seat.graceTimer) clearTimeout(seat.graceTimer);
+    // Players who dropped while nobody else was online get their clock back now someone is.
+    for (const s of room.seats) if (s !== seat && s.offlineSince !== null) this.armDrop(room, s, Math.max(0, s.offlineSince + this.t.dropMs - Date.now()));
     if (room.emptyTimer) {
       clearTimeout(room.emptyTimer);
       room.emptyTimer = null;
@@ -348,12 +374,57 @@ export class RoomManager {
       seat.graceTimer = setTimeout(() => {
         if (!seat.connected && seat.playerId) void this.removeFromRoom(room, seat.playerId);
       }, this.t.lobbyGraceMs);
-    } else if (room.game && room.game.phase !== 'over' && this.isCurrent(room, seat)) {
-      // Shorten their turn: an autopilot plays for them until they return.
-      this.reschedule(room, 0);
+    } else if (room.game && room.game.phase !== 'over') {
+      // The match waits for them on their turn; if they don't come back in time, they're out.
+      seat.offlineSince = Date.now();
+      this.armDrop(room, seat, this.t.dropMs);
+      if (this.isCurrent(room, seat)) this.reschedule(room, 0);
+      if (room.game) this.io.to(room.code).emit('game:update', this.update(room, []));
     }
     this.checkEmpty(room);
     this.broadcastRoom(room);
+  }
+
+  private armDrop(room: Room, seat: Seat, ms: number): void {
+    if (seat.graceTimer) clearTimeout(seat.graceTimer);
+    seat.graceTimer = setTimeout(() => this.dropSeat(room, seat), ms);
+  }
+
+  /**
+   * A player stayed offline too long mid-match: they're out (no refund) and the others play
+   * on; with one player or team left, the match ends and they win. Nobody is put out while
+   * everyone is offline (the server's own connection may be the problem): the clock waits.
+   */
+  private dropSeat(room: Room, seat: Seat): void {
+    const g = room.game;
+    if (!this.rooms.has(room.code) || seat.connected || !seat.playerId || !g || g.phase === 'over') return;
+    const someoneOnline = room.seats.some((s) => s !== seat && s.playerId && s.connected && !s.left);
+    if (!someoneOnline) {
+      this.armDrop(room, seat, 10_000);
+      return;
+    }
+    const pi = g.players.findIndex((p) => p.color === seat.color);
+    const { state, events } = dropPlayer(g, pi);
+    const pid = seat.playerId;
+    seat.left = true;
+    seat.offlineSince = null;
+    this.track(pid, null);
+    if (room.hostPid === pid) room.hostPid = room.seats.find((s) => s.playerId && s.connected && !s.left)?.playerId ?? room.hostPid;
+    room.game = state;
+    room.lastEvents = events;
+    room.rerollable = null;
+    if (state.phase === 'over') room.status = 'over';
+    this.drops.set(pid, {
+      at: Date.now(),
+      message:
+        state.phase !== 'over' ? 'You were offline for too long, so you left the match. The others played on without you.'
+        : state.config.teams ? 'You were offline for too long, so you left the match and the other team won.'
+        : 'You were offline for too long, so you left the match and your opponent won.',
+    });
+    this.reschedule(room, 0);
+    this.io.to(room.code).emit('game:update', this.update(room, events));
+    this.broadcastRoom(room);
+    if (room.status === 'over') void this.settle(room, state);
   }
 
   private isCurrent(room: Room, seat: Seat): boolean {
@@ -396,6 +467,8 @@ export class RoomManager {
       socketId: socket.id,
       connected: true,
       color: this.freeColor(room),
+      offlineSince: null,
+      left: false,
       rerolls: 0,
       gems: null,
       diceSkin: DEFAULT_DICE_SKIN,
@@ -618,6 +691,8 @@ export class RoomManager {
       socketId: null,
       connected: true,
       color: this.freeColor(room),
+      offlineSince: null,
+      left: false,
       rerolls: 0,
       gems: null,
       diceSkin: DEFAULT_DICE_SKIN,
@@ -701,7 +776,7 @@ export class RoomManager {
     if (room.timer) clearTimeout(room.timer);
     room.timer = null;
     // Seats a bot took over are cleared from paid rooms; free rooms keep them.
-    room.seats = room.seats.filter((s) => s.playerId || room.entryFee === 0);
+    room.seats = room.seats.filter((s) => !s.left && (s.playerId || room.entryFee === 0));
     for (const s of [...room.seats]) {
       s.ready = false;
       if (!s.playerId) continue;
@@ -1057,6 +1132,10 @@ export class RoomManager {
       const canReroll = r?.color === p.color && seat.rerolls < MAX_REROLLS && (seat.gems ?? 0) >= REROLL_COSTS[seat.rerolls];
       wait = animMs + (canReroll ? this.t.autoMoveRerollMs : this.t.autoMoveMs);
       room.deadline = Date.now() + wait;
+    } else if (!seat.connected && seat.offlineSince !== null) {
+      // Their connection dropped: the match waits for them (dropSeat ends the wait).
+      room.deadline = seat.offlineSince + this.t.dropMs;
+      return;
     } else {
       wait = animMs + (seat.connected ? this.t.turnMs : this.t.disconnectedTurnMs);
       room.deadline = Date.now() + wait;

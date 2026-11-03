@@ -42,6 +42,8 @@ export interface PlayerState {
   tokens: number[];
   /** Finishing position (1 = winner), null while still playing. */
   rank: number | null;
+  /** Dropped out mid-match (lost connection for too long): skipped, and ranked last. */
+  left?: boolean;
 }
 
 export type Phase = 'roll' | 'move' | 'over';
@@ -72,6 +74,7 @@ export type GameEvent =
   | { type: 'playerFinished'; player: number; rank: number }
   | { type: 'extraTurn'; player: number; reason: 'six' | 'capture' | 'home' }
   | { type: 'turn'; player: number }
+  | { type: 'playerLeft'; player: number }
   | { type: 'gameOver'; ranking: number[] };
 
 export interface SeatSetup {

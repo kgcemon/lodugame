@@ -141,8 +141,13 @@ function clone(state: GameState): GameState {
   };
 }
 
+/** Still racing: not home yet and not dropped out. */
+function active(p: PlayerState): boolean {
+  return p.rank === null && !p.left;
+}
+
 function activeCount(state: GameState): number {
-  return state.players.filter((p) => p.rank === null).length;
+  return state.players.filter(active).length;
 }
 
 function passTurn(state: GameState, events: GameEvent[]): void {
@@ -153,7 +158,7 @@ function passTurn(state: GameState, events: GameEvent[]): void {
   let next = state.current;
   for (let i = 0; i < n; i++) {
     next = (next + 1) % n;
-    if (state.players[next].rank === null) break;
+    if (active(state.players[next])) break;
   }
   state.current = next;
   state.turnNo += 1;
@@ -162,9 +167,9 @@ function passTurn(state: GameState, events: GameEvent[]): void {
 
 /** `lastHome` is the player whose finish ended a team match (their team wins). */
 function finishGame(state: GameState, events: GameEvent[], lastHome?: number): void {
-  // Rank anyone still playing by how far their tokens have travelled.
+  // Rank anyone still playing by how far their tokens have travelled; players who dropped out come last.
   const remaining = state.players
-    .map((p, i) => ({ i, score: p.tokens.reduce((a, t) => a + Math.max(t, 0) + (t >= 0 ? 1 : 0), 0) }))
+    .map((p, i) => ({ i, score: p.left ? -1 : p.tokens.reduce((a, t) => a + Math.max(t, 0) + (t >= 0 ? 1 : 0), 0) }))
     .filter(({ i }) => state.players[i].rank === null)
     .sort((a, b) => b.score - a.score);
   for (const { i } of remaining) {
@@ -180,6 +185,33 @@ function finishGame(state: GameState, events: GameEvent[], lastHome?: number): v
   state.phase = 'over';
   state.dice = null;
   events.push({ type: 'gameOver', ranking: [...state.ranking] });
+}
+
+/**
+ * A player drops out mid-match (lost connection for too long): their tokens leave the board,
+ * they are skipped from now on and ranked last. With one player (or, in 2 vs 2, one team)
+ * left in the race, the match ends and they win.
+ */
+export function dropPlayer(prev: GameState, pi: number): { state: GameState; events: GameEvent[] } {
+  if (prev.phase === 'over') throw new RuleError('The match is over');
+  const state = clone(prev);
+  const player = state.players[pi];
+  if (!active(player)) return { state: prev, events: [] };
+  const events: GameEvent[] = [];
+  player.left = true;
+  player.tokens = player.tokens.map((t) => (t === FINISH ? t : -1));
+  events.push({ type: 'playerLeft', player: pi });
+  if (state.config.teams) {
+    // The partners lose together: the other team wins.
+    const rival = state.players.findIndex((_, i) => i !== pi && !areTeammates(state, pi, i));
+    finishGame(state, events, rival);
+  } else if (activeCount(state) <= 1) {
+    finishGame(state, events);
+  } else if (state.current === pi) {
+    passTurn(state, events);
+  }
+  state.seq += 1;
+  return { state, events };
 }
 
 export function applyAction(prev: GameState, action: GameAction): { state: GameState; events: GameEvent[] } {

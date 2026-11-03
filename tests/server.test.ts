@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { io as connect } from 'socket.io-client';
 import type { RoomView } from '../shared/protocol';
-import { bootServer, emit, nextUpdate, registerUser, socketFor, tick, type TestServer } from './helpers';
+import { bootServer, emit, next, nextUpdate, registerUser, socketFor, tick, type TestServer } from './helpers';
 
 let t: TestServer;
 const rolls: number[] = [];
@@ -55,27 +55,56 @@ describe('online game server (authenticated)', () => {
     expect((await moved).state.players[0].tokens).toEqual([-1, 0, -1, -1]);
   });
 
-  it('auto-plays for a disconnected player and lets them reconnect', async () => {
-    const { ua, a, b } = await pair();
-    const created = await emit<{ room: RoomView }>(a, 'room:create', { modeId: 'friendly', maxPlayers: 2 });
+  /** A started 2-player friendly match (a is red and moves first). */
+  async function started() {
+    const p = await pair();
+    const created = await emit<{ room: RoomView }>(p.a, 'room:create', { modeId: 'friendly', maxPlayers: 2 });
     const code = created.ok ? created.room.code : '';
-    await emit(b, 'room:join', { code });
-    await emit(b, 'room:ready', { ready: true });
-    const started = nextUpdate(a);
-    await emit(a, 'room:start');
-    await started;
+    await emit(p.b, 'room:join', { code });
+    await emit(p.b, 'room:ready', { ready: true });
+    const go = nextUpdate(p.a);
+    await emit(p.a, 'room:start');
+    await go;
+    return { ...p, code };
+  }
 
-    rolls.push(4);
-    const auto = nextUpdate(b, (u) => u.events.some((e) => e.type === 'rolled' && e.player === 0));
+  it('waits for a player whose connection dropped, with a countdown, and lets them back in', async () => {
+    const { ua, a, b, code } = await started();
+    const waiting = next<RoomView>(b, 'room:state', (r) => r.seats[0].reconnectMsLeft !== null);
     a.close();
-    expect((await auto).events.map((e) => e.type)).toContain('noMoves');
-
+    const view = await waiting;
+    expect(view.dropAfterMs).toBe(400);
+    expect(view.seats[0]).toMatchObject({ connected: false, left: false });
+    expect(view.seats[0].reconnectMsLeft).toBeGreaterThan(0);
+    // Nobody plays for them meanwhile: it's still their turn to roll.
+    await tick(150);
     const a2 = await socketFor(t, ua.cookie);
     const snapshot = nextUpdate(a2);
     const hello = await emit<{ room: RoomView | null }>(a2, 'session:hello');
     expect(hello.ok && hello.room?.code).toBe(code);
-    expect(hello.ok && hello.room?.you).toBe(0);
-    expect((await snapshot).state.current).toBe(1);
+    expect(hello.ok && hello.room?.seats[0].reconnectMsLeft).toBeNull();
+    const s = await snapshot;
+    expect(s.state.current).toBe(0);
+    expect(s.state.phase).toBe('roll');
+    expect(s.state.seq).toBe(0);
+  });
+
+  it('puts a player out who stays offline too long: the opponent wins', async () => {
+    const { ua, a, b } = await started();
+    const over = nextUpdate(b, (u) => u.state.phase === 'over');
+    const settled = next<{ winnerColor: string }>(b, 'match:settled');
+    a.close();
+    const u = await over;
+    expect(u.events.map((e) => e.type)).toEqual(['playerLeft', 'gameOver']);
+    expect(u.state.players[0].left).toBe(true);
+    expect(u.state.ranking).toEqual([1, 0]);
+    expect((await settled).winnerColor).toBe(u.state.players[1].color);
+    // Back online, they're told what happened and are no longer in the room.
+    const a2 = await socketFor(t, ua.cookie);
+    const told = next<{ message: string }>(a2, 'match:dropped');
+    const hello = await emit<{ room: RoomView | null }>(a2, 'session:hello');
+    expect(hello.ok && hello.room).toBeNull();
+    expect((await told).message).toMatch(/opponent won/);
   });
 
   it('allows bots only in free rooms', async () => {

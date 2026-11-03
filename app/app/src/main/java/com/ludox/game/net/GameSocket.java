@@ -107,6 +107,12 @@ public final class GameSocket {
                     handleRoom(r);
                     // Friend changes sent while the connection was down were missed.
                     com.ludox.game.audio.VoiceChat.get().refreshFriends();
+                } else if (res.optBoolean("ok") && room != null) {
+                    // The room went on without me (e.g. I was offline too long and left the match).
+                    LudoApp.MAIN.post(() -> {
+                        resetRoom();
+                        for (Listener l : listeners) l.onSocketEvent("room:gone", null);
+                    });
                 }
             });
         });
@@ -174,6 +180,7 @@ public final class GameSocket {
             });
         });
         s.on("notify", a -> fire("notify", obj(a)));
+        s.on("match:dropped", a -> fire("match:dropped", obj(a)));
         s.on("friends:changed", a -> {
             // A new friend in my room can talk with me straight away (mid-match too).
             if (room != null) com.ludox.game.audio.VoiceChat.get().refreshFriends();

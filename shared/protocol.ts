@@ -21,6 +21,10 @@ export interface SeatView {
   country: string | null;
   ready: boolean;
   connected: boolean;
+  /** Mid-match: ms this player has left to reconnect before they're out (null while connected). */
+  reconnectMsLeft: number | null;
+  /** Dropped out of the match for being offline too long. */
+  left: boolean;
   isHost: boolean;
   /** 2 vs 2 team (0 = red + yellow, 1 = green + blue); null outside team rooms. */
   team: 0 | 1 | null;
@@ -38,6 +42,8 @@ export interface RoomView {
   seats: SeatView[];
   /** Index of the receiving client's seat (-1 when not seated). */
   you: number;
+  /** How long a player who loses their connection mid-match has to come back. */
+  dropAfterMs: number;
   /** Quick play: ms until bots fill the empty seats and the match starts (null when not counting). */
   waitMsLeft: number | null;
   mode: { id: string; name: string };
@@ -144,6 +150,8 @@ export interface ServerToClientEvents {
   'emote': (e: EmoteMessage) => void;
   'game:update': (u: GameUpdate) => void;
   'match:settled': (s: MatchSettled) => void;
+  /** You were put out of a match for being offline too long (sent when you come back). */
+  'match:dropped': (d: { message: string }) => void;
   /** Wallet numbers changed (entry fee, payout, refund, admin adjustment...). */
   'wallet': (w: { balance: number; totalEarned: number; totalSpent: number }) => void;
   'notify': (n: { id: string; type: string; payload: Record<string, unknown>; createdAt: string; readAt: string | null }) => void;

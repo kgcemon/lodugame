@@ -74,6 +74,17 @@ public class GameActivity extends BaseActivity {
     private TextView status, chatBtn, titleView, feeView, connView;
     /** Mic on/off for voice with friends in the room (hidden without friends). */
     private TextView micBtn, muteBtn, emoteBtn;
+    /** The connection card over the board: my connection dropped, I'm back, or an opponent's dropped. */
+    private LinearLayout netCard;
+    private TextView netIcon, netTitle, netSub;
+    /** When my connection dropped (uptime, 0 while online) and until when "Back online" shows. */
+    private long myOfflineAt, backOnlineUntil;
+    private boolean wasOnline = true;
+    /** Opponents whose connection dropped: colour → when they're out (uptime). Players already out. */
+    private final Map<String, Long> offlineUntil = new java.util.LinkedHashMap<>();
+    private final java.util.Set<String> leftColors = new java.util.HashSet<>();
+    /** The "you left the match" popup is up: it closes the screen itself. */
+    private boolean droppedShown;
     /** The screen in the board's colours (the classic board keeps the purple look). */
     private MatchLook look = MatchLook.CLASSIC;
     private MatchLook.Backdrop backdrop;
@@ -192,6 +203,7 @@ public class GameActivity extends BaseActivity {
         onGl(renderer::skipAnimations);
         JSONObject last = local != null ? localUpdate : app.socket.lastUpdate;
         if (last != null) onUpdate(last, true);
+        if (local == null && app.socket.room != null) syncOffline(app.socket.room);
         renderChips();
         renderChat();
         LudoApp.MAIN.post(ticker);
@@ -236,8 +248,20 @@ public class GameActivity extends BaseActivity {
                     syncAmbient(board);
                     applyLook(board);
                     syncDiceLooks();
+                    syncOffline(room);
                     renderChips();
                 }
+                break;
+            case "room:gone":
+                // I'm no longer in the room (left the match while offline): match:dropped explains.
+                if (!droppedShown) finish();
+                break;
+            case "match:dropped":
+                droppedShown = true;
+                dismissResult();
+                Sfx.get().play(Sfx.S.ERROR);
+                Popup.message(this, "📶 You left the match", ((JSONObject) data).optString("message"), Popup.ok("OK", this::finish))
+                        .setOnCancelListener(d -> finish());
                 break;
             case "room:closed":
                 dismissResult();
@@ -272,8 +296,17 @@ public class GameActivity extends BaseActivity {
         JSONObject st = u.optJSONObject("state");
         if (st == null) return;
         GameState next = GameState.parse(st);
+        // The same state with a new clock (e.g. the match now waits for a player whose
+        // connection dropped): only the countdown changes.
+        if (!resume && lastSeq >= 0 && next.seq == lastSeq) {
+            long d = u.isNull("deadline") ? 0 : u.optLong("deadline") - u.optLong("serverTime") + System.currentTimeMillis();
+            if (Math.abs(d - deadline) > 1500) deadlineTotal = Math.max(1, d - System.currentTimeMillis());
+            deadline = d;
+            renderStatus();
+            return;
+        }
         // An update we already have (or an older one) must never roll the board back.
-        if (!resume && lastSeq >= 0 && next.seq <= lastSeq) return;
+        if (!resume && lastSeq >= 0 && next.seq < lastSeq) return;
         JSONArray events = u.optJSONArray("events");
         boolean contiguous = !resume && lastSeq >= 0 && next.seq == lastSeq + 1 && events != null && events.length() > 0;
         if (resume && next.seq == lastSeq) return;
@@ -354,6 +387,102 @@ public class GameActivity extends BaseActivity {
         if (!BoardAmbient.has(kind)) return;
         ambientView = new BoardAmbient(this, kind);
         boardArea.addView(ambientView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    /** Who is offline mid-match (and until when they can come back), and who already left. */
+    private void syncOffline(JSONObject room) {
+        offlineUntil.clear();
+        leftColors.clear();
+        JSONArray seats = room.optJSONArray("seats");
+        long now = android.os.SystemClock.uptimeMillis();
+        for (int i = 0; seats != null && i < seats.length(); i++) {
+            JSONObject s = seats.optJSONObject(i);
+            if (s == null) continue;
+            String color = s.optString("color");
+            if (s.optBoolean("left")) leftColors.add(color);
+            else if (!s.isNull("reconnectMsLeft") && s.has("reconnectMsLeft") && !color.equals(app.socket.myColor())) {
+                offlineUntil.put(color, now + s.optLong("reconnectMsLeft"));
+            }
+        }
+    }
+
+    private String nameOf(String color) {
+        if (state != null) for (GameState.Player p : state.players) if (p.color.equals(color)) return p.name;
+        return "Your opponent";
+    }
+
+    private static String clock(long seconds) {
+        return (seconds / 60) + ":" + (seconds % 60 < 10 ? "0" : "") + (seconds % 60);
+    }
+
+    /**
+     * The connection card over the board. My connection dropped: "reconnecting", with how
+     * long I have before I lose the match. Back: a short "Back online". An opponent's
+     * dropped: who, how long we wait for them, and what happens if they don't return.
+     */
+    private void renderNet() {
+        if (netCard == null) return;
+        if (local != null) {
+            netCard.setVisibility(View.GONE);
+            return;
+        }
+        long now = android.os.SystemClock.uptimeMillis();
+        boolean online = "online".equals(app.socket.connection);
+        if (!online && wasOnline) myOfflineAt = now;
+        if (online && !wasOnline && myOfflineAt > 0) {
+            backOnlineUntil = now + 1800;
+            Sfx.get().play(Sfx.S.EXTRA, 0.6f, 1f);
+        }
+        if (online) myOfflineAt = 0;
+        wasOnline = online;
+        boolean playing = state != null && !"over".equals(state.phase);
+        String icon = null, title = null, sub = null;
+        int edge = 0;
+        if (!online && playing) {
+            JSONObject room = app.socket.room;
+            long dropMs = room != null ? room.optLong("dropAfterMs", 45_000) : 45_000;
+            long left = Math.max(0, (myOfflineAt + dropMs - now + 999) / 1000);
+            icon = "📶";
+            title = "Connection lost — reconnecting…";
+            sub = left > 0 ? "Your opponent is waiting for you. Get back within " + clock(left) + " or you'll lose the match."
+                    : "Still trying to reconnect… check your mobile data or Wi-Fi.";
+            edge = 0xccff6b6b;
+        } else if (online && now < backOnlineUntil) {
+            icon = "✅";
+            title = "Back online";
+            sub = "You're back in the match.";
+            edge = 0xcc22c55e;
+        } else if (online && playing && !offlineUntil.isEmpty()) {
+            Map.Entry<String, Long> first = offlineUntil.entrySet().iterator().next();
+            long left = Math.max(0, (first.getValue() - now + 999) / 1000);
+            boolean partner = teams() && teamOf(first.getKey()) == teamOf(app.socket.myColor());
+            String outcome = teams() ? (partner ? "your team loses" : "your team wins!")
+                    : state.players.size() == 2 ? "you win!" : "they're out of the match.";
+            icon = "📶";
+            title = nameOf(first.getKey()) + " lost connection";
+            sub = left > 0 ? "Waiting for them to come back · " + clock(left) + "\nIf they don't return, " + outcome
+                    : "Almost out of time…";
+            edge = 0xccffb547;
+        }
+        if (icon == null) {
+            if (netCard.getVisibility() == View.VISIBLE) {
+                netCard.animate().alpha(0f).setDuration(200).withEndAction(() -> netCard.setVisibility(View.GONE)).start();
+            }
+            return;
+        }
+        netIcon.setText(icon);
+        if (!title.contentEquals(netTitle.getText())) netTitle.setText(title);
+        if (!sub.contentEquals(netSub.getText())) netSub.setText(sub);
+        if (!Integer.valueOf(edge).equals(netCard.getTag())) {
+            netCard.setTag(edge);
+            netCard.setBackground(Ui.roundStroke(0xf0140d2e, Ui.dp(this, 18), Ui.dp(this, 2), edge));
+        }
+        if (netCard.getVisibility() != View.VISIBLE) {
+            netCard.setVisibility(View.VISIBLE);
+            netCard.setAlpha(0f);
+            netCard.setTranslationY(-Ui.dp(this, 12));
+            netCard.animate().alpha(1f).translationY(0).setDuration(220).start();
+        }
     }
 
     /**
@@ -720,6 +849,7 @@ public class GameActivity extends BaseActivity {
         boardArea = new FrameLayout(this);
         boardArea.addView(gl, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         boardArea.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateBand());
+        buildNetCard();
         stack.addView(topRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         stack.addView(boardArea, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 300)));
         stack.addView(bottomRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -801,6 +931,32 @@ public class GameActivity extends BaseActivity {
 
         buildChatPanel();
         buildEmotePanel();
+    }
+
+    private void buildNetCard() {
+        netCard = Ui.hbox(this);
+        netCard.setGravity(Gravity.CENTER_VERTICAL);
+        netCard.setPadding(Ui.dp(this, 14), Ui.dp(this, 10), Ui.dp(this, 16), Ui.dp(this, 11));
+        netCard.setElevation(Ui.dp(this, 8));
+        netCard.setVisibility(View.GONE);
+        netIcon = Ui.text(this, "📶", 26, Ui.INK);
+        // A slow pulse while waiting.
+        ObjectAnimator pulse = ObjectAnimator.ofFloat(netIcon, "alpha", 1f, 0.35f);
+        pulse.setDuration(700);
+        pulse.setRepeatCount(ObjectAnimator.INFINITE);
+        pulse.setRepeatMode(ObjectAnimator.REVERSE);
+        pulse.start();
+        netCard.addView(netIcon);
+        LinearLayout texts = Ui.vbox(this);
+        texts.setPadding(Ui.dp(this, 12), 0, 0, 0);
+        netTitle = Ui.bold(Ui.text(this, "", 15, Ui.INK));
+        netSub = Ui.text(this, "", 12, 0xffd9cfff);
+        texts.addView(netTitle);
+        texts.addView(netSub);
+        netCard.addView(texts, Ui.weight(1));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
+        lp.setMargins(Ui.dp(this, 12), Ui.dp(this, 12), Ui.dp(this, 12), 0);
+        boardArea.addView(netCard, lp);
     }
 
     private int ctl() {
@@ -958,6 +1114,8 @@ public class GameActivity extends BaseActivity {
         boolean current = idx == state.current && !"over".equals(state.phase);
         boolean bot = "ai".equals(p.kind);
         boolean online = bot || seat == null || seat.optBoolean("connected", true);
+        boolean gone = leftColors.contains(p.color);
+        boolean dropped = offlineUntil.containsKey(p.color);
         boolean mine = isMine(p.color);
         int col = Board.colorArgb(p.color);
         int size = avSize();
@@ -1008,6 +1166,16 @@ public class GameActivity extends BaseActivity {
         String pid = seat != null && !seat.isNull("publicId") ? seat.optString("publicId", null) : null;
         JSONObject prof = PlayerProfile.cached(pid);
         JSONObject pstats = prof != null ? prof.optJSONObject("stats") : null;
+        if (gone || dropped) {
+            // Out of the match, or reconnecting: dim the picture and say so.
+            a.setAlpha(gone ? 0.35f : 0.6f);
+            TextView nb = Ui.bold(Ui.text(this, gone ? "LEFT" : "📶", gone ? 8 : 11, Color.WHITE));
+            nb.setGravity(Gravity.CENTER);
+            nb.setPadding(Ui.dp(this, gone ? 5 : 3), Ui.dp(this, 1), Ui.dp(this, gone ? 5 : 3), Ui.dp(this, 1));
+            nb.setBackground(Ui.roundStroke(gone ? 0xee3a3a4a : 0xeee53945, Ui.dp(this, 999), Ui.dp(this, 1), 0x88ffffff));
+            av.addView(nb, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP | (right ? Gravity.START : Gravity.END)));
+        }
         if (bot || pstats != null) {
             TextView lvl = PlayerProfile.levelBadge(this, bot ? "BOT" : "Lv " + PlayerProfile.level(pstats), compact ? 8 : 9);
             av.addView(lvl, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -1160,7 +1328,7 @@ public class GameActivity extends BaseActivity {
         connView.setTextColor(local != null ? Ui.MUTED : online ? Ui.SUCCESS : Ui.GOLD);
         long left = -1;
         if (!online) {
-            text = "Reconnecting…";
+            text = "📶 Connection lost — reconnecting…";
         } else if (state == null) {
             text = "Waiting for the match…";
         } else if ("over".equals(state.phase)) {
@@ -1177,6 +1345,8 @@ public class GameActivity extends BaseActivity {
                 } else {
                     text = "You rolled " + state.dice + " — tap a glowing token";
                 }
+            } else if (offlineUntil.containsKey(cur.color)) {
+                text = "📶 Waiting for " + cur.name + " to reconnect…";
             } else {
                 text = cur.name + ("roll".equals(state.phase) ? " is rolling…" : " rolled " + state.dice);
             }
@@ -1194,6 +1364,7 @@ public class GameActivity extends BaseActivity {
             warnedAt = -1;
         }
         if (!text.contentEquals(status.getText())) status.setText(text);
+        renderNet();
         float frac = deadline > 0 && deadlineTotal > 0 ? Math.max(0f, Math.min(1f, (deadline - System.currentTimeMillis()) / (float) deadlineTotal)) : 0f;
         timerBar.setScaleX(frac);
         // Runs 4x a second: only build a new drawable when the bar changes colour.
