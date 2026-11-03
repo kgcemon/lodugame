@@ -35,6 +35,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Live voice with friends in the same room. The microphone is off until the player turns
@@ -87,6 +88,7 @@ public final class VoiceChat {
     private final Map<String, Player> players = new ConcurrentHashMap<>();
     private final Map<String, Long> lastHeard = new ConcurrentHashMap<>();
     private final Set<Listener> listeners = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger friendsAsk = new AtomicInteger();
     private volatile Capture capture;
     private volatile long lastSpoke;
     /** Last time a friend's voice came out of the speaker loudly (for the echo gate). */
@@ -117,9 +119,16 @@ public final class VoiceChat {
 
     /** Read my friend list (voice only reaches friends). */
     public void refreshFriends() {
+        refreshFriends(0);
+    }
+
+    private void refreshFriends(int attempt) {
+        // Only the newest read counts: on a slow network an older answer can land last.
+        int ask = friendsAsk.incrementAndGet();
         app.api.get("/friends", new Api.Cb(null) {
             @Override
             public void ok(JSONObject r) {
+                if (ask != friendsAsk.get()) return;
                 JSONArray arr = r.optJSONArray("friends");
                 Set<String> next = new HashSet<>();
                 for (int i = 0; arr != null && i < arr.length(); i++) {
@@ -133,7 +142,10 @@ public final class VoiceChat {
 
             @Override
             public void err(Api.Error e) {
-                // Keep the last list.
+                // Keep the last list, and try again a little later while in a room.
+                if (ask == friendsAsk.get() && attempt < 3 && app.socket.room != null) {
+                    LudoApp.MAIN.postDelayed(() -> refreshFriends(attempt + 1), 1500L * (attempt + 1));
+                }
             }
         });
     }

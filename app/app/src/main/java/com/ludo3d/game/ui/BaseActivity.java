@@ -88,6 +88,8 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
         super.onResume();
         app.socket.addListener(this);
         com.ludo3d.game.audio.VoiceChat.get().addListener(voiceListener);
+        // Friends may have changed while this screen was hidden.
+        if (app.socket.room != null) com.ludo3d.game.audio.VoiceChat.get().refreshFriends();
         // A match may have started (or be running after a reconnect) while this screen was hidden.
         if (!(this instanceof GameActivity) && app.socket.lastUpdate != null && app.socket.room != null
                 && "playing".equals(app.socket.room.optString("status"))) {

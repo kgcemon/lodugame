@@ -17,6 +17,8 @@ const FRIENDS_TTL_MS = 20_000;
 
 export class VoiceRelay {
   private friends = new Map<string, { at: number; ids: Set<string> }>();
+  /** Bumped by forget(): a read that started before a friend change must not be cached. */
+  private generation = 0;
   private buckets = new WeakMap<object, { at: number; n: number }>();
 
   constructor(
@@ -28,11 +30,13 @@ export class VoiceRelay {
   private async friendsOf(userId: string): Promise<Set<string>> {
     const hit = this.friends.get(userId);
     if (hit && Date.now() - hit.at < FRIENDS_TTL_MS) return hit.ids;
+    const gen = this.generation;
     const r = await this.db.query<{ other: string }>(
       'select case when user_a = $1 then user_b else user_a end as other from friendships where user_a = $1 or user_b = $1',
       [userId],
     );
     const ids = new Set(r.rows.map((x) => x.other));
+    if (gen !== this.generation) return ids;
     this.friends.set(userId, { at: Date.now(), ids });
     if (this.friends.size > 5000) this.friends.clear();
     return ids;
@@ -40,6 +44,7 @@ export class VoiceRelay {
 
   /** Forget cached friend lists (after friends change). */
   forget(...userIds: string[]): void {
+    this.generation++;
     for (const id of userIds) this.friends.delete(id);
   }
 

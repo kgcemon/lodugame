@@ -103,7 +103,11 @@ public final class GameSocket {
             setConnection("online");
             emit("session:hello", new JSONObject(), res -> {
                 JSONObject r = res.optJSONObject("room");
-                if (r != null) handleRoom(r);
+                if (r != null) {
+                    handleRoom(r);
+                    // Friend changes sent while the connection was down were missed.
+                    com.ludo3d.game.audio.VoiceChat.get().refreshFriends();
+                }
             });
         });
         s.on(Socket.EVENT_DISCONNECT, a -> {
@@ -176,7 +180,10 @@ public final class GameSocket {
             fire("friends:changed", null);
         });
         s.on("friend:request", a -> fire("friend:request", obj(a)));
-        s.on("friend:accepted", a -> fire("friend:accepted", obj(a)));
+        s.on("friend:accepted", a -> {
+            if (room != null) com.ludo3d.game.audio.VoiceChat.get().refreshFriends();
+            fire("friend:accepted", obj(a));
+        });
         s.on("friend:rejected", a -> fire("friend:rejected", obj(a)));
         s.on("friend:cancelled", a -> fire("friend:cancelled", obj(a)));
         s.on("friend:online", a -> fire("friend:online", obj(a)));

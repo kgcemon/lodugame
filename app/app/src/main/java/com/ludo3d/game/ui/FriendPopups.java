@@ -99,6 +99,8 @@ final class FriendPopups {
             a.app.api.post("/friends/requests/" + id + "/accept", null, new Api.Cb(a) {
                 @Override
                 public void ok(JSONObject r) {
+                    // Talk at once, without waiting for the server's "friends changed" nudge.
+                    if (a.app.socket.room != null) com.ludo3d.game.audio.VoiceChat.get().refreshFriends();
                     s.close(() -> celebrate(a, p));
                 }
 
