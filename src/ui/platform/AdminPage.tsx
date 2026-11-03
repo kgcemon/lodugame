@@ -4,6 +4,7 @@ import { useGame } from '../../store/game';
 import { Avatar, Button, Segmented, Toggle } from '../common';
 import { DICE_SKINS } from '../../../shared/skins';
 import { PROFILE_FRAMES } from '../../../shared/frames';
+import { BOARDS, DEFAULT_BOARD } from '../../../shared/boards';
 import { Card, Confirm, Empty, ErrorNote, PageTitle, Spinner, useFetch } from './kit';
 
 /** Administrator tools. Every endpoint re-checks the admin role on the server. */
@@ -612,9 +613,9 @@ interface AdminSettings {
   shopPrices: Record<string, number>;
 }
 
-/** Diamond prices of everything in the app's shop (the classic dice is always free). */
+/** Diamond prices of everything in the app's shop (the classic dice and board are always free). */
 function ShopPrices({ prices, onChange }: { prices: Record<string, number>; onChange: (p: Record<string, number>) => void }) {
-  const group = (title: string, kind: 'dice' | 'frame', items: { id: string; name: string }[]) => (
+  const group = (title: string, kind: 'dice' | 'frame' | 'board', items: { id: string; name: string }[]) => (
     <>
       <h3 className="sub-title">{title}</h3>
       <div className="mode-edit glass shop-prices">
@@ -637,6 +638,7 @@ function ShopPrices({ prices, onChange }: { prices: Record<string, number>; onCh
     <>
       {group('Shop · dice prices (💎 diamonds)', 'dice', DICE_SKINS.filter((d) => d.id !== 'classic'))}
       {group('Shop · profile frame prices (💎 diamonds)', 'frame', PROFILE_FRAMES)}
+      {group('Shop · royal board prices (💎 diamonds)', 'board', BOARDS.filter((b) => b.id !== DEFAULT_BOARD))}
       <p className="hint">0 makes an item free. Players who already own an item keep it when its price changes.</p>
     </>
   );

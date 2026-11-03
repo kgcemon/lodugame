@@ -2,6 +2,7 @@ import { jsonValue, type Db, type Queryable } from './db';
 import { HttpError } from './security';
 import { DICE_SKINS } from '../shared/skins';
 import { PROFILE_FRAMES } from '../shared/frames';
+import { BOARDS } from '../shared/boards';
 
 /** Trusted game configuration, stored in game_settings and editable by administrators. */
 
@@ -25,7 +26,7 @@ export interface GameSettings {
   matchmakingWaitSeconds: number;
   suspiciousAmount: number;
   modes: MatchMode[];
-  /** Diamond price of each shop item, keyed `dice:<id>` / `frame:<id>` (0 = free). */
+  /** Diamond price of each shop item, keyed `dice:<id>` / `frame:<id>` / `board:<id>` (0 = free). */
   shopPrices: Record<string, number>;
 }
 
@@ -34,6 +35,7 @@ export function defaultShopPrices(): Record<string, number> {
   return Object.fromEntries([
     ...DICE_SKINS.map((d) => [`dice:${d.id}`, d.price] as const),
     ...PROFILE_FRAMES.map((f) => [`frame:${f.id}`, f.price] as const),
+    ...BOARDS.map((b) => [`board:${b.id}`, b.price] as const),
   ]);
 }
 
@@ -126,7 +128,7 @@ export class Settings {
   }
 
   /** What a shop item costs now, in diamonds. */
-  price(kind: 'dice' | 'frame', id: string): number {
+  price(kind: 'dice' | 'frame' | 'board', id: string): number {
     return this.get().shopPrices[`${kind}:${id}`] ?? 0;
   }
 

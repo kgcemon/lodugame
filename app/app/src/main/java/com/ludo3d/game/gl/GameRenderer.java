@@ -42,6 +42,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     private Shader shader;
     private Mesh boardTop, boardBase, pawn, dice, flat, unitBox;
     private int texBoard, texDice, texShadow, texRing;
+    private BoardThemes.Theme theme = BoardThemes.CLASSIC;
 
     private final float[] proj = new float[16], view = new float[16], vp = new float[16], model = new float[16], mvp = new float[16];
     private final float[] eye = new float[3];
@@ -123,6 +124,17 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
 
     public void setMyColor(String color) {
         myColor = color;
+    }
+
+    /** Play on this board theme (the room's: its host's); repaints the board face if it changed. */
+    public void setBoard(String id) {
+        BoardThemes.Theme next = BoardThemes.get(id);
+        if (next == theme) return;
+        theme = next;
+        if (texBoard != 0) {
+            GLES20.glDeleteTextures(1, new int[]{texBoard}, 0);
+            texBoard = Textures.upload(BoardThemes.bitmap(theme, 1024), true);
+        }
     }
 
     /**
@@ -512,7 +524,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         dice = Mesh.box(DICE_HALF, DICE_HALF, DICE_HALF, true);
         flat = Mesh.plane(0.5f);
         unitBox = Mesh.box(0.5f, 0.5f, 0.5f, false);
-        texBoard = Textures.upload(Textures.board(), true);
+        texBoard = Textures.upload(BoardThemes.bitmap(theme, 1024), true);
         texDice = Textures.upload(Textures.dice(), false);
         texShadow = Textures.upload(Textures.shadow(), false);
         texRing = Textures.upload(Textures.ring(), false);
@@ -632,7 +644,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         // a raised wooden frame, then the painted top at y = 0.
         Matrix.setIdentityM(model, 0);
         Matrix.translateM(model, 0, 0, -0.34f, 0);
-        use(0, 0.40f, 0.26f, 0.15f, 1, false, 0.08f);
+        use(0, theme.wood[0], theme.wood[1], theme.wood[2], 1, false, 0.08f);
         draw(boardBase);
         drawFrame();
         Matrix.setIdentityM(model, 0);
@@ -774,14 +786,14 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         draw(flat);
     }
 
-    /** A raised wooden rim around the playing surface (four bars of the unit box). */
+    /** A raised rim (wood, or gold on royal boards) around the playing surface (four bars of the unit box). */
     private void drawFrame() {
         float h = 0.16f, y = 0.1f - h / 2; // top edge 10 cm above the board face
         float[][] bars = {
                 {0, 7.7f, 15.8f, 0.4f}, {0, -7.7f, 15.8f, 0.4f},
                 {7.7f, 0, 0.4f, 15.0f}, {-7.7f, 0, 0.4f, 15.0f},
         };
-        use(0, 0.33f, 0.21f, 0.12f, 1, false, 0.18f);
+        use(0, theme.rim[0], theme.rim[1], theme.rim[2], 1, false, theme.rimSpec);
         for (float[] b : bars) {
             Matrix.setIdentityM(model, 0);
             Matrix.translateM(model, 0, b[0], y, b[1]);

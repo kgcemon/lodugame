@@ -270,7 +270,7 @@ export class MatchLedger {
   }
 
   /** The dice skin and profile frame a player shows in matches. */
-  async cosmetics(userId: string): Promise<{ diceSkin: string; frame: string | null }> {
+  async cosmetics(userId: string): Promise<{ diceSkin: string; frame: string | null; board: string }> {
     return cosmetics(this.ctx.db, userId);
   }
 

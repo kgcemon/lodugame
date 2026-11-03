@@ -179,6 +179,8 @@ public class GameActivity extends BaseActivity {
         }
         String color = myColor();
         onGl(() -> renderer.setMyColor(color));
+        String board = boardId();
+        onGl(() -> renderer.setBoard(board));
         // Animations left over from before the pause would replay old rolls and their sounds.
         onGl(renderer::skipAnimations);
         JSONObject last = local != null ? localUpdate : app.socket.lastUpdate;
@@ -221,6 +223,9 @@ public class GameActivity extends BaseActivity {
                     openRoom();
                     finish();
                 } else {
+                    // The host may have put on another board.
+                    String board = room.optString("board", null);
+                    onGl(() -> renderer.setBoard(board));
                     renderChips();
                 }
                 break;
@@ -324,6 +329,13 @@ public class GameActivity extends BaseActivity {
     private boolean isMyTurn(GameState s) {
         // Offline, every seat is played on this phone.
         return s != null && !"over".equals(s.phase) && (local != null || s.currentPlayer().color.equals(myColor()));
+    }
+
+    /** The board this match is played on: the host's online, my own offline. */
+    private String boardId() {
+        if (local != null) return app.prefs.getString(ShopActivity.PREF_BOARD, null);
+        JSONObject room = app.socket.room;
+        return room != null ? room.optString("board", null) : null;
     }
 
     /**

@@ -23,6 +23,7 @@ import {
 import type { AiLevel, Color, GameAction, GameEvent, GameState, PlayerKind } from '../shared/types';
 import { COLORS } from '../shared/types';
 import { DEFAULT_DICE_SKIN } from '../shared/skins';
+import { DEFAULT_BOARD } from '../shared/boards';
 import type { AuthUser } from './http';
 import { MAX_REROLLS, REROLL_COSTS } from './gems';
 import type { MatchLedger } from './ledger';
@@ -89,6 +90,8 @@ interface Seat {
   gems: number | null;
   /** Dice skin shown for this seat. */
   diceSkin: string;
+  /** This player's board: the whole room plays on it while they host. */
+  board: string;
   avatarUrl: string | null;
   frame: string | null;
   country: string | null;
@@ -194,6 +197,7 @@ export class RoomManager {
       mode: { id: room.mode.id, name: room.mode.name },
       entryFee: room.entryFee,
       payoutMultiplier: room.payoutMultiplier,
+      board: room.seats.find((s) => s.playerId !== null && s.playerId === room.hostPid)?.board ?? DEFAULT_BOARD,
       you: pid ? room.seats.findIndex((s) => s.playerId === pid) : -1,
       waitMsLeft: room.waitUntil ? Math.max(0, room.waitUntil - Date.now()) : null,
       seats: room.seats.map((s, i) => ({
@@ -369,36 +373,40 @@ export class RoomManager {
       rerolls: 0,
       gems: null,
       diceSkin: DEFAULT_DICE_SKIN,
+      board: DEFAULT_BOARD,
       avatarUrl: u.avatarUrl,
       frame: null,
       country: u.country,
     };
   }
 
-  /** Look up the dice skin and frame a newly seated player shows, then tell the room. */
+  /** Look up the dice skin, frame and board a newly seated player shows, then tell the room. */
   private loadCosmetics(room: Room, seat: Seat): void {
     if (!seat.playerId) return;
     this.ledger.cosmetics(seat.playerId).then(
       (c) => {
-        if (seat.diceSkin === c.diceSkin && seat.frame === c.frame) return;
+        if (seat.diceSkin === c.diceSkin && seat.frame === c.frame && seat.board === c.board) return;
         seat.diceSkin = c.diceSkin;
         seat.frame = c.frame;
+        seat.board = c.board;
         if (this.rooms.has(room.code)) this.broadcastRoom(room);
       },
       () => {},
     );
   }
 
-  /** A player put on another dice skin or frame: show it at once if they are seated somewhere. */
-  setCosmetics(userId: string, c: { diceSkin?: string | null; frame?: string | null }): void {
+  /** A player put on another dice skin, frame or board: show it at once if they are seated somewhere. */
+  setCosmetics(userId: string, c: { diceSkin?: string | null; frame?: string | null; board?: string | null }): void {
     const room = this.roomOf(userId);
     const seat = room?.seats.find((s) => s.playerId === userId);
     if (!room || !seat) return;
     const diceSkin = c.diceSkin ?? seat.diceSkin;
     const frame = c.frame !== undefined ? c.frame : seat.frame;
-    if (seat.diceSkin === diceSkin && seat.frame === frame) return;
+    const board = c.board ?? seat.board;
+    if (seat.diceSkin === diceSkin && seat.frame === frame && seat.board === board) return;
     seat.diceSkin = diceSkin;
     seat.frame = frame;
+    seat.board = board;
     this.broadcastRoom(room);
   }
 
@@ -586,6 +594,7 @@ export class RoomManager {
       rerolls: 0,
       gems: null,
       diceSkin: DEFAULT_DICE_SKIN,
+      board: DEFAULT_BOARD,
       avatarUrl: null,
       frame: null,
       country: null,

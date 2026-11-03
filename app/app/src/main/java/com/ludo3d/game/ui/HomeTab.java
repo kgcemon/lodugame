@@ -96,7 +96,7 @@ final class HomeTab {
         LinearLayout txt = Ui.vbox(a);
         txt.setPadding(Ui.dp(a, 12), 0, 0, 0);
         txt.addView(Fx.GoldText.label(a, "SHOP", 17, 0xff0b5a9e));
-        TextView sub = Ui.bold(Ui.text(a, "Dice & fire frames for 💎 diamonds", 12, 0xffe0f0ff));
+        TextView sub = Ui.bold(Ui.text(a, "Dice, frames & 👑 royal boards", 12, 0xffe0f0ff));
         sub.setPadding(Ui.dp(a, 4), 0, 0, 0);
         txt.addView(sub);
         row.addView(txt, Ui.weight(1));

@@ -202,6 +202,24 @@ public class RoomActivity extends BaseActivity {
             col.addView(vc);
         }
 
+        // The board everyone plays on: the host's.
+        com.ludo3d.game.gl.BoardThemes.Theme board = com.ludo3d.game.gl.BoardThemes.get(room.optString("board", null));
+        LinearLayout bc = Ui.card(this);
+        Ui.margins(bc, this, 0, 12, 0, 14);
+        LinearLayout br = Ui.row(this);
+        br.addView(new BoardPreview(this, board.id, false), new LinearLayout.LayoutParams(Ui.dp(this, 56), Ui.dp(this, 56)));
+        LinearLayout bt = Ui.vbox(this);
+        bt.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 6), 0);
+        bt.addView(Ui.bold(Ui.text(this, (board.royal() ? "👑 " : "🎲 ") + board.name + " board", 15, board.royal() ? Ui.GOLD : Ui.INK)));
+        bt.addView(Ui.muted(this, isHost ? "Everyone here plays on your board." : "The host's board — everyone plays on it."));
+        br.addView(bt, Ui.weight(1));
+        if (isHost) {
+            br.addView(Ui.smallButton(this, board.royal() ? "Change" : "👑 Royal", "glass",
+                    v -> startActivity(new android.content.Intent(this, ShopActivity.class).putExtra("tab", "boards"))));
+        }
+        bc.addView(br);
+        col.addView(bc);
+
         if (isPublic) {
             col.addView(Ui.muted(this, "The match starts automatically when the room is full (or after a short wait with at least 2 players)."));
         } else if (isHost) {

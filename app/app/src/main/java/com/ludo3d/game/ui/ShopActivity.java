@@ -10,13 +10,17 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.animation.LinearInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.ludo3d.game.LudoApp;
 import com.ludo3d.game.audio.Sfx;
+import com.ludo3d.game.gl.BoardThemes;
 import com.ludo3d.game.net.Api;
 
 import org.json.JSONArray;
@@ -28,29 +32,37 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * The shop: dice skins and profile frames, each bought once with diamonds and then shown
- * in every match (opponents see them too). The big preview at the top shows what you
- * picked; the server sets the prices (an administrator can change them) and keeps what
+ * The shop: dice skins, profile frames and royal boards, each bought once with diamonds
+ * and then shown in every match (opponents see them too; a room plays on its host's
+ * board). The big preview at the top shows what you picked; tap any tile below to look at
+ * it there. The server sets the prices (an administrator can change them) and keeps what
  * you own.
  */
 public class ShopActivity extends BaseActivity {
-    /** One thing for sale: a dice skin or a profile frame. */
+    /** The board I play on offline (online the room plays on its host's). */
+    public static final String PREF_BOARD = "board";
+
+    /** One thing for sale: a dice skin, a profile frame or a board. */
     private static final class Item {
-        final String id, name;
+        final String id, name, blurb;
         final int price;
+        final boolean royal;
         final DiceView.Skin skin;
 
-        Item(String id, String name, int price, DiceView.Skin skin) {
+        Item(String id, String name, int price, DiceView.Skin skin, String blurb, boolean royal) {
             this.id = id;
             this.name = name;
             this.price = price;
             this.skin = skin;
+            this.blurb = blurb;
+            this.royal = royal;
         }
     }
 
     /** A shop tab: its server path, what it sells, and what you own / have on. */
     private static final class Shop {
-        final String path, word;
+        final String path, word, listKey;
+        final int columns;
         final List<Item> items = new ArrayList<>();
         final Set<String> owned = new HashSet<>();
         /** Null for frames means none. */
@@ -58,9 +70,11 @@ public class ShopActivity extends BaseActivity {
         String selected;
         boolean loaded;
 
-        Shop(String path, String word) {
+        Shop(String path, String word, String listKey, int columns) {
             this.path = path;
             this.word = word;
+            this.listKey = listKey;
+            this.columns = columns;
         }
 
         Item byId(String id) {
@@ -69,8 +83,9 @@ public class ShopActivity extends BaseActivity {
         }
     }
 
-    private final Shop dice = new Shop("/skins", "dice");
-    private final Shop frames = new Shop("/frames", "frame");
+    private final Shop dice = new Shop("/skins", "dice", "skins", 3);
+    private final Shop frames = new Shop("/frames", "frame", "frames", 3);
+    private final Shop boards = new Shop("/boards", "board", "boards", 2);
     private Shop tab = dice;
     private LinearLayout col;
     private TextView balance;
@@ -80,10 +95,13 @@ public class ShopActivity extends BaseActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         col = pageWithBack("Shop");
-        if ("frames".equals(getIntent().getStringExtra("tab"))) tab = frames;
+        String want = getIntent().getStringExtra("tab");
+        if ("frames".equals(want)) tab = frames;
+        else if ("boards".equals(want)) tab = boards;
         col.addView(Ui.spinner(this));
-        load(dice, "skins");
-        load(frames, "frames");
+        load(dice);
+        load(frames);
+        load(boards);
     }
 
     @Override
@@ -93,24 +111,25 @@ public class ShopActivity extends BaseActivity {
         if (balance != null) balance.setText(Ui.fmt(app.wallet.optLong("gems")));
     }
 
-    private void load(Shop s, String listKey) {
+    private void load(Shop s) {
         app.api.get(s.path, new Api.Cb(this) {
             @Override
             public void ok(JSONObject r) {
                 s.items.clear();
-                JSONArray arr = r.optJSONArray(listKey);
+                JSONArray arr = r.optJSONArray(s.listKey);
                 for (int i = 0; arr != null && i < arr.length(); i++) {
                     JSONObject o = arr.optJSONObject(i);
                     if (o == null) continue;
+                    String id = o.optString("id");
                     if (s == dice) {
                         DiceView.Skin k = DiceView.Skin.from(o);
-                        if (k != null) s.items.add(new Item(k.id, k.name, o.optInt("price"), k));
-                    } else if (AvatarView.Frames.known(o.optString("id"))) {
-                        s.items.add(new Item(o.optString("id"), o.optString("name"), o.optInt("price"), null));
+                        if (k != null) s.items.add(new Item(k.id, k.name, o.optInt("price"), k, null, k.price >= 80));
+                    } else if (s == frames ? AvatarView.Frames.known(id) : BoardThemes.known(id)) {
+                        s.items.add(new Item(id, o.optString("name"), o.optInt("price"), null, o.optString("blurb", null), o.optBoolean("royal")));
                     }
                 }
                 if (s == dice && s.items.isEmpty()) {
-                    for (DiceView.Skin k : DiceView.Skin.all()) s.items.add(new Item(k.id, k.name, k.price, k));
+                    for (DiceView.Skin k : DiceView.Skin.all()) s.items.add(new Item(k.id, k.name, k.price, k, null, k.price >= 80));
                 }
                 apply(s, r);
                 s.loaded = true;
@@ -127,6 +146,10 @@ public class ShopActivity extends BaseActivity {
         if (s == dice) {
             s.owned.add(DiceView.Skin.CLASSIC.id);
             if (s.equipped == null) s.equipped = DiceView.Skin.CLASSIC.id;
+        } else if (s == boards) {
+            s.owned.add(BoardThemes.CLASSIC.id);
+            if (s.equipped == null) s.equipped = BoardThemes.CLASSIC.id;
+            app.prefs.edit().putString(PREF_BOARD, s.equipped).apply();
         } else if (app.user != null) {
             // Everywhere else in the app reads the frame from the signed-in user.
             try {
@@ -151,122 +174,185 @@ public class ShopActivity extends BaseActivity {
         bar.addView(Ui.smallButton(this, "+ Get diamonds", "blue", v -> startActivity(new Intent(this, GemShopActivity.class))));
         col.addView(bar, Ui.lpMatchWrap());
 
-        // Dice | Frames.
+        // Dice | Frames | Boards.
         LinearLayout tabs = Ui.hbox(this);
         Ui.margins(tabs, this, 0, 12, 0, 0);
-        String[][] opts = {{"dice", "🎲  Dice"}, {"frame", "🔥  Frames"}};
-        for (String[] o : opts) {
-            Shop s = "dice".equals(o[0]) ? dice : frames;
-            TextView b = Ui.button(this, o[1], s == tab ? "primary" : "glass", v -> {
+        Shop[] all = {dice, frames, boards};
+        String[] labels = {"🎲 Dice", "🔥 Frames", "👑 Boards"};
+        for (int i = 0; i < all.length; i++) {
+            Shop s = all[i];
+            TextView b = Ui.smallButton(this, labels[i], s == tab ? "primary" : "glass", v -> {
                 if (tab == s) return;
                 tab = s;
                 render();
             });
+            b.setPadding(Ui.dp(this, 4), b.getPaddingTop() + Ui.dp(this, 3), Ui.dp(this, 4), b.getPaddingBottom() + Ui.dp(this, 3));
+            b.setSingleLine(true);
             LinearLayout.LayoutParams lp = Ui.weight(1);
-            if (s == dice) lp.rightMargin = Ui.dp(this, 8);
+            if (i < all.length - 1) lp.rightMargin = Ui.dp(this, 6);
             tabs.addView(b, lp);
         }
         col.addView(tabs, Ui.lpMatchWrap());
+        TextView intro = Ui.muted(this, tab == dice ? "Your die in every match — the whole table sees it roll."
+                : tab == frames ? "A ring round your picture: on your profile, with friends and at every table."
+                : "Royal boards. When you host a room, everyone in it plays on your board.");
+        intro.setGravity(Gravity.CENTER);
+        intro.setPadding(Ui.dp(this, 8), Ui.dp(this, 10), Ui.dp(this, 8), 0);
+        col.addView(intro, Ui.lpMatchWrap());
 
         if (!tab.loaded || tab.items.isEmpty()) {
             col.addView(tab.loaded ? Ui.muted(this, "Nothing for sale here yet.") : Ui.spinner(this));
             return;
         }
         Item pick = tab.byId(tab.selected);
+        col.addView(hero(pick), Ui.lpMatchWrap());
 
-        // The picked item, big, with what you can do with it.
-        LinearLayout hero = Ui.card(this);
-        Ui.margins(hero, this, 0, 12, 0, 0);
-        hero.setGravity(Gravity.CENTER_HORIZONTAL);
-        hero.addView(preview(pick, 170), new LinearLayout.LayoutParams(Ui.dp(this, 170), Ui.dp(this, 170)));
-        TextView name = new Fx.GoldText(this, pick.name.toUpperCase(java.util.Locale.ROOT), 26);
-        name.setGravity(Gravity.CENTER);
-        hero.addView(name, Ui.lpMatchWrap());
-        boolean have = tab.owned.contains(pick.id);
-        boolean using = pick.id.equals(tab.equipped);
-        String everyone = tab == dice ? "Your dice in every match — everyone at the table sees it."
-                : "Round your picture everywhere — friends and every table see it.";
-        TextView sub = Ui.muted(this, using ? everyone : have ? "You own this " + tab.word + "."
-                : pick.price == 0 ? "Free — take it!" : "Yours forever for " + pick.price + " diamonds.");
-        sub.setGravity(Gravity.CENTER);
-        sub.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 12));
-        hero.addView(sub, Ui.lpMatchWrap());
-        TextView action;
-        if (using) {
-            if (tab == frames) {
-                action = Ui.button(this, "Take frame off", "glass", v -> equip(tab, null, "none"));
-            } else {
-                action = Ui.button(this, "✓ In use", "glass", null);
-                Ui.setEnabled(action, false);
-            }
-        } else if (have) {
-            action = Ui.button(this, "Use this " + tab.word, "ok", v -> equip(tab, pick, pick.id));
-        } else {
-            action = Ui.button(this, pick.price == 0 ? "Get it free" : "Buy for 💎 " + pick.price, "primary", v -> confirmBuy(tab, pick));
-        }
-        hero.addView(action, Ui.lpMatchWrap());
-        col.addView(hero, Ui.lpMatchWrap());
-
-        // Everything in this tab, three to a row.
-        col.addView(Ui.heading(this, tab == dice ? "All dice" : "All frames"));
+        // Everything in this tab.
+        col.addView(Ui.heading(this, tab == dice ? "All dice" : tab == frames ? "All frames" : "All boards"));
+        int n = tab.columns;
         LinearLayout row = null;
         List<Item> items = tab.items;
         for (int i = 0; i < items.size(); i++) {
-            if (i % 3 == 0) {
+            if (i % n == 0) {
                 row = Ui.hbox(this);
                 col.addView(row, Ui.lpMatchWrap());
             }
-            row.addView(tile(items.get(i)), tileLp(i % 3));
+            row.addView(tile(items.get(i)), tileLp(i % n, n));
         }
         // Keep the last row's tiles the same width as the others.
-        for (int k = items.size() % 3; k != 0 && k < 3; k++) row.addView(new View(this), tileLp(k));
+        for (int k = items.size() % n; k != 0 && k < n; k++) row.addView(new View(this), tileLp(k, n));
         TextView note = Ui.muted(this, "Diamonds come from the diamond shop. Everything here is bought once and kept forever.");
         note.setGravity(Gravity.CENTER);
         note.setPadding(0, Ui.dp(this, 14), 0, 0);
         col.addView(note);
     }
 
-    /** The item drawn big or small: a spinning die, or your own picture in the frame. */
+    /** The picked item, big, with what it is and what you can do with it. */
+    private View hero(Item pick) {
+        LinearLayout hero = Ui.card(this);
+        Ui.margins(hero, this, 0, 12, 0, 0);
+        hero.setGravity(Gravity.CENTER_HORIZONTAL);
+        if (pick.royal) {
+            TextView ribbon = Ui.tag(this, tab == boards ? "👑 ROYAL BOARD" : "✨ PREMIUM", Ui.GOLD);
+            LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rl.bottomMargin = Ui.dp(this, 8);
+            hero.addView(ribbon, rl);
+        }
+        int size = tab == boards ? 230 : 170;
+        View big = preview(pick, size);
+        hero.addView(big, new LinearLayout.LayoutParams(Ui.dp(this, size), Ui.dp(this, size)));
+        // A small pop each time a new item is picked.
+        big.setScaleX(0.9f);
+        big.setScaleY(0.9f);
+        big.animate().scaleX(1f).scaleY(1f).setDuration(260).setInterpolator(new OvershootInterpolator(2f)).start();
+
+        TextView name = new Fx.GoldText(this, pick.name.toUpperCase(java.util.Locale.ROOT), 24);
+        name.setGravity(Gravity.CENTER);
+        name.setPadding(0, Ui.dp(this, 8), 0, 0);
+        hero.addView(name, Ui.lpMatchWrap());
+        if (pick.blurb != null && !pick.blurb.isEmpty()) {
+            TextView blurb = Ui.text(this, pick.blurb, 14, Ui.INK);
+            blurb.setGravity(Gravity.CENTER);
+            hero.addView(blurb, Ui.lpMatchWrap());
+        }
+        boolean have = tab.owned.contains(pick.id);
+        boolean using = pick.id.equals(tab.equipped);
+        String inUse = tab == dice ? "✓ On your die now — everyone at the table sees it."
+                : tab == frames ? "✓ Round your picture now — friends and every table see it."
+                : "✓ Your board now — everyone in rooms you host plays on it.";
+        TextView sub = Ui.muted(this, using ? inUse : have ? "You own this " + tab.word + ". Put it on any time."
+                : pick.price == 0 ? "Free — take it!" : "Buy once, keep forever.");
+        sub.setGravity(Gravity.CENTER);
+        sub.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 12));
+        hero.addView(sub, Ui.lpMatchWrap());
+        TextView action;
+        if (using) {
+            if (tab == frames) {
+                action = Ui.button(this, "Take frame off", "glass", v -> equip(tab, "none"));
+            } else {
+                action = Ui.button(this, "✓ In use", "ok", null);
+                Ui.setEnabled(action, false);
+            }
+        } else if (have) {
+            action = Ui.button(this, "Use this " + tab.word, "ok", v -> equip(tab, pick.id));
+        } else {
+            boolean afford = app.wallet.optLong("gems") >= pick.price;
+            action = Ui.button(this, pick.price == 0 ? "Get it free" : "Buy for 💎 " + pick.price, afford ? "primary" : "glass", v -> confirmBuy(tab, pick));
+            if (!afford && pick.price > 0) {
+                TextView need = Ui.text(this, "You need 💎 " + (pick.price - app.wallet.optLong("gems")) + " more", 12, Ui.GOLD);
+                need.setGravity(Gravity.CENTER);
+                need.setPadding(0, 0, 0, Ui.dp(this, 6));
+                hero.addView(need, Ui.lpMatchWrap());
+            }
+        }
+        hero.addView(action, Ui.lpMatchWrap());
+        return hero;
+    }
+
+    /** The item drawn big or small: a spinning die, your own picture in the frame, or the board. */
     private View preview(Item k, int sizeDp) {
         if (k.skin != null) return sizeDp >= 100 ? new Spinning(this, k.skin) : new Face(this, k.skin);
+        if (tab == boards) return new BoardPreview(this, k.id, sizeDp >= 150);
         JSONObject me = app.user;
         String name = me != null ? me.optString("username", "?") : "?";
         AvatarView v = Ui.avatar(this, me, name, sizeDp);
         return v.frame(k.id);
     }
 
-    private LinearLayout.LayoutParams tileLp(int column) {
+    private LinearLayout.LayoutParams tileLp(int column, int columns) {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
         lp.topMargin = Ui.dp(this, 10);
         lp.leftMargin = column == 0 ? 0 : Ui.dp(this, 5);
-        lp.rightMargin = column == 2 ? 0 : Ui.dp(this, 5);
+        lp.rightMargin = column == columns - 1 ? 0 : Ui.dp(this, 5);
         return lp;
     }
 
     private View tile(Item k) {
         boolean picked = k.id.equals(tab.selected);
-        Fx.Tile t = new Fx.Tile(this, picked ? Fx.YELLOW : Fx.PURPLE, 16, 5);
+        boolean using = k.id.equals(tab.equipped);
+        Fx.Tile t = new Fx.Tile(this, picked ? Fx.YELLOW : using ? Fx.GREEN : Fx.PURPLE, 16, 5);
         LinearLayout box = Ui.vbox(this);
         box.setGravity(Gravity.CENTER_HORIZONTAL);
         box.setPadding(Ui.dp(this, 6), Ui.dp(this, 10), Ui.dp(this, 6), Ui.dp(this, 12));
-        int size = k.skin != null ? 56 : 66;
+        int size = tab == boards ? 120 : k.skin != null ? 56 : 66;
         box.addView(preview(k, size), new LinearLayout.LayoutParams(Ui.dp(this, size), Ui.dp(this, size)));
-        TextView n = Ui.bold(Ui.text(this, k.skin != null && k.skin.flag != null ? Flags.emoji(k.skin.flag) + " " + k.name : k.name, 13, picked ? 0xff4a2600 : Ui.INK));
+        int ink = picked ? 0xff4a2600 : Ui.INK;
+        TextView n = Ui.bold(Ui.text(this, k.skin != null && k.skin.flag != null ? Flags.emoji(k.skin.flag) + " " + k.name : k.name, 13, ink));
         n.setGravity(Gravity.CENTER);
         n.setSingleLine(true);
+        n.setEllipsize(android.text.TextUtils.TruncateAt.END);
         n.setPadding(0, Ui.dp(this, 6), 0, 0);
         box.addView(n, Ui.lpMatchWrap());
-        String tag = k.id.equals(tab.equipped) ? "✓ In use" : tab.owned.contains(k.id) ? "Owned" : k.price == 0 ? "Free" : "💎 " + k.price;
-        TextView p = Ui.bold(Ui.text(this, tag, 12, picked ? 0xff7a4a00 : 0xffd9cfff));
+        String tag = using ? "✓ In use" : tab.owned.contains(k.id) ? "Owned" : k.price == 0 ? "Free" : "💎 " + Ui.fmt(k.price);
+        int tagColor = picked ? 0xff7a4a00 : using ? 0xffd9ffcf : tab.owned.contains(k.id) ? 0xffd9cfff : 0xffb9f2ff;
+        TextView p = Ui.bold(Ui.text(this, tag, 12, tagColor));
         p.setGravity(Gravity.CENTER);
         box.addView(p, Ui.lpMatchWrap());
         t.addView(box, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        if (k.royal && tab == boards) {
+            // A little crown in the corner of royal boards.
+            TextView crown = Ui.text(this, "👑", 16, Ui.INK);
+            FrameLayout.LayoutParams cl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+            cl.topMargin = Ui.dp(this, 4);
+            cl.rightMargin = Ui.dp(this, 6);
+            t.addView(crown, cl);
+        }
+        t.setContentDescription(k.name + ", " + tag);
         t.setOnClickListener(v -> {
             if (k.id.equals(tab.selected)) return;
+            Sfx.get().play(Sfx.S.CLICK, 0.7f, 1f);
             tab.selected = k.id;
             render();
+            scrollToTop();
         });
         return t;
+    }
+
+    /** After picking a tile, bring the big preview into view. */
+    private void scrollToTop() {
+        ViewParent v = col.getParent();
+        while (v != null && !(v instanceof ScrollView)) v = v.getParent();
+        if (v != null) ((ScrollView) v).smoothScrollTo(0, 0);
     }
 
     private void confirmBuy(Shop s, Item k) {
@@ -280,7 +366,9 @@ public class ShopActivity extends BaseActivity {
             buy(s, k);
             return;
         }
-        String where = s == dice ? "It goes on your die right away." : "It goes round your picture right away.";
+        String where = s == dice ? "It goes on your die right away."
+                : s == frames ? "It goes round your picture right away."
+                : "It's your board right away — everyone in rooms you host plays on it.";
         Popup.message(this, "Buy " + k.name + " " + s.word + "?", "💎 " + k.price + " diamonds. It's yours forever. " + where,
                 Popup.plain("Cancel", null), Popup.ok("Buy", () -> buy(s, k)));
     }
@@ -300,7 +388,7 @@ public class ShopActivity extends BaseActivity {
                 busy = false;
                 apply(s, r);
                 Sfx.get().play(Sfx.S.MATCH_FOUND);
-                LudoApp.toast(k.name + " " + s.word + " is yours!");
+                LudoApp.toast((k.royal ? "👑 " : "") + k.name + " " + s.word + " is yours!");
                 render();
             }
 
@@ -314,7 +402,7 @@ public class ShopActivity extends BaseActivity {
     }
 
     /** Put on an item you own (`none` takes the frame off). */
-    private void equip(Shop s, Item k, String id) {
+    private void equip(Shop s, String id) {
         if (busy) return;
         busy = true;
         app.api.post(s.path + "/" + id + "/equip", new JSONObject(), new Api.Cb(this) {

@@ -3,19 +3,21 @@ import { applyGemTx } from './gems';
 import { HttpError } from './security';
 import { DEFAULT_DICE_SKIN, diceSkin } from '../shared/skins';
 import { NO_FRAME, profileFrame } from '../shared/frames';
+import { DEFAULT_BOARD, boardTheme } from '../shared/boards';
 
 /**
- * The shop: dice skins and profile frames, each bought once with diamonds and then shown
+ * The shop: dice skins, profile frames and board themes, each bought once with diamonds and then shown
  * in every match. A purchase is one transaction: the diamond debit (idempotency key
- * `skin:<id>` / `frame:<id>`, so a retried tap never charges twice) and the ownership row
+ * `skin:<id>` / `frame:<id>` / `board:<id>`, so a retried tap never charges twice) and the ownership row
  * together, then it is put on. Prices come from the caller (game settings).
  */
 
-export type ShopKind = 'dice' | 'frame';
+export type ShopKind = 'dice' | 'frame' | 'board';
 
 const KINDS = {
   dice: { table: 'user_dice_skins', col: 'skin_id', profileCol: 'dice_skin', key: 'skin', label: 'dice', find: diceSkin, free: DEFAULT_DICE_SKIN },
   frame: { table: 'user_frames', col: 'frame_id', profileCol: 'frame', key: 'frame', label: 'frame', find: profileFrame, free: null },
+  board: { table: 'user_boards', col: 'board_id', profileCol: 'board', key: 'board', label: 'board', find: boardTheme, free: DEFAULT_BOARD },
 } as const;
 
 export interface SkinState {
@@ -65,8 +67,8 @@ export async function equipItem(db: Db, kind: ShopKind, userId: string, id: stri
   });
 }
 
-/** What a player shows at the table: their dice skin and frame. */
-export async function cosmetics(q: Queryable, userId: string): Promise<{ diceSkin: string; frame: string | null }> {
-  const [dice, frame] = await Promise.all([shopState(q, 'dice', userId), shopState(q, 'frame', userId)]);
-  return { diceSkin: dice.equipped ?? DEFAULT_DICE_SKIN, frame: frame.equipped };
+/** What a player shows at the table: their dice skin, frame and board (used when they host). */
+export async function cosmetics(q: Queryable, userId: string): Promise<{ diceSkin: string; frame: string | null; board: string }> {
+  const [dice, frame, board] = await Promise.all([shopState(q, 'dice', userId), shopState(q, 'frame', userId), shopState(q, 'board', userId)]);
+  return { diceSkin: dice.equipped ?? DEFAULT_DICE_SKIN, frame: frame.equipped, board: board.equipped ?? DEFAULT_BOARD };
 }

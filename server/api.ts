@@ -11,6 +11,7 @@ import { GEM_PACKS, REROLL_COSTS, applyGemTx } from './gems';
 import { buyItem, equipItem, shopState, type ShopKind } from './skins';
 import { DICE_SKINS } from '../shared/skins';
 import { PROFILE_FRAMES } from '../shared/frames';
+import { BOARDS, DEFAULT_BOARD } from '../shared/boards';
 import { payoutPolicy } from './settings';
 import { spin, spinState } from './spin';
 import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type TxType } from './wallet';
@@ -136,7 +137,12 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   const { db, settings, presence } = ctx;
   /** A shop's items at the prices the administrator set. */
   const shopCatalogue = (kind: ShopKind) =>
-    (kind === 'dice' ? DICE_SKINS : PROFILE_FRAMES).map((x) => ({ ...x, price: x.id === 'classic' ? 0 : settings.price(kind, x.id) }));
+    (kind === 'dice' ? DICE_SKINS : kind === 'frame' ? PROFILE_FRAMES : BOARDS).map((x) => ({
+      ...x,
+      price: (kind === 'dice' && x.id === 'classic') || (kind === 'board' && x.id === DEFAULT_BOARD) ? 0 : settings.price(kind, x.id),
+    }));
+  /** The seat field each shop changes. */
+  const seatField = { dice: 'diceSkin', frame: 'frame', board: 'board' } as const;
 
   // ---------------------------------------------------------------- public config
 
@@ -157,6 +163,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         purchasesEnabled: !!ctx.play,
         diceSkins: shopCatalogue('dice'),
         frames: shopCatalogue('frame'),
+        boards: shopCatalogue('board'),
       };
     }),
   );
@@ -311,7 +318,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
     }),
   );
 
-  /** One shop (dice skins or profile frames): list, buy (once) and put on. */
+  /** One shop (dice skins, profile frames or boards): list, buy (once) and put on. */
   const shop = (path: string, kind: ShopKind, list: string) => {
     r.get(path, h(async (req) => ({ ok: true, [list]: shopCatalogue(kind), ...(await shopState(db, kind, req.user!.id)) })));
 
@@ -323,7 +330,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         const state = await buyItem(db, kind, req.user!.id, id, settings.price(kind, id));
         const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
         presence.emit(req.user!.id, 'wallet', wallet);
-        rooms().setCosmetics(req.user!.id, { [kind === 'dice' ? 'diceSkin' : 'frame']: state.equipped });
+        rooms().setCosmetics(req.user!.id, { [seatField[kind]]: state.equipped });
         return { ok: true, ...state, wallet };
       }),
     );
@@ -333,7 +340,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       rateLimit(60, 60_000, (req) => req.user!.id),
       h(async (req) => {
         const state = await equipItem(db, kind, req.user!.id, String(req.params.id));
-        rooms().setCosmetics(req.user!.id, { [kind === 'dice' ? 'diceSkin' : 'frame']: state.equipped });
+        rooms().setCosmetics(req.user!.id, { [seatField[kind]]: state.equipped });
         return { ok: true, ...state };
       }),
     );
@@ -342,6 +349,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
 
   shop('/skins', 'dice', 'skins');
   shop('/frames', 'frame', 'frames');
+  shop('/boards', 'board', 'boards');
 
   // ---------------------------------------------------------------- gems (Google Play)
 
