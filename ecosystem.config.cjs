@@ -4,10 +4,12 @@ module.exports = {
   apps: [
     {
       name: 'ludo',
-      // Node directly, not `npm start`: no idle npm process, and SIGTERM reaches the server.
-      script: 'server/index.ts',
-      interpreter: 'node',
-      interpreter_args: '--import tsx --max-old-space-size=512',
+      // Node itself, not `npm start`: no idle npm process, and SIGTERM reaches the server. Not as a
+      // script with an interpreter either: PM2's loader would become the main module and the server
+      // would never start listening.
+      script: 'node',
+      interpreter: 'none',
+      args: '--import tsx --max-old-space-size=512 server/index.ts',
       exec_mode: 'fork',
       instances: 1,
       // Time to finish the match writes under way (see the SIGTERM handler).
