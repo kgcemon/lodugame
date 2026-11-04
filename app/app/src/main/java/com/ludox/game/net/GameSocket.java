@@ -48,6 +48,14 @@ public final class GameSocket {
     public boolean chatOpen;
     /** "offline" | "connecting" | "online" | "reconnecting" */
     public String connection = "offline";
+    /** When this phone lost the connection (elapsedRealtime, counts while asleep), 0 once the server has the match back. */
+    public volatile long offlineAt;
+    /** Connected again, waiting for the server to say whether the match is still mine. */
+    public volatile boolean restoring;
+    /** A result from the server that no screen has shown yet (see BaseActivity). */
+    public JSONObject pendingResult;
+    /** The match type "Play again" asked for, for the next screen to open. */
+    public JSONObject playAgain;
 
     public GameSocket(LudoApp app) {
         this.app = app;
@@ -100,27 +108,17 @@ public final class GameSocket {
         setConnection("connecting");
 
         s.on(Socket.EVENT_CONNECT, a -> {
+            restoring = true;
             setConnection("online");
-            emit("session:hello", new JSONObject(), res -> {
-                JSONObject r = res.optJSONObject("room");
-                if (r != null) {
-                    handleRoom(r);
-                    // Friend changes sent while the connection was down were missed.
-                    com.ludox.game.audio.VoiceChat.get().refreshFriends();
-                } else if (res.optBoolean("ok") && room != null) {
-                    // The room went on without me (e.g. I was offline too long and left the match).
-                    LudoApp.MAIN.post(() -> {
-                        resetRoom();
-                        for (Listener l : listeners) l.onSocketEvent("room:gone", null);
-                    });
-                }
-            });
+            sayHello(s);
         });
         s.on(Socket.EVENT_DISCONNECT, a -> {
             String reason = a.length > 0 ? String.valueOf(a[0]) : "";
+            markOffline();
             setConnection("io client disconnect".equals(reason) ? "offline" : "reconnecting");
         });
         s.on(Socket.EVENT_CONNECT_ERROR, a -> {
+            markOffline();
             setConnection("offline");
             String msg = a.length > 0 && a[0] instanceof Exception ? ((Exception) a[0]).getMessage() : String.valueOf(a.length > 0 ? a[0] : "");
             if (msg != null && msg.contains("unauthorized")) {
@@ -180,7 +178,11 @@ public final class GameSocket {
             });
         });
         s.on("notify", a -> fire("notify", obj(a)));
-        s.on("match:dropped", a -> fire("match:dropped", obj(a)));
+        s.on("session:replaced", a -> LudoApp.MAIN.post(() -> {
+            // This account opened the match on a newer connection (another phone).
+            resetRoom();
+            for (Listener l : listeners) l.onSocketEvent("session:replaced", null);
+        }));
         s.on("friends:changed", a -> {
             // A new friend in my room can talk with me straight away (mid-match too).
             if (room != null) com.ludox.game.audio.VoiceChat.get().refreshFriends();
@@ -210,6 +212,54 @@ public final class GameSocket {
         }
         resetRoom();
         connection = "offline";
+        offlineAt = 0;
+        restoring = false;
+    }
+
+    /**
+     * The server decides what I get back: my seat, or the result of a match I'm out of. Until it
+     * has answered my seat is still counting down, so an unanswered hello is sent again.
+     */
+    private void sayHello(Socket s) {
+        emit("session:hello", helloPayload(), res -> {
+            if (!res.optBoolean("ok")) {
+                if (s == socket && s.connected()) LudoApp.MAIN.postDelayed(() -> {
+                    if (s == socket && s.connected()) sayHello(s);
+                }, 1000);
+                return;
+            }
+            restoring = false;
+            offlineAt = 0;
+            JSONObject r = res.optJSONObject("room");
+            JSONObject result = res.optJSONObject("result");
+            if (r != null) {
+                handleRoom(r);
+                // Friend changes sent while the connection was down were missed.
+                com.ludox.game.audio.VoiceChat.get().refreshFriends();
+                return;
+            }
+            boolean hadRoom = room != null;
+            if (hadRoom) resetRoom();
+            if (result != null) {
+                pendingResult = result;
+                for (Listener l : listeners) l.onSocketEvent("match:result", result);
+            } else if (hadRoom) {
+                for (Listener l : listeners) l.onSocketEvent("room:gone", null);
+            }
+        });
+    }
+
+    private void markOffline() {
+        restoring = false;
+        if (offlineAt == 0) offlineAt = android.os.SystemClock.elapsedRealtime();
+    }
+
+    private static JSONObject helloPayload() {
+        try {
+            return new JSONObject().put("results", true);
+        } catch (Exception e) {
+            return new JSONObject();
+        }
     }
 
     private void handleRoom(JSONObject r) {
@@ -305,10 +355,30 @@ public final class GameSocket {
 
     /** Leave the current room (refund rules are the server's). */
     public void leave(AckCb cb) {
-        emit("room:leave", new JSONObject(), res -> {
+        emit("room:leave", helloPayload(), res -> {
             resetRoom();
             for (Listener l : listeners) l.onSocketEvent("room:left", null);
             if (cb != null) cb.done(res);
         });
+    }
+
+    /**
+     * Forfeit the running match. The room is only let go once the server has confirmed it: if the
+     * reply never comes, the next session:hello brings the result (asking twice is harmless).
+     */
+    public void leaveMatch(AckCb cb) {
+        emit("room:leave", helloPayload(), res -> {
+            if (res.optBoolean("ok")) resetRoom();
+            cb.done(res);
+        });
+    }
+
+    /** The result screen has been shown: the server need not offer it again. */
+    public void resultSeen(String matchId) {
+        try {
+            emit("match:resultSeen", new JSONObject().put("matchId", matchId), null);
+        } catch (Exception ignored) {
+            // not reachable
+        }
     }
 }

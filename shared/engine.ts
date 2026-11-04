@@ -188,11 +188,14 @@ function finishGame(state: GameState, events: GameEvent[], lastHome?: number): v
 }
 
 /**
- * A player drops out mid-match (lost connection for too long): their tokens leave the board,
- * they are skipped from now on and ranked last. With one player (or, in 2 vs 2, one team)
- * left in the race, the match ends and they win.
+ * A player forfeits mid-match (left, or lost connection for too long): their tokens leave the
+ * board, they are skipped from now on and ranked last; nobody else's tokens move. With one
+ * player (or, in 2 vs 2, one team) left in the race, the match ends and they win.
+ *
+ * `ending` overrides that outside 2 vs 2: 'hold' keeps the match open for a last player who is
+ * still offline (see concludeGame); 'end' ends it even with several still racing (only bots are left).
  */
-export function dropPlayer(prev: GameState, pi: number): { state: GameState; events: GameEvent[] } {
+export function dropPlayer(prev: GameState, pi: number, ending: 'auto' | 'hold' | 'end' = 'auto'): { state: GameState; events: GameEvent[] } {
   if (prev.phase === 'over') throw new RuleError('The match is over');
   const state = clone(prev);
   const player = state.players[pi];
@@ -205,11 +208,21 @@ export function dropPlayer(prev: GameState, pi: number): { state: GameState; eve
     // The partners lose together: the other team wins.
     const rival = state.players.findIndex((_, i) => i !== pi && !areTeammates(state, pi, i));
     finishGame(state, events, rival);
-  } else if (activeCount(state) <= 1) {
+  } else if (ending === 'end' || (ending === 'auto' && activeCount(state) <= 1)) {
     finishGame(state, events);
   } else if (state.current === pi) {
     passTurn(state, events);
   }
+  state.seq += 1;
+  return { state, events };
+}
+
+/** End a match held open by dropPlayer(..., 'hold'): whoever is still racing comes first. */
+export function concludeGame(prev: GameState): { state: GameState; events: GameEvent[] } {
+  if (prev.phase === 'over') throw new RuleError('The match is over');
+  const state = clone(prev);
+  const events: GameEvent[] = [];
+  finishGame(state, events);
   state.seq += 1;
   return { state, events };
 }

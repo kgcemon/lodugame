@@ -50,6 +50,8 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
     }
 
     private static final int REQ_MIC = 4201;
+    /** A match result screen is up. */
+    protected boolean resultOpen;
     private final com.ludox.game.audio.VoiceChat.Listener voiceListener = this::onVoiceChanged;
 
     /** Voice: mic, mutes or who is talking changed. */
@@ -95,7 +97,40 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
                 && "playing".equals(app.socket.room.optString("status"))) {
             openGame();
         }
+        if (app.socket.pendingResult != null) showMatchResult(app.socket.pendingResult);
+        // "Play again" on a result screen: this is the screen to queue from.
+        if (app.socket.playAgain != null && !(this instanceof GameActivity)) {
+            JSONObject mode = app.socket.playAgain;
+            app.socket.playAgain = null;
+            new PlayFlow(this).quick(mode);
+        }
     }
+
+    /** The server says I'm out of a match (or it was cancelled): show why, once. */
+    protected void showMatchResult(JSONObject r) {
+        app.socket.pendingResult = null;
+        if (resultOpen) return;
+        resultOpen = true;
+        if (!"cancelled".equals(r.optString("outcome"))) Sfx.get().play(Sfx.S.DEFEAT);
+        app.socket.resultSeen(r.optString("matchId"));
+        JSONObject again = r.optJSONObject("playAgain");
+        Runnable home = () -> {
+            resultOpen = false;
+            onMatchResultClosed();
+        };
+        Runnable play = again == null ? null : () -> {
+            resultOpen = false;
+            JSONObject mode = PlayFlow.obj("id", again.optString("modeId"), "name", again.optString("name"), "entryFee", again.optLong("entryFee"));
+            // The game screen closes, so the screen under it queues (see onResume).
+            if (this instanceof GameActivity) app.socket.playAgain = mode;
+            else new PlayFlow(this).quick(mode);
+            onMatchResultClosed();
+        };
+        MatchResultScreen.show(this, r, home, play);
+    }
+
+    /** The result screen was closed (the game screen goes back to the home screen). */
+    protected void onMatchResultClosed() {}
 
     @Override
     protected void onPause() {
@@ -138,11 +173,11 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
             case "room:closed":
                 if (!(this instanceof GameActivity) && !(this instanceof RoomActivity)) LudoApp.toast(String.valueOf(data));
                 break;
-            case "match:dropped":
-                // Back online after being put out of a match (GameActivity shows its own).
-                if (!(this instanceof GameActivity)) {
-                    Popup.message(this, "📶 You left the match", ((JSONObject) data).optString("message"), Popup.ok("OK", null));
-                }
+            case "match:result":
+                showMatchResult((JSONObject) data);
+                break;
+            case "session:replaced":
+                if (!(this instanceof GameActivity)) LudoApp.toast("Your match continues on your other device");
                 break;
             case "unauthorized":
                 app.user = null;

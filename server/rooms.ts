@@ -1,16 +1,19 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import type { Server, Socket } from 'socket.io';
 import { chooseMove } from '../shared/ai';
-import { applyAction, colorsForCount, createGame, distinctMoves, dropPlayer, RuleError, teamOf } from '../shared/engine';
+import { applyAction, colorsForCount, concludeGame, createGame, distinctMoves, dropPlayer, RuleError, teamOf } from '../shared/engine';
 import type {
   ClientToServerEvents,
+  ForfeitReason,
   GameUpdate,
+  MatchResult,
   RoomPreview,
   RoomStatus,
   RoomView,
+  SeatStatus,
   ServerToClientEvents,
 } from '../shared/protocol';
-import { MAX_NAME_LENGTH, ROOM_CODE_LENGTH, type ChatMessage } from '../shared/protocol';
+import { MAX_NAME_LENGTH, RECONNECT_GRACE_MS, ROOM_CODE_LENGTH, type ChatMessage } from '../shared/protocol';
 import {
   botReaction,
   CHAT_HISTORY,
@@ -26,7 +29,7 @@ import { DEFAULT_DICE_SKIN } from '../shared/skins';
 import { DEFAULT_BOARD } from '../shared/boards';
 import type { AuthUser } from './http';
 import { MAX_REROLLS, REROLL_COSTS } from './gems';
-import type { MatchLedger } from './ledger';
+import { NO_ELIGIBLE_PLAYERS, type MatchLedger } from './ledger';
 import type { Presence } from './presence';
 import { HttpError } from './security';
 import type { MatchMode, Settings } from './settings';
@@ -37,14 +40,19 @@ export type ClientSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 export interface Timings {
   /** How long a connected human has to act. */
   turnMs: number;
-  /** How long to wait before auto-playing for a disconnected human (who has no drop clock). */
-  disconnectedTurnMs: number;
   /**
    * Mid-match, how long a player who lost their connection has to come back. The match
    * waits for them on their turn; after this they are out and the others play on (in a
    * 2-player match the opponent wins).
    */
   dropMs: number;
+  /**
+   * A connection must hold this long to earn a new dropMs: one that comes back and drops again
+   * sooner carries on with the time it had left, so a flapping connection can't stall a match.
+   */
+  stableMs: number;
+  /** Least time on the turn clock when a player comes back mid-turn (to see the board again). */
+  resumeFloorMs: number;
   /** Pause before a bot acts, on top of the client animation time. */
   botThinkMs: number;
   /** Lobby seats of disconnected players are released after this. */
@@ -63,8 +71,9 @@ export interface Timings {
 
 export const DEFAULT_TIMINGS: Timings = {
   turnMs: 8_000,
-  disconnectedTurnMs: 6_000,
-  dropMs: 45_000,
+  dropMs: RECONNECT_GRACE_MS,
+  stableMs: 10_000,
+  resumeFloorMs: 2_000,
   botThinkMs: 650,
   lobbyGraceMs: 30_000,
   emptyRoomMs: 120_000,
@@ -93,10 +102,13 @@ interface Seat {
   color: Color;
   /** Lobby: frees the seat; mid-match: puts the player out (see Timings.dropMs). */
   graceTimer?: NodeJS.Timeout;
-  /** Mid-match: when this player lost their connection (null while connected). */
-  offlineSince: number | null;
-  /** Dropped out of this match for being offline too long. */
+  /** Mid-match: the server's deadline for this player to reconnect (null while connected). */
+  graceDeadline: number | null;
+  /** What was left of the last countdown when they came back, and when (see Timings.stableMs). */
+  graceLeft: { ms: number; at: number } | null;
+  /** Out of this match; `forfeitReason` says why. Their user id stays, for settlement. */
   left: boolean;
+  forfeitReason: ForfeitReason | null;
   /** Gem re-rolls used this match, and the last known gem balance (null = not loaded). */
   rerolls: number;
   gems: number | null;
@@ -135,6 +147,15 @@ interface Room {
   waitTimer: NodeJS.Timeout | null;
   /** When the quick-play wait runs out and bots fill the empty seats (epoch ms). */
   waitUntil: number | null;
+  /** What was left of the current player's turn when their connection dropped. */
+  pausedTurn: { seq: number; leftMs: number } | null;
+  /**
+   * The last player left in the race is offline: they win if they come back in time; if they
+   * don't, nobody does.
+   */
+  heldWin: boolean;
+  /** Match writes run one at a time, in the order they were decided here. */
+  writes: Promise<unknown>;
   /** The last roll, which its (human) roller may still re-roll with gems. */
   rerollable: { color: Color; before: GameState; seqAfter: number; until: number | null } | null;
   /** A re-roll is being charged: hold every other action. */
@@ -187,8 +208,8 @@ export function animationMs(events: GameEvent[]): number {
 export class RoomManager {
   private rooms = new Map<string, Room>();
   private pidRoom = new Map<string, string>();
-  /** Players put out of a match for being offline, until they come back and are told why. */
-  private drops = new Map<string, { at: number; message: string }>();
+  /** Forfeits still being written: a result is read from the database only once they are done. */
+  private forfeiting = new Map<string, Promise<unknown>>();
   private botCounter = 0;
 
   constructor(
@@ -209,6 +230,7 @@ export class RoomManager {
   private view(room: Room, pid: string | null): RoomView {
     return {
       code: room.code,
+      matchId: room.matchId,
       isPublic: room.isPublic,
       maxPlayers: room.maxPlayers,
       teams: room.teams,
@@ -229,8 +251,9 @@ export class RoomManager {
         avatarHue: s.avatarHue,
         ready: s.kind === 'ai' || ((s.ready || s.playerId === room.hostPid) && !s.pending),
         connected: s.kind === 'ai' || (s.connected && !s.pending),
-        reconnectMsLeft: s.offlineSince !== null ? Math.max(0, s.offlineSince + this.t.dropMs - Date.now()) : null,
+        reconnectMsLeft: s.graceDeadline !== null ? Math.max(0, s.graceDeadline - Date.now()) : null,
         left: s.left,
+        status: this.seatStatus(s),
         isHost: s.playerId !== null && s.playerId === room.hostPid,
         team: room.teams ? this.teamOfSeat(room, s, i) : null,
         diceSkin: s.diceSkin,
@@ -239,6 +262,11 @@ export class RoomManager {
         country: s.country,
       })),
     };
+  }
+
+  private seatStatus(s: Seat): SeatStatus {
+    if (s.left) return s.forfeitReason === 'timeout' ? 'eliminated' : 'forfeited';
+    return s.graceDeadline !== null ? 'disconnected' : 'connected';
   }
 
   /** The board shown to the room: the locked one during a match, otherwise today's pick. */
@@ -328,25 +356,38 @@ export class RoomManager {
     return u;
   }
 
+  /**
+   * Bring this socket back into the player's match. Identity is the signed-in session of the
+   * socket (checked at connect), never anything the client says, and nothing from the client
+   * reaches the match: they get the server's state.
+   */
   hello(socket: ClientSocket): RoomView | null {
     const u = this.user(socket);
     const room = this.roomOf(u.id);
-    if (!room) {
-      // Back after being put out of a match: say what happened.
-      const dropped = this.drops.get(u.id);
-      this.drops.delete(u.id);
-      if (dropped && Date.now() - dropped.at < 10 * 60_000) socket.emit('match:dropped', { message: dropped.message });
+    if (!room) return null;
+    const seat = room.seats.find((s) => s.playerId === u.id)!;
+    // The deadline is the decision, whichever of this and its timer runs first.
+    if (seat.graceDeadline !== null && Date.now() >= seat.graceDeadline) {
+      this.forfeitSeat(room, seat, 'timeout');
       return null;
     }
-    const seat = room.seats.find((s) => s.playerId === u.id)!;
-    // A newer tab replaces an older connection for the same player.
-    if (seat.socketId && seat.socketId !== socket.id) this.io.sockets.sockets.get(seat.socketId)?.leave(room.code);
+    // A newer connection replaces an older one for the same player.
+    if (seat.socketId && seat.socketId !== socket.id) {
+      const old = this.io.sockets.sockets.get(seat.socketId);
+      old?.leave(room.code);
+      old?.emit('session:replaced');
+    }
     seat.socketId = socket.id;
     seat.connected = true;
-    seat.offlineSince = null;
     if (seat.graceTimer) clearTimeout(seat.graceTimer);
-    // Players who dropped while nobody else was online get their clock back now someone is.
-    for (const s of room.seats) if (s !== seat && s.offlineSince !== null) this.armDrop(room, s, Math.max(0, s.offlineSince + this.t.dropMs - Date.now()));
+    const wasOffline = seat.graceDeadline !== null;
+    if (wasOffline) {
+      const now = Date.now();
+      seat.graceLeft = { ms: seat.graceDeadline! - now, at: now };
+      seat.graceDeadline = null;
+      const matchId = room.matchId;
+      void this.write(room, () => this.ledger.markReconnected(matchId, u.id, now));
+    }
     if (room.emptyTimer) {
       clearTimeout(room.emptyTimer);
       room.emptyTimer = null;
@@ -354,11 +395,31 @@ export class RoomManager {
     socket.join(room.code);
     socket.emit('chat:history', this.chatFor(room, seat));
     if (room.game) {
-      if (this.isCurrent(room, seat)) this.reschedule(room, 0);
+      if (room.heldWin) this.concludeHeld(room);
+      else if (wasOffline && this.isCurrent(room, seat)) this.resumeTurn(room);
       socket.emit('game:update', this.update(room, []));
     }
     this.broadcastRoom(room);
     return this.view(room, u.id);
+  }
+
+  /** session:hello: the player's match, or else the result of the one they are no longer in. */
+  async resume(socket: ClientSocket, wantsResult: boolean): Promise<{ room: RoomView | null; result: MatchResult | null }> {
+    const room = this.hello(socket);
+    if (room) return { room, result: null };
+    const u = this.user(socket);
+    await this.forfeiting.get(u.id);
+    const result = await this.ledger.pendingResult(u.id);
+    if (result && !wantsResult) {
+      socket.emit('match:dropped', { message: result.message });
+      await this.ledger.resultSeen(result.matchId, u.id);
+    }
+    return { room: null, result };
+  }
+
+  async resultSeen(socket: ClientSocket, matchId: unknown): Promise<void> {
+    if (typeof matchId !== 'string' || !/^[0-9a-f-]{36}$/i.test(matchId)) throw new RuleError('Unknown match');
+    await this.ledger.resultSeen(matchId, this.user(socket).id);
   }
 
   disconnect(socket: ClientSocket): void {
@@ -372,59 +433,130 @@ export class RoomManager {
     seat.socketId = null;
     if (room.status === 'lobby') {
       seat.graceTimer = setTimeout(() => {
-        if (!seat.connected && seat.playerId) void this.removeFromRoom(room, seat.playerId);
+        if (room.status === 'lobby' && !seat.connected && seat.playerId) void this.removeFromRoom(room, seat.playerId);
       }, this.t.lobbyGraceMs);
-    } else if (room.game && room.game.phase !== 'over') {
+    } else if (room.status === 'playing' && room.game && room.game.phase !== 'over') {
       // The match waits for them on their turn; if they don't come back in time, they're out.
-      seat.offlineSince = Date.now();
-      this.armDrop(room, seat, this.t.dropMs);
-      if (this.isCurrent(room, seat)) this.reschedule(room, 0);
-      if (room.game) this.io.to(room.code).emit('game:update', this.update(room, []));
+      const current = this.isCurrent(room, seat);
+      if (current && room.deadline !== null) room.pausedTurn = { seq: room.game.seq, leftMs: Math.max(0, room.deadline - Date.now()) };
+      this.beginGrace(room, seat);
+      if (current) this.reschedule(room, 0);
+      this.io.to(room.code).emit('game:update', this.update(room, []));
     }
     this.checkEmpty(room);
     this.broadcastRoom(room);
   }
 
-  private armDrop(room: Room, seat: Seat, ms: number): void {
+  /** Start the server's reconnection countdown for a player whose connection dropped. */
+  private beginGrace(room: Room, seat: Seat): void {
+    const now = Date.now();
+    const last = seat.graceLeft;
+    const ms = last && now - last.at < this.t.stableMs ? last.ms : this.t.dropMs;
+    const deadline = now + ms;
+    seat.graceDeadline = deadline;
+    this.armGrace(room, seat);
+    const matchId = room.matchId;
+    const pid = seat.playerId!;
+    void this.write(room, () => this.ledger.markDisconnected(matchId, pid, now, deadline));
+  }
+
+  private armGrace(room: Room, seat: Seat): void {
     if (seat.graceTimer) clearTimeout(seat.graceTimer);
-    seat.graceTimer = setTimeout(() => this.dropSeat(room, seat), ms);
+    seat.graceTimer = setTimeout(() => {
+      if (seat.graceDeadline === null) return;
+      // Timers can fire a hair early: the deadline itself is what counts.
+      if (Date.now() < seat.graceDeadline) this.armGrace(room, seat);
+      else this.forfeitSeat(room, seat, 'timeout');
+    }, Math.max(0, seat.graceDeadline! - Date.now()));
+  }
+
+  /** Run a match write after those already decided, so a forfeit reaches the database before the settlement it led to. */
+  private write(room: Room, job: () => Promise<unknown>): Promise<unknown> {
+    room.writes = room.writes.then(job).catch((e) => console.error('[rooms] match write failed', e));
+    return room.writes;
   }
 
   /**
-   * A player stayed offline too long mid-match: they're out (no refund) and the others play
-   * on; with one player or team left, the match ends and they win. Nobody is put out while
-   * everyone is offline (the server's own connection may be the problem): the clock waits.
+   * A player is out of the match, for good: they left it, or the reconnection deadline passed.
+   * The decision is made here, in one step, and nothing can reverse it; asking again changes
+   * nothing. No refund. With two or more still in the race they play on, tokens untouched.
+   * With one, they win, unless they are offline themselves: they then have to come back to
+   * win (concludeHeld), and if they don't, nobody can. If only bots remain the match ends and
+   * no coins are paid.
    */
-  private dropSeat(room: Room, seat: Seat): void {
+  private forfeitSeat(room: Room, seat: Seat, reason: ForfeitReason): void {
     const g = room.game;
-    if (!this.rooms.has(room.code) || seat.connected || !seat.playerId || !g || g.phase === 'over') return;
-    const someoneOnline = room.seats.some((s) => s !== seat && s.playerId && s.connected && !s.left);
-    if (!someoneOnline) {
-      this.armDrop(room, seat, 10_000);
-      return;
-    }
+    if (!this.rooms.has(room.code) || room.status !== 'playing' || !g || g.phase === 'over' || seat.left || !seat.playerId) return;
     const pi = g.players.findIndex((p) => p.color === seat.color);
-    const { state, events } = dropPlayer(g, pi);
+    const rest = g.players
+      .filter((p, i) => i !== pi && p.rank === null && !p.left)
+      .map((p) => room.seats.find((s) => s.color === p.color)!);
+    const humans = rest.filter((s) => s.playerId);
+    const ending = g.config.teams ? 'auto' : !humans.length ? 'end' : rest.length === 1 && !humans[0].connected ? 'hold' : 'auto';
+    const { state, events } = dropPlayer(g, pi, ending);
+
     const pid = seat.playerId;
+    const matchId = room.matchId;
+    if (seat.graceTimer) clearTimeout(seat.graceTimer);
+    seat.graceDeadline = null;
+    seat.graceLeft = null;
     seat.left = true;
-    seat.offlineSince = null;
+    seat.forfeitReason = reason;
+    seat.connected = false;
+    if (seat.socketId) this.io.sockets.sockets.get(seat.socketId)?.leave(room.code);
+    seat.socketId = null;
     this.track(pid, null);
     if (room.hostPid === pid) room.hostPid = room.seats.find((s) => s.playerId && s.connected && !s.left)?.playerId ?? room.hostPid;
+
+    const turnMoved = state.current !== g.current;
     room.game = state;
     room.lastEvents = events;
     room.rerollable = null;
-    if (state.phase === 'over') room.status = 'over';
-    this.drops.set(pid, {
-      at: Date.now(),
-      message:
-        state.phase !== 'over' ? 'You were offline for too long, so you left the match. The others played on without you.'
-        : state.config.teams ? 'You were offline for too long, so you left the match and the other team won.'
-        : 'You were offline for too long, so you left the match and your opponent won.',
-    });
-    this.reschedule(room, 0);
+    room.heldWin = ending === 'hold';
+    if (turnMoved) room.pausedTurn = null;
+    const now = Date.now();
+    const connection = reason === 'timeout' && g.players.length > 2 ? 'eliminated' : 'forfeited';
+    void this.write(room, () => this.ledger.forfeit(matchId, pid, reason, now, connection));
+    if (state.phase === 'over') {
+      this.endMatch(room);
+      if (rest.length) this.settle(room, state, 'opponent_forfeit');
+      else void this.write(room, () => this.ledger.abandon(matchId, NO_ELIGIBLE_PLAYERS, false));
+    } else if (turnMoved) {
+      this.reschedule(room, animationMs(events) * this.t.animScale);
+    }
     this.io.to(room.code).emit('game:update', this.update(room, events));
     this.broadcastRoom(room);
-    if (room.status === 'over') void this.settle(room, state);
+    const done = room.writes.finally(() => {
+      if (this.forfeiting.get(pid) === done) this.forfeiting.delete(pid);
+    });
+    this.forfeiting.set(pid, done);
+    if (state.phase === 'over' && !room.seats.some((s) => s.playerId && !s.left)) this.deleteRoom(room, 'all players left');
+    else this.checkEmpty(room);
+  }
+
+  /** The last player left in the race came back in time: they win. */
+  private concludeHeld(room: Room): void {
+    const { state, events } = concludeGame(room.game!);
+    room.game = state;
+    room.lastEvents = events;
+    this.endMatch(room);
+    this.settle(room, state, 'opponent_forfeit');
+    this.io.to(room.code).emit('game:update', this.update(room, events));
+  }
+
+  /** The match is over: no more clocks run, for anyone. Whoever was still counting down can simply come back to see the result. */
+  private endMatch(room: Room): void {
+    room.status = 'over';
+    room.heldWin = false;
+    room.pausedTurn = null;
+    if (room.timer) clearTimeout(room.timer);
+    room.timer = null;
+    room.deadline = null;
+    for (const s of room.seats) {
+      if (s.graceDeadline !== null && s.graceTimer) clearTimeout(s.graceTimer);
+      s.graceDeadline = null;
+      s.graceLeft = null;
+    }
   }
 
   private isCurrent(room: Room, seat: Seat): boolean {
@@ -467,8 +599,10 @@ export class RoomManager {
       socketId: socket.id,
       connected: true,
       color: this.freeColor(room),
-      offlineSince: null,
+      graceDeadline: null,
+      graceLeft: null,
       left: false,
+      forfeitReason: null,
       rerolls: 0,
       gems: null,
       diceSkin: DEFAULT_DICE_SKIN,
@@ -520,6 +654,7 @@ export class RoomManager {
   private async openRoom(socket: ClientSocket, mode: MatchMode, maxPlayers: number, isPublic: boolean, quick: boolean, teams = false): Promise<Room> {
     const u = this.user(socket);
     if (this.rooms.size >= MAX_ROOMS) throw new RuleError('Server is full, try again shortly');
+    this.assertNotPlaying(u.id);
     await this.ledger.assertCanPlay(u.id, mode.entryFee);
     await this.leave(socket);
     const code = this.newCode();
@@ -543,6 +678,9 @@ export class RoomManager {
       emptyTimer: null,
       waitTimer: null,
       waitUntil: null,
+      pausedTurn: null,
+      heldWin: false,
+      writes: Promise.resolve(),
       rerollable: null,
       rerollBusy: false,
       readyAt: 0,
@@ -589,8 +727,10 @@ export class RoomManager {
     const code = rawCode.trim().toUpperCase();
     const room = this.rooms.get(code);
     if (!room) throw new RuleError('Room not found');
+    if (room.seats.some((s) => s.playerId === u.id && s.left)) throw new RuleError('You are out of that match');
     if (room.seats.some((s) => s.playerId === u.id)) return this.hello(socket)!;
     if (room.status !== 'lobby' || room.starting) throw new RuleError('That match has already started');
+    this.assertNotPlaying(u.id);
     if (room.seats.length >= room.maxPlayers) throw new RuleError('Room is full');
     await this.ledger.assertCanPlay(u.id, room.entryFee);
     await this.leave(socket);
@@ -621,6 +761,11 @@ export class RoomManager {
     this.broadcastRoom(room);
     if (room.quick) this.checkQuickStart(room);
     return this.view(room, u.id);
+  }
+
+  /** Starting something else never walks out of a running match: leaving one is an explicit, confirmed forfeit. */
+  private assertNotPlaying(pid: string): void {
+    if (this.roomOf(pid)?.status === 'playing') throw new RuleError('Finish or leave your current match first');
   }
 
   /** Public matchmaking for a mode: join a waiting room of that mode or open one. */
@@ -691,8 +836,10 @@ export class RoomManager {
       socketId: null,
       connected: true,
       color: this.freeColor(room),
-      offlineSince: null,
+      graceDeadline: null,
+      graceLeft: null,
       left: false,
+      forfeitReason: null,
       rerolls: 0,
       gems: null,
       diceSkin: DEFAULT_DICE_SKIN,
@@ -769,6 +916,8 @@ export class RoomManager {
     room.entryFee = info.entryFee;
     room.payoutMultiplier = info.payoutMultiplier;
     room.status = 'lobby';
+    room.heldWin = false;
+    room.pausedTurn = null;
     room.matchBoard = undefined;
     room.matchBoardBy = undefined;
     room.game = null;
@@ -811,6 +960,7 @@ export class RoomManager {
       await this.ledger.start(
         room.matchId,
         room.seats.filter((s) => s.playerId).map((s) => ({ userId: s.playerId!, color: s.color })),
+        room.seats.map((s) => ({ color: s.color, name: s.name, kind: s.kind })),
       );
     } finally {
       room.starting = false;
@@ -826,6 +976,8 @@ export class RoomManager {
     room.lastEvents = [];
     room.rerollable = null;
     for (const s of room.seats) s.rerolls = 0;
+    // Someone who dropped in the lobby just before the start has their countdown start with the match.
+    for (const s of room.seats) if (s.playerId && !s.connected) this.beginGrace(room, s);
     this.reschedule(room, 0);
     this.broadcastRoom(room);
     this.io.to(room.code).emit('game:update', this.update(room, []));
@@ -838,28 +990,45 @@ export class RoomManager {
     }
   }
 
-  async leave(socket: ClientSocket): Promise<void> {
+  /**
+   * Leave the room: before the start with a refund, during a match as an immediate forfeit (the
+   * reply carries the result). Asking again once out gets the same result and changes nothing.
+   */
+  async leave(socket: ClientSocket, wantsResult = false): Promise<{ result: MatchResult | null }> {
     const u = socket.data.user as AuthUser | undefined;
-    if (!u) return;
+    if (!u) return { result: null };
     const room = this.roomOf(u.id);
-    if (!room) return;
-    socket.leave(room.code);
-    await this.removeFromRoom(room, u.id);
+    const matchId = room?.status === 'playing' ? room.matchId : null;
+    if (room) {
+      socket.leave(room.code);
+      await this.removeFromRoom(room, u.id);
+    }
+    await this.forfeiting.get(u.id);
+    const result = matchId ? await this.ledger.matchResult(matchId, u.id) : wantsResult ? await this.ledger.pendingResult(u.id) : null;
+    // Older apps can't show it: it counts as seen.
+    if (result && !wantsResult) await this.ledger.resultSeen(result.matchId, u.id);
+    return { result };
   }
 
-  private async removeFromRoom(room: Room, pid: string): Promise<void> {
+  private async removeFromRoom(room: Room, pid: string, reason: ForfeitReason = 'left'): Promise<void> {
     const idx = room.seats.findIndex((s) => s.playerId === pid);
-    this.track(pid, null);
-    if (idx < 0) return;
+    if (idx < 0) {
+      this.track(pid, null);
+      return;
+    }
     const seat = room.seats[idx];
+    if (room.status === 'playing') {
+      this.forfeitSeat(room, seat, reason);
+      return;
+    }
+    this.track(pid, null);
     if (seat.graceTimer) clearTimeout(seat.graceTimer);
 
     if (room.status === 'lobby') {
       room.seats.splice(idx, 1);
       await this.ledger.leaveBeforeStart(room.matchId, pid).catch((e) => console.error('[rooms] refund failed', e));
     } else {
-      // Mid-match: the player forfeits (no refund) and a bot finishes their seat.
-      if (room.status === 'playing') await this.ledger.forfeit(room.matchId, pid).catch((e) => console.error('[rooms] forfeit failed', e));
+      // The match is over: their seat stays on the final board.
       seat.playerId = null;
       seat.socketId = null;
       seat.kind = 'ai';
@@ -870,11 +1039,10 @@ export class RoomManager {
         p.kind = 'ai';
         p.name = seat.name;
       }
-      if (room.game && room.game.phase !== 'over') this.reschedule(room, 0);
     }
 
-    if (room.hostPid === pid) room.hostPid = room.seats.find((s) => s.playerId && !s.pending)?.playerId ?? null;
-    if (!room.seats.some((s) => s.playerId)) {
+    if (room.hostPid === pid) room.hostPid = room.seats.find((s) => s.playerId && !s.pending && !s.left)?.playerId ?? null;
+    if (!room.seats.some((s) => s.playerId && !s.left)) {
       this.deleteRoom(room, room.status === 'lobby' ? 'everyone left' : 'all players left');
       return;
     }
@@ -883,7 +1051,8 @@ export class RoomManager {
   }
 
   private checkEmpty(room: Room): void {
-    if (room.seats.some((s) => s.playerId && s.connected)) return;
+    // During a match every absent player is on their own countdown.
+    if (room.status === 'playing' || room.seats.some((s) => s.playerId && s.connected)) return;
     if (room.emptyTimer) return;
     room.emptyTimer = setTimeout(() => this.deleteRoom(room, 'everyone disconnected'), this.t.emptyRoomMs);
   }
@@ -967,7 +1136,8 @@ export class RoomManager {
     if (room.waitTimer) clearTimeout(room.waitTimer);
     for (const s of room.seats) {
       if (s.graceTimer) clearTimeout(s.graceTimer);
-      if (s.playerId) this.track(s.playerId, null);
+      // Someone already out of this match may be seated elsewhere by now.
+      if (s.playerId && this.pidRoom.get(s.playerId) === room.code) this.track(s.playerId, null);
     }
     this.rooms.delete(room.code);
     const job =
@@ -1061,7 +1231,7 @@ export class RoomManager {
     }
     room.game = state;
     room.lastEvents = events;
-    if (state.phase === 'over') room.status = 'over';
+    if (state.phase === 'over') this.endMatch(room);
 
     // A human's roll can be re-rolled with gems. If the roll already handed the turn on,
     // hold the next player briefly so the roller has time to decide.
@@ -1083,12 +1253,12 @@ export class RoomManager {
     this.scheduleBotReaction(room, events);
     if (room.status === 'over') {
       this.broadcastRoom(room);
-      void this.settle(room, state);
+      this.settle(room, state);
     }
   }
 
   /** The winner comes from the server's own game state, never from a client. */
-  private async settle(room: Room, state: GameState): Promise<void> {
+  private settle(room: Room, state: GameState, endReason = 'finished'): void {
     const ranking = state.ranking.map((pi) => {
       const seat = room.seats.find((s) => s.color === state.players[pi].color);
       return seat && seat.kind === 'human' && seat.playerId ? seat.playerId : null;
@@ -1097,24 +1267,25 @@ export class RoomManager {
     // 2 vs 2: both partners win (they are ranked 1st and 2nd).
     const winners = state.config.teams ? 2 : 1;
     const winnerColors = state.ranking.slice(0, winners).map((pi) => state.players[pi].color);
-    try {
-      const res = await this.ledger.settle(room.matchId, ranking, winnerColor, winners);
-      if (res) {
-        this.io.to(room.code).emit('match:settled', {
-          winnerName: winnerColors.map((c) => room.seats.find((s) => s.color === c)?.name ?? 'Unknown').join(' & '),
-          winnerColor,
-          winnerColors,
-          payout: res.payout,
-          entryFee: room.entryFee,
-        });
-      }
-    } catch (e) {
-      console.error('[rooms] settlement failed', e);
-    }
+    const matchId = room.matchId;
+    const entryFee = room.entryFee;
+    const winnerName = winnerColors.map((c) => room.seats.find((s) => s.color === c)?.name ?? 'Unknown').join(' & ');
+    void this.write(room, async () => {
+      const res = await this.ledger.settle(matchId, ranking, winnerColor, winners, endReason);
+      if (res) this.io.to(room.code).emit('match:settled', { winnerName, winnerColor, winnerColors, payout: res.payout, entryFee });
+    });
   }
 
-  /** Arm the timer that auto-plays for bots, absent players and expired turns. */
-  private reschedule(room: Room, animMs: number): void {
+  /** Back mid-turn: the turn carries on with the clock it had when the connection dropped. */
+  private resumeTurn(room: Room): void {
+    const paused = room.pausedTurn;
+    room.pausedTurn = null;
+    const left = paused && paused.seq === room.game!.seq ? Math.max(paused.leftMs, this.t.resumeFloorMs) : undefined;
+    this.reschedule(room, 0, left);
+  }
+
+  /** Arm the timer that auto-plays for bots and expired turns (`turnLeftMs` overrides a fresh turn's clock). */
+  private reschedule(room: Room, animMs: number, turnLeftMs?: number): void {
     if (room.timer) clearTimeout(room.timer);
     room.timer = null;
     room.deadline = null;
@@ -1125,6 +1296,10 @@ export class RoomManager {
     let wait: number;
     if (p.kind === 'ai' || !seat) {
       wait = animMs + this.t.botThinkMs;
+    } else if (seat.graceDeadline !== null) {
+      // Their connection dropped: nothing is played for them, the match waits (forfeitSeat ends the wait).
+      room.deadline = seat.graceDeadline;
+      return;
     } else if (g.phase === 'move' && distinctMoves(g).length === 1) {
       // Only one possible move: the server plays it, once, as soon as the roll has landed
       // (a little later if they could still pay to re-roll that roll).
@@ -1132,12 +1307,8 @@ export class RoomManager {
       const canReroll = r?.color === p.color && seat.rerolls < MAX_REROLLS && (seat.gems ?? 0) >= REROLL_COSTS[seat.rerolls];
       wait = animMs + (canReroll ? this.t.autoMoveRerollMs : this.t.autoMoveMs);
       room.deadline = Date.now() + wait;
-    } else if (!seat.connected && seat.offlineSince !== null) {
-      // Their connection dropped: the match waits for them (dropSeat ends the wait).
-      room.deadline = seat.offlineSince + this.t.dropMs;
-      return;
     } else {
-      wait = animMs + (seat.connected ? this.t.turnMs : this.t.disconnectedTurnMs);
+      wait = turnLeftMs ?? animMs + this.t.turnMs;
       room.deadline = Date.now() + wait;
     }
     room.timer = setTimeout(() => this.autoPlay(room), wait);
@@ -1212,7 +1383,7 @@ export class RoomManager {
   /** Remove a suspended user from any room they're in. */
   async evict(userId: string): Promise<void> {
     const room = this.roomOf(userId);
-    if (room) await this.removeFromRoom(room, userId);
+    if (room) await this.removeFromRoom(room, userId, 'removed');
   }
 
   shutdown(): void {

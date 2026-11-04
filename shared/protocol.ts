@@ -5,6 +5,33 @@ import type { Color, GameEvent, GameState, PlayerKind } from './types';
 
 export type RoomStatus = 'lobby' | 'playing' | 'over';
 
+/** How long a player who loses their connection mid-match has to come back. */
+export const RECONNECT_GRACE_MS = 20_000;
+
+export type SeatStatus = 'connected' | 'disconnected' | 'forfeited' | 'eliminated';
+
+/** Why a player is out of a match: offline past the deadline, left it themselves, or removed by an administrator. */
+export type ForfeitReason = 'timeout' | 'left' | 'removed';
+
+/** What a player who is no longer in a match sees (built from the match record, so it survives a restart). */
+export interface MatchResult {
+  matchId: string;
+  outcome: 'lost' | 'cancelled';
+  /** 'server_restart' when the match itself was interrupted. */
+  reason: ForfeitReason | 'server_restart';
+  message: string;
+  /** Everyone else who sat down. */
+  opponents: string[];
+  /** Null while the others still play, and when nobody won. */
+  winnerName: string | null;
+  status: 'in_progress' | 'completed' | 'abandoned';
+  coinsPaid: number;
+  coinsReceived: number;
+  net: number;
+  /** The same match type to queue for again; null when it can't be played again right now. */
+  playAgain: { modeId: string; name: string; entryFee: number } | null;
+}
+
 export interface SeatView {
   id: string;
   name: string;
@@ -23,8 +50,10 @@ export interface SeatView {
   connected: boolean;
   /** Mid-match: ms this player has left to reconnect before they're out (null while connected). */
   reconnectMsLeft: number | null;
-  /** Dropped out of the match for being offline too long. */
+  /** Out of the match: left it, or was offline too long. */
   left: boolean;
+  /** Where this player stands in the match, decided by the server. */
+  status: SeatStatus;
   isHost: boolean;
   /** 2 vs 2 team (0 = red + yellow, 1 = green + blue); null outside team rooms. */
   team: 0 | 1 | null;
@@ -34,6 +63,7 @@ export interface SeatView {
 
 export interface RoomView {
   code: string;
+  matchId: string;
   isPublic: boolean;
   maxPlayers: number;
   /** 2 vs 2: seats 1 + 3 play against seats 2 + 4. */
@@ -120,7 +150,12 @@ export type Ack<T extends object = object> = ({ ok: true } & T) | { ok: false; e
 export type AckFn<T extends object = object> = (res: Ack<T>) => void;
 
 export interface ClientToServerEvents {
-  'session:hello': (p: Record<string, never>, ack: AckFn<{ room: RoomView | null }>) => void;
+  /**
+   * Resume this player's session on a new socket. `results: true`: the client shows a MatchResult
+   * from the reply and confirms it with match:resultSeen (older apps get match:dropped instead).
+   */
+  'session:hello': (p: { results?: boolean }, ack: AckFn<{ room: RoomView | null; result: MatchResult | null }>) => void;
+  'match:resultSeen': (p: { matchId: string }, ack: AckFn) => void;
   'room:create': (p: { modeId: string; maxPlayers: number; teams?: boolean }, ack: AckFn<{ room: RoomView }>) => void;
   'room:join': (p: { code: string }, ack: AckFn<{ room: RoomView }>) => void;
   'room:quick': (p: { modeId: string }, ack: AckFn<{ room: RoomView }>) => void;
@@ -128,7 +163,8 @@ export interface ClientToServerEvents {
   'room:addBot': (p: Record<string, never>, ack: AckFn) => void;
   'room:kick': (p: { seat: number }, ack: AckFn) => void;
   'room:start': (p: Record<string, never>, ack: AckFn) => void;
-  'room:leave': (p: Record<string, never>, ack: AckFn) => void;
+  /** Before the start: leave with a refund. During a match: forfeit at once (asking again is harmless). */
+  'room:leave': (p: { results?: boolean }, ack: AckFn<{ result: MatchResult | null }>) => void;
   /** `seq`: the state version the action was made on (stale actions are refused). */
   'game:roll': (p: { seq?: number }, ack: AckFn) => void;
   /** Pay gems to roll your last roll again (5, 15, 45 per match; at most 3). */
@@ -150,8 +186,10 @@ export interface ServerToClientEvents {
   'emote': (e: EmoteMessage) => void;
   'game:update': (u: GameUpdate) => void;
   'match:settled': (s: MatchSettled) => void;
-  /** You were put out of a match for being offline too long (sent when you come back). */
+  /** You were put out of a match for being offline too long (older apps, when they come back). */
   'match:dropped': (d: { message: string }) => void;
+  /** This account opened the match on a newer connection: this one no longer plays it. */
+  'session:replaced': () => void;
   /** Wallet numbers changed (entry fee, payout, refund, admin adjustment...). */
   'wallet': (w: { balance: number; totalEarned: number; totalSpent: number }) => void;
   'notify': (n: { id: string; type: string; payload: Record<string, unknown>; createdAt: string; readAt: string | null }) => void;

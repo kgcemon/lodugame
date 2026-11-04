@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { RECONNECT_GRACE_MS, type ForfeitReason, type MatchResult } from '../shared/protocol';
 import type { Db, Queryable } from './db';
 import { notify, type Presence } from './presence';
 import { HttpError } from './security';
@@ -21,8 +22,9 @@ import { cosmetics } from './skins';
  *   - Room cancelled before start (host left everyone, creation failure, empty room): full refund.
  *   - Server restart/crash while waiting or in progress: full refund to everyone still in the
  *     match (not the players' fault); players who had already forfeited are not refunded.
- *   - Leaving or disconnecting after the match started: no refund (a bot plays the seat).
- *   - Every human leaving a started match: abandoned, no refunds.
+ *   - Leaving after the match started, or staying offline past the reconnection deadline: a
+ *     forfeit, no refund, and no reward whatever happens next.
+ *   - Every human leaving a started match with nobody left to win: abandoned, no refunds.
  *   - Losing: no refund.
  */
 
@@ -44,6 +46,52 @@ export interface SettleResult {
   payout: number;
   pot: number;
   house: number;
+}
+
+/** Who sat down for a match, bots included. */
+export interface LineupSeat {
+  color: string;
+  name: string;
+  kind: string;
+}
+
+interface ResultRow {
+  id: string;
+  mode: string;
+  status: string;
+  end_reason: string | null;
+  lineup: string | null;
+  winner: string | null;
+  winner_color: string | null;
+  color: string | null;
+  forfeit_reason: ForfeitReason | null;
+  entry_paid: number;
+  payout: number;
+  refunded: number;
+}
+
+const RESULT_SELECT = `
+  select m.id, m.mode, m.status, m.end_reason, m.lineup, w.username as winner, m.winner_color,
+         mp.color, mp.forfeit_reason, mp.entry_paid, mp.payout, mp.refunded
+  from match_players mp
+  join matches m on m.id = mp.match_id
+  left join profiles w on w.user_id = m.winner_user_id`;
+
+/** End reason of a match whose last player also ran out of time, so nobody could win it. */
+export const NO_ELIGIBLE_PLAYERS = 'no eligible players';
+
+/** A restart's "match cancelled" notice stops being news after this. */
+const RESULT_MAX_AGE_MS = 24 * 60 * 60_000;
+
+function resultMessage(r: ResultRow, players: number): string {
+  const secs = RECONNECT_GRACE_MS / 1000;
+  if (!r.forfeit_reason) return 'The server restarted during your match, so it was cancelled and your entry fee was refunded.';
+  if (r.forfeit_reason === 'left') return 'You voluntarily left the match.';
+  if (r.forfeit_reason === 'removed') return 'You were removed from the match by an administrator.';
+  if (players > 2) return `You were eliminated because you did not reconnect within the ${secs}-second grace period.`;
+  if (r.status === 'completed') return `Your connection was lost for more than ${secs} seconds. Your opponent won the match.`;
+  if (r.end_reason === NO_ELIGIBLE_PLAYERS) return `Your connection was lost for more than ${secs} seconds, and so was your opponent's. Nobody won the match.`;
+  return `Your connection was lost for more than ${secs} seconds.`;
 }
 
 async function lockMatch(q: Queryable, matchId: string) {
@@ -154,7 +202,7 @@ export class MatchLedger {
     if (refunded) await this.pushWallet([userId]);
   }
 
-  async start(matchId: string, seats: { userId: string; color: string }[]): Promise<void> {
+  async start(matchId: string, seats: { userId: string; color: string }[], lineup: LineupSeat[] = []): Promise<void> {
     await this.ctx.db.tx(async (q) => {
       const m = await lockMatch(q, matchId);
       if (m.status !== 'waiting') throw new HttpError(409, 'Match cannot be started');
@@ -165,14 +213,34 @@ export class MatchLedger {
         );
         if (!r.rowCount) throw new HttpError(409, 'A player is not properly seated');
       }
-      await q.query(`update matches set status = 'in_progress', started_at = now() where id = $1`, [matchId]);
+      await q.query(`update matches set status = 'in_progress', started_at = now(), lineup = $2 where id = $1`, [matchId, JSON.stringify(lineup)]);
     });
   }
 
-  async forfeit(matchId: string, userId: string): Promise<void> {
+  /** The server saw this player's connection drop; they have until `deadline` to come back. */
+  async markDisconnected(matchId: string, userId: string, at: number, deadline: number): Promise<void> {
     await this.ctx.db.query(
-      `update match_players set status = 'forfeited', left_at = now() where match_id = $1 and user_id = $2 and status = 'playing'`,
-      [matchId, userId],
+      `update match_players set connection_status = 'disconnected', disconnected_at = $3, reconnect_deadline = $4
+       where match_id = $1 and user_id = $2 and status = 'playing'`,
+      [matchId, userId, new Date(at), new Date(deadline)],
+    );
+  }
+
+  async markReconnected(matchId: string, userId: string, at: number): Promise<void> {
+    await this.ctx.db.query(
+      `update match_players set connection_status = 'reconnected', reconnected_at = $3, reconnect_deadline = null
+       where match_id = $1 and user_id = $2 and status = 'playing'`,
+      [matchId, userId, new Date(at)],
+    );
+  }
+
+  /** Out of the match, once: asking again changes nothing. No refund, and settle() pays them nothing. */
+  async forfeit(matchId: string, userId: string, reason: ForfeitReason = 'left', at = Date.now(), connection: 'forfeited' | 'eliminated' = 'forfeited'): Promise<void> {
+    await this.ctx.db.query(
+      `update match_players set status = 'forfeited', left_at = $3, forfeited_at = $3, forfeit_reason = $4,
+              connection_status = $5, reconnect_deadline = null
+       where match_id = $1 and user_id = $2 and status = 'playing'`,
+      [matchId, userId, new Date(at), reason, connection],
     );
   }
 
@@ -181,7 +249,7 @@ export class MatchLedger {
    * as user ids (null = a bot seat). The first `winners` places win (2 for both
    * partners in 2 vs 2), and each human winner gets multiplier × entry fee.
    */
-  async settle(matchId: string, ranking: (string | null)[], winnerColor: string, winners = 1): Promise<SettleResult | null> {
+  async settle(matchId: string, ranking: (string | null)[], winnerColor: string, winners = 1, endReason = 'finished'): Promise<SettleResult | null> {
     const res = await this.ctx.db.tx(async (q) => {
       const m = await lockMatch(q, matchId);
       if (m.status !== 'in_progress') return null;
@@ -217,14 +285,15 @@ export class MatchLedger {
         if (!uid) continue;
         await q.query(
           `update match_players set "rank" = $3, won = $4, payout = case when $4 then $5::bigint else 0 end,
-                  status = case when status = 'playing' then 'finished' else status end
+                  status = case when status = 'playing' then 'finished' else status end,
+                  connection_status = case when $4 then 'winner' else connection_status end
            where match_id = $1 and user_id = $2`,
           [matchId, uid, i + 1, paid.includes(uid), payout],
         );
       }
       await q.query(
-        `update matches set status = 'completed', ended_at = now(), winner_user_id = $2, winner_color = $3, end_reason = 'finished' where id = $1`,
-        [matchId, winner, winnerColor],
+        `update matches set status = 'completed', ended_at = now(), winner_user_id = $2, winner_color = $3, end_reason = $4 where id = $1`,
+        [matchId, winner, winnerColor, endReason],
       );
       return { winnerUserId: winner, winnerUserIds: paid, payout, pot, house: pot - totalPayout, players: players.map((p) => p.user_id) };
     });
@@ -267,6 +336,55 @@ export class MatchLedger {
       return ps.map((p) => p.user_id);
     });
     if (refund && ids.length) await this.pushWallet(ids);
+  }
+
+  /** The result screen for one player, from the match record as it stands now. */
+  async matchResult(matchId: string, userId: string): Promise<MatchResult | null> {
+    const row = (await this.ctx.db.query<ResultRow>(`${RESULT_SELECT} where mp.match_id = $1 and mp.user_id = $2`, [matchId, userId])).rows[0];
+    return row ? this.describeResult(row, userId) : null;
+  }
+
+  /**
+   * A result this player hasn't confirmed seeing: they forfeited, or a restart cut their match
+   * short. Recorded in the database, so it still reaches them after a restart of the server.
+   */
+  async pendingResult(userId: string): Promise<MatchResult | null> {
+    const row = (await this.ctx.db.query<ResultRow>(
+      `${RESULT_SELECT}
+       where mp.user_id = $1 and mp.result_seen_at is null
+         and (mp.forfeited_at is not null
+              or (m.status = 'abandoned' and m.end_reason = 'server restart' and mp.status = 'refunded' and m.ended_at >= $2))
+       order by coalesce(mp.forfeited_at, m.ended_at) desc limit 1`,
+      [userId, new Date(Date.now() - RESULT_MAX_AGE_MS)],
+    )).rows[0];
+    return row ? this.describeResult(row, userId) : null;
+  }
+
+  async resultSeen(matchId: string, userId: string): Promise<void> {
+    await this.ctx.db.query('update match_players set result_seen_at = now() where match_id = $1 and user_id = $2 and result_seen_at is null', [matchId, userId]);
+  }
+
+  private async describeResult(r: ResultRow, userId: string): Promise<MatchResult> {
+    const lineup = r.lineup ? (JSON.parse(r.lineup) as LineupSeat[]) : [];
+    const opponents = lineup.filter((s) => s.color !== r.color).map((s) => s.name);
+    const interrupted = !r.forfeit_reason;
+    const paid = Number(r.entry_paid);
+    const received = Number(r.payout) + Number(r.refunded);
+    const mode = this.ctx.settings.get().modes.find((m) => m.id === r.mode && m.enabled && !m.privateOnly);
+    const balance = (await this.ctx.db.query<{ balance: number }>('select balance from wallets where user_id = $1', [userId])).rows[0]?.balance ?? 0;
+    return {
+      matchId: r.id,
+      outcome: interrupted ? 'cancelled' : 'lost',
+      reason: r.forfeit_reason ?? 'server_restart',
+      message: resultMessage(r, lineup.length),
+      opponents,
+      winnerName: r.winner ?? lineup.find((s) => s.color === r.winner_color)?.name ?? null,
+      status: r.status as MatchResult['status'],
+      coinsPaid: paid,
+      coinsReceived: received,
+      net: received - paid,
+      playAgain: mode && balance >= mode.entryFee ? { modeId: mode.id, name: mode.name, entryFee: mode.entryFee } : null,
+    };
   }
 
   /** The dice skin and profile frame a player shows in matches. */

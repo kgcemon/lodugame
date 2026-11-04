@@ -300,15 +300,19 @@ describe('paid matches', () => {
   it('does not refund a player who leaves after the start; a server restart refunds those still playing', async () => {
     const ua = await registerUser(t, 'Quitter Quinn');
     const ub = await registerUser(t, 'Stayer Sam');
+    const uc = await registerUser(t, 'Stayer Cam');
     const a = await socketFor(t, ua.cookie);
     const b = await socketFor(t, ub.cookie);
-    const created = await emit<{ room: RoomView }>(a, 'room:create', { modeId: 'pro', maxPlayers: 2 });
+    const c = await socketFor(t, uc.cookie);
+    const created = await emit<{ room: RoomView }>(a, 'room:create', { modeId: 'pro', maxPlayers: 3 });
     await emit(b, 'room:join', { code: created.ok ? created.room.code : '' });
+    await emit(c, 'room:join', { code: created.ok ? created.room.code : '' });
     await emit(b, 'room:ready', { ready: true });
+    await emit(c, 'room:ready', { ready: true });
     const started = nextUpdate(a);
     await emit(a, 'room:start');
     await started;
-    await emit(a, 'room:leave'); // forfeits mid-match: a bot takes the seat, no refund
+    await emit(a, 'room:leave'); // forfeits mid-match, no refund; the other two play on
     await tick(100);
     expect(await balance(ua)).toBe(900);
 

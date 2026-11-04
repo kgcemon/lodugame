@@ -114,7 +114,7 @@ NODE_ENV=production PORT=3001 APP_BASE_URL=https://your-domain.example DATABASE_
 **Payout accounting:** all players in a room pay the same fee (mixed fees are impossible —
 the fee belongs to the room). 2 players: pot 2E, winner gets 2E. 4 players: pot 4E, winner gets 2E,
 and the remaining 2E is retained by the house and stored per match as `house_amount`. If a bot
-(that took over a leaver's seat) wins, nobody is paid.
+wins, nobody is paid.
 
 **Refund policy** (`server/ledger.ts`):
 
@@ -122,8 +122,29 @@ and the remaining 2E is retained by the house and stored per match as `house_amo
 * Room cancelled before the start (everyone left, creation failed) → full refund.
 * Server restart/crash → full refund to players still in the match; players who had already
   forfeited are not refunded.
-* Leaving or disconnecting **after the start** → no refund (a bot plays the seat).
+* Leaving, or staying offline past the reconnection deadline, **after the start** → a forfeit: no
+  refund and no reward.
+* Every player out with nobody left to win → the match is closed with no winner and no refunds.
 * Losing → no refund.
+
+**Connection loss and forfeits** (`server/rooms.ts`, decided only by the server):
+
+* A dropped connection starts a 20-second countdown (`RECONNECT_GRACE_MS`), noticed through the
+  Socket.IO heartbeat within 11 s if the connection dies silently. Everyone in the room sees it.
+* Back in time (`session:hello`, on the signed-in session of the new socket) the player gets
+  their seat and the server's state back. Nothing the client says reaches the match, and the turn
+  clock carries on from where it stopped. A bare new socket changes nothing.
+* A connection has to hold for 10 s to earn a new countdown: otherwise the next drop carries on
+  with what was left, so a flapping connection can't stall a match.
+* Nothing is played for an offline player. On their turn the match waits, at most until their
+  deadline. At the deadline they are out, whichever arrives first of the timer and their reconnect.
+* Leaving during a match (`room:leave`) is the same forfeit, at once, with no countdown.
+* After a forfeit: 3 or 4 players play on, tokens untouched, turn order skipping the seat. With
+  one left, they win and are paid as usual. If that last player is offline too, they win only by
+  coming back in time. If only bots are left, the match ends and no coins are paid.
+* 2 vs 2: a forfeit loses the match for that team, since a team needs both partners home to win.
+* `match_players` records the connection status, disconnect time, deadline, reconnect time,
+  forfeit time and reason. The result screen is built from that record, so it survives a restart.
 
 Matchmaking (Quick/Classic/Pro/Master) starts a room when it is full. Otherwise, when the
 configured wait (default 45 s, `matchmaking_wait_seconds`) runs out, bots take the empty seats

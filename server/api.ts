@@ -471,10 +471,10 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         await db.query<{
           id: string; mode: string; entry_fee: number; status: string; created_at: string; ended_at: string | null;
           won: boolean; mp_status: string; rank: number | null; entry_paid: number; payout: number; refunded: number;
-          players: number; disputed: boolean; end_reason: string | null;
+          players: number; disputed: boolean; end_reason: string | null; forfeit_reason: string | null;
         }>(
           `select m.id, m.mode, m.entry_fee, m.status, m.created_at, m.ended_at, m.end_reason,
-                  mp.won, mp.status as mp_status, mp."rank", mp.entry_paid, mp.payout, mp.refunded,
+                  mp.won, mp.status as mp_status, mp."rank", mp.entry_paid, mp.payout, mp.refunded, mp.forfeit_reason,
                   (select count(*)::int from match_players x where x.match_id = m.id and x.status <> 'refunded') as players,
                   exists (select 1 from match_disputes d where d.match_id = m.id and d.user_id = mp.user_id) as disputed
            from match_players mp join matches m on m.id = mp.match_id
@@ -512,6 +512,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
             net: received - paid,
             disputed: !!m.disputed,
             endReason: m.end_reason,
+            forfeitReason: m.forfeit_reason,
           };
         }),
       };

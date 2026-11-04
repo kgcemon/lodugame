@@ -175,8 +175,9 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   // ---------------------------------------------------------------- sockets
   const io = new Server<ClientToServerEvents, ServerToClientEvents>(http, {
     maxHttpBufferSize: 10_000,
-    pingInterval: 10_000,
-    pingTimeout: 8_000,
+    // A silently dead connection is noticed within 11 s; its reconnection countdown starts then.
+    pingInterval: 5_000,
+    pingTimeout: 6_000,
     // Block cross-site WebSocket hijacking: only our own pages may connect.
     allowRequest: (req, cb) => {
       const origin = req.headers.origin;
@@ -207,7 +208,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     presence.connect(user.id, socket.id);
     // Tell online friends (a live alert in their app).
     if (cameOnline) announceOnline(db!, presence, user.id).catch((e: unknown) => console.error('[online] alert failed', e));
-    socket.on('session:hello', handler(socket, () => ({ room: rooms.hello(socket) })));
+    socket.on('session:hello', handler(socket, (p: { results?: unknown }) => rooms.resume(socket, p.results === true)));
+    socket.on('match:resultSeen', handler(socket, (p: { matchId: unknown }) => rooms.resultSeen(socket, p.matchId)));
     socket.on('room:create', handler(socket, async (p: { modeId: unknown; maxPlayers: unknown; teams?: unknown }) => ({ room: await rooms.create(socket, p.modeId, p.maxPlayers, p.teams) })));
     socket.on('room:join', handler(socket, async (p: { code: unknown }) => ({ room: await rooms.join(socket, p.code) })));
     socket.on('room:quick', handler(socket, async (p: { modeId: unknown }) => ({ room: await rooms.quick(socket, p.modeId) })));
@@ -215,7 +217,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     socket.on('room:addBot', handler(socket, () => rooms.addBot(socket)));
     socket.on('room:kick', handler(socket, (p: { seat: unknown }) => rooms.kick(socket, Number(p.seat))));
     socket.on('room:start', handler(socket, () => rooms.start(socket)));
-    socket.on('room:leave', handler(socket, () => rooms.leave(socket)));
+    socket.on('room:leave', handler(socket, (p: { results?: unknown }) => rooms.leave(socket, p.results === true)));
     socket.on('game:roll', handler(socket, (p?: { seq?: unknown }) => rooms.rollDice(socket, p?.seq)));
     socket.on('game:move', handler(socket, (p: { token: unknown; seq?: unknown }) => rooms.move(socket, p.token, p.seq)));
     socket.on('game:rematch', handler(socket, () => rooms.rematch(socket)));

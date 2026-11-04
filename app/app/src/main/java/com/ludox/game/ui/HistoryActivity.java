@@ -78,6 +78,10 @@ public class HistoryActivity extends BaseActivity {
         long net = m.optLong("net");
         money.addView(Ui.bold(Ui.text(this, (net > 0 ? "+" : "") + Ui.fmt(net), 15, net > 0 ? Ui.SUCCESS : net < 0 ? Ui.DANGER : Ui.MUTED)));
         c.addView(money);
+        String why = m.optString("forfeitReason");
+        if ("timeout".equals(why)) c.addView(Ui.text(this, "Lost connection for too long", 12, Ui.MUTED));
+        else if ("left".equals(why)) c.addView(Ui.text(this, "You left the match", 12, Ui.MUTED));
+        else if ("removed".equals(why)) c.addView(Ui.text(this, "Removed by an administrator", 12, Ui.MUTED));
         if (m.optBoolean("disputed")) {
             c.addView(Ui.text(this, "Reported — an administrator will review it.", 12, Ui.GOLD));
         } else {
