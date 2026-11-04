@@ -49,9 +49,9 @@ export async function spinState(q: Queryable, userId: string): Promise<SpinState
 }
 
 /** Spin once for today: returns the prize and the slice it landed on. */
-export async function spin(db: Db, userId: string): Promise<{ prize: number; index: number; gems: number }> {
+export async function spin(db: Db, userId: string): Promise<{ prize: number; index: number; gems: number; txId: string }> {
   const prize = pickPrize();
   const r = await db.tx((q) => applyGemTx(q, { userId, type: 'daily_spin', amount: prize, key: `spin:${today()}`, note: `Daily spin: ${prize} diamonds` }));
   if (r.duplicate) throw new HttpError(409, 'You already spun today. Come back tomorrow!', 'ALREADY_SPUN');
-  return { prize, index: SPIN_PRIZES.indexOf(prize), gems: r.balance };
+  return { prize, index: SPIN_PRIZES.indexOf(prize), gems: r.balance, txId: r.id };
 }

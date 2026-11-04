@@ -171,6 +171,28 @@ Gems are a second currency, bought in the Android app through Google Play
   3. Purchases only work for builds installed from Play (internal testing track is enough).
 * **Support:** admins can add or remove gems with `POST /api/admin/users/:id/gems`.
 
+## Gifts and rewards
+
+Administrators send gifts from **Send gifts** in the admin panel: coins, diamonds, a dice skin, a
+board or an avatar frame, optionally in a gift box, with a message and an expiry. A send writes one
+row per player (`gifts`), a notification and an audit record, and credits nothing. The player's claim
+is one transaction that locks the gift, credits it (ledger key `gift:<id>`, or the inventory) and
+writes `gift_claims`, whose primary key allows one claim per gift. Claiming again answers with the
+first claim and moves nothing.
+
+- **States:** `pending` → `opened` → `claimed`; or `expired` / `cancelled`, which can't be claimed.
+- **Gift boxes** are a presentation over what the administrator chose: the box hides it until opened,
+  and adds nothing.
+- **A cosmetic already owned** isn't granted twice: the player gets 25% of its shop price instead, in
+  the currency the shop sells it for (`DUPLICATE_REFUND_SHARE` in `shared/gifts.ts`).
+- **Everyone** means every player who isn't suspended (administrators are left out). It needs the
+  player count the administrator confirmed; a repeat of the same request skips players already served.
+- **Older apps** get a plain system notice; they can't open gifts, which wait for the update.
+
+A credit the ledger confirms is reported as a `RewardEvent` (`shared/gifts.ts`): in the reply for the
+daily bonus, spin and gift claim, and as the `reward` socket event for a match win. The app animates
+that event once per ledger entry, and shows the server's balance when the animation ends.
+
 ## Security summary
 
 * Server-side validation on every endpoint; parameterised SQL everywhere (no string-built values).

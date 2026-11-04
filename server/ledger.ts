@@ -7,6 +7,8 @@ import type { MatchMode, Settings } from './settings';
 import { applyWalletTx, walletSummary } from './wallet';
 import { MAX_REROLLS, REROLL_COSTS, applyGemTx, gemBalance, rerollsUsed } from './gems';
 import { cosmetics } from './skins';
+import { rewardFromWallet } from './gifts';
+import type { RewardEvent } from '../shared/gifts';
 
 /**
  * Money side of a match. Each step is one database transaction that locks the
@@ -274,10 +276,12 @@ export class MatchLedger {
       );
       if (!ins.rowCount) return null; // already settled
 
+      const rewards: { userId: string; reward: RewardEvent }[] = [];
       if (payout > 0) {
         for (const uid of paid) {
           const key = uid === winner ? `reward:${matchId}` : `reward:${matchId}:${uid}`;
-          await applyWalletTx(q, { userId: uid, type: 'match_reward', amount: payout, key, matchId, note: 'Match win payout' });
+          const r = await applyWalletTx(q, { userId: uid, type: 'match_reward', amount: payout, key, matchId, note: 'Match win payout' });
+          if (!r.duplicate) rewards.push({ userId: uid, reward: rewardFromWallet(r.tx, 'match_win', matchId) });
         }
       }
       for (let i = 0; i < ranking.length; i++) {
@@ -295,10 +299,12 @@ export class MatchLedger {
         `update matches set status = 'completed', ended_at = now(), winner_user_id = $2, winner_color = $3, end_reason = $4 where id = $1`,
         [matchId, winner, winnerColor, endReason],
       );
-      return { winnerUserId: winner, winnerUserIds: paid, payout, pot, house: pot - totalPayout, players: players.map((p) => p.user_id) };
+      return { winnerUserId: winner, winnerUserIds: paid, payout, pot, house: pot - totalPayout, players: players.map((p) => p.user_id), rewards };
     });
     if (!res) return null;
     await this.pushWallet(res.players);
+    // The coins are in the ledger: the winner's app can show them flying to the wallet.
+    for (const r of res.rewards) this.ctx.presence.emit(r.userId, 'reward', r.reward);
     for (const uid of res.players) {
       const won = res.winnerUserIds.includes(uid);
       await notify(this.ctx.db, this.ctx.presence, uid, 'match_result', {

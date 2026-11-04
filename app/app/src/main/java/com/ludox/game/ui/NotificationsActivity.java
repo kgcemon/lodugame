@@ -59,6 +59,10 @@ public class NotificationsActivity extends BaseActivity {
             TextView join = Ui.smallButton(this, "Join", "primary", v -> play.joinCode(code));
             row.addView(join);
         }
+        if (p.has("giftId")) {
+            String gift = p.optString("giftId");
+            row.addView(Ui.smallButton(this, "Open", "primary", v -> GiftOpening.open(this, gift, null)));
+        }
         return row;
     }
 

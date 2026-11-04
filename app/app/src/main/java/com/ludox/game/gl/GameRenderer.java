@@ -30,6 +30,8 @@ import javax.microedition.khronos.opengles.GL10;
 public final class GameRenderer implements GLSurfaceView.Renderer {
     /** Half size of the die: big enough to read, small enough to sit between the yard's token wells. */
     private static final float DICE_HALF = 0.36f;
+    /** A token's progress once it is home (shared/types.ts). */
+    public static final int HOME_PROGRESS = 56;
     private static final float[][] RGB = new float[4][];
 
     static {
@@ -86,6 +88,27 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     }
 
     public volatile RollListener rollListener;
+
+    /** Told when a capture or a token home plays (GL thread), with where it is on screen. */
+    public interface FxListener {
+        void onCapture(int by, int victim, int victimToken, float x, float y);
+
+        /** `count`: how many of this player's tokens are home now, this one included. */
+        void onHome(int player, int token, int count, float x, float y);
+    }
+
+    public volatile FxListener fxListener;
+    /** Effects.level(): 0 keeps tokens and moves plain (Android's animations are off). */
+    public volatile int fxLevel = 2;
+    /** The token that made a capture, flashing; and when each token last reached home, for its bounce. */
+    private int flashPlayer = -1, flashToken = -1;
+    private long flashAt;
+    private final long[][] homeAt = new long[4][4];
+    /** Draw on until this time (the bounce and flash outlast the animation queue). */
+    private long fxUntil;
+    private final float[] fxScreen = new float[2];
+    /** Size of the token being animated: a caught token shrinks on its way home. */
+    private float animScaleNow = 1.05f;
 
     /**
      * Classic view: the board seen straight down, filling the view, with the die drawn on the
@@ -187,6 +210,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             return;
         }
         int me = next.indexOfColor(myColor);
+        int movedToken = -1;
         for (int i = 0; i < events.length(); i++) {
             JSONObject e = events.optJSONObject(i);
             if (e == null) continue;
@@ -195,13 +219,14 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
                     queue.add(new RollAnim(e.optInt("player"), e.optInt("value", 1)));
                     break;
                 case "moved":
-                    queue.add(new MoveAnim(e.optInt("player"), e.optInt("token"), e.optInt("from"), e.optInt("to")));
+                    movedToken = e.optInt("token");
+                    queue.add(new MoveAnim(e.optInt("player"), movedToken, e.optInt("from"), e.optInt("to")));
                     break;
                 case "captured":
-                    queue.add(new CaptureAnim(e.optInt("player"), e.optInt("token"), e.optInt("from"), e.optInt("player") == me));
+                    queue.add(new CaptureAnim(e.optInt("player"), e.optInt("token"), e.optInt("from"), e.optInt("player") == me, e.optInt("by", -1), movedToken));
                     break;
                 case "tokenHome":
-                    queue.add(new Cue(Sfx.S.HOME));
+                    queue.add(new HomeCue(e.optInt("player"), e.optInt("token"), next));
                     break;
                 case "extraTurn":
                     if (e.optInt("player") == me) queue.add(new Cue(Sfx.S.EXTRA));
@@ -321,6 +346,40 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         void frame(float t) {}
     }
 
+    /** A token reached home: its sound, its bounce, and the screen's celebration (takes no time). */
+    private final class HomeCue extends Anim {
+        final int player, token, count;
+
+        HomeCue(int player, int token, GameState next) {
+            this.player = player;
+            this.token = token;
+            int n = 0;
+            if (player >= 0 && player < next.players.size()) for (int t : next.players.get(player).tokens) if (t == HOME_PROGRESS) n++;
+            count = Math.max(1, n);
+        }
+
+        @Override
+        void begin() {
+            // The chime climbs with each token; the fourth has its own.
+            if (count >= 4) sfx(Sfx.S.HOME_FINAL, 1f, 1f);
+            else sfx(Sfx.S.HOME, 0.9f + 0.05f * count, 1f + 0.07f * (count - 1));
+            long now = SystemClock.uptimeMillis();
+            if (fxLevel > 0 && player >= 0 && player < 4) {
+                homeAt[player][token] = now;
+                fxUntil = Math.max(fxUntil, now + 750);
+            }
+            FxListener l = fxListener;
+            if (l != null) {
+                float[] w = world(player, HOME_PROGRESS, token);
+                project(w[0], 0.45f, w[2], fxScreen, 0);
+                l.onHome(player, token, count, fxScreen[0], fxScreen[1]);
+            }
+        }
+
+        @Override
+        void frame(float t) {}
+    }
+
     private static void sfx(Sfx.S s, float volume, float rate) {
         Sfx x = Sfx.get();
         if (x != null) x.play(s, volume, rate);
@@ -366,6 +425,8 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         final int[] path;
         /** Hops already heard (one tap per square landed on). */
         int landed;
+        /** The last hop into home is slower, for the build-up; its share of the time starts here. */
+        float slowFrom = 1f;
 
         MoveAnim(int player, int token, int from, int to) {
             this.player = player;
@@ -378,6 +439,11 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
                 path = new int[n + 1];
                 for (int i = 0; i <= n; i++) path[i] = from + i;
                 dur = 170L * n;
+                // Within what the server allows a move (animationMs).
+                if (to == HOME_PROGRESS && n >= 2 && fxLevel > 0) {
+                    dur += 240;
+                    slowFrom = 170f * (n - 1) / dur;
+                }
             }
         }
 
@@ -385,12 +451,14 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         void begin() {
             animPlayer = player;
             animToken = token;
+            animScaleNow = 1.05f;
         }
 
         @Override
         void frame(float t) {
             int steps = path.length - 1;
-            float f = t * steps;
+            float f = t >= slowFrom ? (steps - 1) + (t - slowFrom) / (1f - slowFrom) : slowFrom < 1f ? t / slowFrom * (steps - 1) : t * steps;
+            if (t >= 1f) f = steps;
             int i = Math.min(steps - 1, (int) f);
             float k = f - i;
             float[] a = world(player, path[i], token);
@@ -419,13 +487,17 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
     private final class CaptureAnim extends Anim {
         final int player, token, from;
         final boolean mine;
+        final int by, byToken;
 
-        CaptureAnim(int player, int token, int from, boolean mine) {
+        CaptureAnim(int player, int token, int from, boolean mine, int by, int byToken) {
             this.player = player;
             this.token = token;
             this.from = from;
             this.mine = mine;
-            dur = 520;
+            this.by = by;
+            this.byToken = byToken;
+            // Within what the server allows a capture (animationMs): the next move isn't held up.
+            dur = 620;
         }
 
         @Override
@@ -434,6 +506,19 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             animToken = token;
             sfx(Sfx.S.CAPTURE, 1f, 1f);
             if (mine && listener != null) listener.onMyTokenCaptured();
+            long now = SystemClock.uptimeMillis();
+            if (fxLevel > 0 && by >= 0 && byToken >= 0) {
+                flashPlayer = by;
+                flashToken = byToken;
+                flashAt = now;
+                fxUntil = Math.max(fxUntil, now + 520);
+            }
+            FxListener l = fxListener;
+            if (l != null) {
+                float[] w = world(player, from, token);
+                project(w[0], 0.45f, w[2], fxScreen, 0);
+                l.onCapture(by, player, token, fxScreen[0], fxScreen[1]);
+            }
             if (com.ludox.game.BuildConfig.DEBUG) {
                 android.util.Log.d("LudoAnim", "capture player=" + player + " token=" + token + " from=" + from + " shownBefore=" + shown[player][token]);
             }
@@ -447,12 +532,15 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
             animPos[0] = a[0] + (b[0] - a[0]) * e;
             animPos[2] = a[2] + (b[2] - a[2]) * e;
             animPos[1] = (float) Math.sin(Math.PI * t) * 1.6f;
+            // Seen from above a lift barely shows: it shrinks away and comes back in its yard.
+            animScaleNow = fxLevel > 0 ? 1.05f - 0.5f * (float) Math.sin(Math.PI * t) : 1.05f;
         }
 
         @Override
         void end() {
             if (player < 4) shown[player][token] = -1;
             animPlayer = -1;
+            animScaleNow = 1.05f;
         }
     }
 
@@ -535,7 +623,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         }
         if (animPlayer >= 0 && animPlayer < 4) {
             System.arraycopy(animPos, 0, pos[animPlayer][animToken], 0, 3);
-            scale[animPlayer][animToken] = 1.05f;
+            scale[animPlayer][animToken] = animScaleNow;
         }
     }
 
@@ -709,6 +797,12 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
                     Matrix.scaleM(model, 0, s, 1, s);
                     use(texShadow, 0, 0, 0, 0.42f, true, 0);
                     draw(flat);
+                    if (p == flashPlayer && t == flashToken && now - flashAt < 500) {
+                        // The token that made the capture: a gold flash spreading out from it.
+                        float age = (now - flashAt) / 500f;
+                        ring(q, 1.3f, 1f, 0.85f, 0.2f, 1f - age);
+                        ring(q, 1.2f + 2.1f * age, 1f, 0.95f, 0.6f, 1f - age);
+                    }
                     boolean selected = p == selPlayer && t == selToken;
                     if (selected) {
                         // Tapped: a bright white ring plus a quick flash spreading out.
@@ -762,6 +856,17 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
                         float age = Math.min(1f, (now - selAt) / 300f);
                         grow = 1.15f + 0.3f * (1f - age) * (1f - age);
                     }
+                    long sinceHome = now - homeAt[p][t];
+                    if (homeAt[p][t] > 0 && sinceHome < 700) {
+                        // Just home: three bounces, each lower than the last, swelling as it lands.
+                        float age = sinceHome / 700f;
+                        bob += Math.abs((float) Math.sin(age * Math.PI * 3)) * (1f - age) * 0.9f;
+                        grow *= 1f + 0.4f * (1f - age);
+                    }
+                    if (p == flashPlayer && t == flashToken && now - flashAt < 300) {
+                        float age = (now - flashAt) / 300f;
+                        grow *= 1f + 0.25f * (1f - age);
+                    }
                     Matrix.setIdentityM(model, 0);
                     Matrix.translateM(model, 0, q[0], q[1] + bob, q[2]);
                     float sc = scale[p][t] * grow;
@@ -808,7 +913,7 @@ public final class GameRenderer implements GLSurfaceView.Renderer {
         boolean diceSettled = state == null
                 || (Math.abs(dicePos[0] - diceTarget[0]) < 0.002f && Math.abs(dicePos[2] - diceTarget[1]) < 0.002f);
         boolean moving = showcase || !idle || cur != null || !queue.isEmpty() || rollT >= 0 || dragging || yawOffset != 0f
-                || !movable.isEmpty() || (selPlayer >= 0 && now - selAt < 500) || !diceSettled;
+                || !movable.isEmpty() || (selPlayer >= 0 && now - selAt < 500) || !diceSettled || now < fxUntil;
         Runnable rr = requestRender;
         if (moving && rr != null) rr.run();
     }

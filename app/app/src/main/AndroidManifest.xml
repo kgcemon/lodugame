@@ -70,5 +70,8 @@
         <activity
             android:name=".ui.CollectionActivity"
             android:screenOrientation="portrait" />
+        <activity
+            android:name=".ui.GiftInboxActivity"
+            android:screenOrientation="portrait" />
     </application>
 </manifest>

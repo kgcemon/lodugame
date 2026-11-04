@@ -6,6 +6,7 @@ import { EFFECTS, RARITIES } from '../../../shared/skins';
 import { PROFILE_FRAMES } from '../../../shared/frames';
 import { BOARD_AMBIENTS, BOARD_COLLECTIONS, BOARD_CURRENCIES, BOARD_DECORS, BOARD_EMBLEMS, BOARD_PATTERNS, BOARD_RARITIES } from '../../../shared/boards';
 import { Card, Confirm, Empty, ErrorNote, Spinner, useFetch } from './kit';
+import { GiftHistory, GiftSend } from './GiftAdmin';
 
 /** Administrator tools. Every endpoint re-checks the admin role on the server. */
 
@@ -1166,6 +1167,8 @@ export const ADMIN_SECTIONS: { path: string; label: string; icon: string; group:
   { path: 'matches', label: 'Matches', icon: '🎲', group: 'Money', hint: 'Matches, their players and payouts.', page: Matches },
   { path: 'boards', label: 'Boards', icon: '👑', group: 'Shop', hint: 'Board prices (coins or diamonds), looks, publishing and sales.', page: BoardProducts },
   { path: 'dice', label: 'Dice', icon: '🎯', group: 'Shop', hint: 'Dice prices, rarity, stock and sales.', page: DiceProducts },
+  { path: 'gifts', label: 'Send gifts', icon: '🎁', group: 'Gifts', hint: 'Give players coins, diamonds, dice, boards or frames. Credited when they claim it.', page: GiftSend },
+  { path: 'gift-history', label: 'Gift history', icon: '📜', group: 'Gifts', hint: 'Every gift sent, who claimed it, and cancelling unclaimed ones.', page: GiftHistory },
   { path: 'popups', label: 'Popups', icon: '📣', group: 'App', hint: 'Announcements shown on the app home screen.', page: Popups },
   { path: 'settings', label: 'Settings', icon: '⚙️', group: 'App', hint: 'Bonuses, match modes, payouts and frame prices.', page: SettingsTab },
   { path: 'audit', label: 'Audit log', icon: '🛡️', group: 'App', hint: 'Every change an administrator made.', page: Audit },

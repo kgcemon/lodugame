@@ -56,6 +56,8 @@ public final class GameSocket {
     public JSONObject pendingResult;
     /** The match type "Play again" asked for, for the next screen to open. */
     public JSONObject playAgain;
+    /** The coins the ledger last credited me for winning this room's match. */
+    public JSONObject matchReward;
 
     public GameSocket(LudoApp app) {
         this.app = app;
@@ -178,6 +180,15 @@ public final class GameSocket {
             });
         });
         s.on("notify", a -> fire("notify", obj(a)));
+        s.on("reward", a -> {
+            JSONObject r = obj(a);
+            LudoApp.MAIN.post(() -> {
+                if ("match_win".equals(r.optString("source"))) matchReward = r;
+                for (Listener l : listeners) l.onSocketEvent("reward", r);
+            });
+        });
+        s.on("gift:new", a -> fire("gift:new", obj(a)));
+        s.on("gift:update", a -> fire("gift:update", obj(a)));
         s.on("session:replaced", a -> LudoApp.MAIN.post(() -> {
             // This account opened the match on a newer connection (another phone).
             resetRoom();
@@ -275,6 +286,7 @@ public final class GameSocket {
             if ("lobby".equals(r.optString("status"))) {
                 lastUpdate = null;
                 settlement = null;
+                matchReward = null;
             }
             for (Listener l : listeners) l.onSocketEvent("room:state", r);
         });
@@ -285,6 +297,7 @@ public final class GameSocket {
         room = null;
         lastUpdate = null;
         settlement = null;
+        matchReward = null;
         chat.clear();
         unreadChat = 0;
         chatOpen = false;

@@ -14,6 +14,7 @@ import android.widget.TextView;
 import androidx.core.splashscreen.SplashScreen;
 
 import com.ludox.game.LudoApp;
+import com.ludox.game.audio.Sfx;
 
 import com.ludox.game.net.Api;
 
@@ -36,6 +37,8 @@ public class MainActivity extends BaseActivity {
     private boolean launched;
     /** The longest the splash may hold the app before the loading spinner takes over. */
     private static final long SPLASH_MAX_MS = 6000;
+    /** Gifts that already popped up by themselves on this phone. */
+    private static final String PREF_GIFTS_SEEN = "gifts_popped";
     PlayFlow play;
     /** Today's daily spin from the server (available, prizes); null until loaded. */
     JSONObject spinState;
@@ -328,11 +331,83 @@ public class MainActivity extends BaseActivity {
 
     void refreshHeader() {
         if (balance == null) return;
-        balance.setText(Ui.fmt(app.balance()));
+        // While a reward counts a balance up, it is the one writing that number.
+        if (!RewardFx.counting("coins")) balance.setText(Ui.fmt(app.balance()));
         int unread = app.prefs.getInt("unread_notifications", 0);
         bell.setText(String.valueOf(Math.min(unread, 99)));
         bell.setVisibility(unread > 0 ? View.VISIBLE : View.GONE);
-        gems.setText(Ui.fmt(app.wallet.optLong("gems")));
+        if (!RewardFx.counting("diamonds")) gems.setText(Ui.fmt(app.wallet.optLong("gems")));
+    }
+
+    void showGems(long value) {
+        if (gems != null) gems.setText(Ui.fmt(value));
+    }
+
+    /** A reward the server confirmed: it flies to the coin or diamond counter in the top bar. */
+    void playReward(JSONObject reward) {
+        if (reward == null) {
+            refreshHeader();
+            return;
+        }
+        boolean diamonds = "diamonds".equals(reward.optString("kind"));
+        RewardFx.Play p = new RewardFx.Play();
+        p.reward = reward;
+        p.counter = diamonds ? gems : balance;
+        p.anchor = p.counter;
+        p.done = this::refreshHeader;
+        RewardFx.play(root, p);
+    }
+
+    @Override
+    protected void onReward(JSONObject reward) {
+        if (ready) playReward(reward);
+    }
+
+    @Override
+    protected void onGiftArrived(JSONObject gift) {
+        Sfx.get().play(Sfx.S.GIFT_NEW, 0.8f, 1f);
+        checkGifts();
+    }
+
+    /**
+     * How many gifts wait (the badge), and on the home screen, with nothing else open: the newest
+     * this phone hasn't popped up yet opens by itself. That covers a gift sent just now and one
+     * sent while I was away. It stays in the inbox if I close it.
+     */
+    void checkGifts() {
+        if (!ready) return;
+        app.api.get("/gifts", new Api.Cb(this) {
+            @Override
+            public void ok(JSONObject r) {
+                int n = r.optInt("unclaimed");
+                boolean changed = n != app.unclaimedGifts;
+                app.unclaimedGifts = n;
+                if (changed && tab == 0) selectTab(0);
+                org.json.JSONArray items = r.optJSONArray("items");
+                if (items == null || !foreground || popupBusy || GiftOpening.isOpen() || app.socket.room != null) return;
+                java.util.Set<String> seen = new java.util.HashSet<>(app.prefs.getStringSet(PREF_GIFTS_SEEN, new java.util.HashSet<>()));
+                // One popup for however many arrived: the rest are in the inbox, under the badge.
+                JSONObject first = null;
+                for (int i = 0; i < items.length(); i++) {
+                    JSONObject g = items.optJSONObject(i);
+                    if (g == null || !"pending".equals(g.optString("status")) || !seen.add(g.optString("id"))) continue;
+                    if (first == null) first = g;
+                }
+                if (first == null) return;
+                app.prefs.edit().putStringSet(PREF_GIFTS_SEEN, seen).apply();
+                GiftOpening.show(MainActivity.this, first, MainActivity.this::afterGift);
+            }
+
+            @Override
+            public void err(Api.Error e) {
+                // The badge keeps its last number.
+            }
+        });
+    }
+
+    private void afterGift() {
+        refreshHeader();
+        checkGifts();
     }
 
     /** Re-read /config (gem packs and re-roll prices may change on the server). */
@@ -366,6 +441,7 @@ public class MainActivity extends BaseActivity {
         selectTab(tab);
         refreshRequests();
         dailyPopups();
+        checkGifts();
     }
 
     /**
@@ -410,16 +486,19 @@ public class MainActivity extends BaseActivity {
                     d.setOnDismissListener(x -> {
                         popupBusy = false;
                         selectTab(tab);
+                        checkGifts();
                     });
                     d.show();
                 } else {
                     popupBusy = false;
+                    checkGifts();
                 }
             }
 
             @Override
             public void err(Api.Error e) {
                 popupBusy = false;
+                checkGifts();
             }
         });
     }
@@ -461,6 +540,9 @@ public class MainActivity extends BaseActivity {
         switch (event) {
             case "wallet":
                 refreshHeader();
+                break;
+            case "gift:update":
+                checkGifts();
                 break;
             case "friends:changed":
                 if (tab == 1 || tab == 0) selectTab(tab);
@@ -512,7 +594,8 @@ public class MainActivity extends BaseActivity {
         app.socket.disconnect();
         app.cookies.clear();
         app.user = null;
-        app.prefs.edit().remove("unread_notifications").apply();
+        app.prefs.edit().remove("unread_notifications").remove(PREF_GIFTS_SEEN).apply();
+        app.unclaimedGifts = 0;
         toAuth();
     }
 

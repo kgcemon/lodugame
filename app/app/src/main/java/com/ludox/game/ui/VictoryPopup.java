@@ -55,6 +55,8 @@ final class VictoryPopup {
         String headline, sub;
         /** Coins I won (counted up), or 0. */
         long coinsWon;
+        /** The ledger entry for those coins, once the server confirmed them: they fly into the wallet. */
+        JSONObject reward;
         /** A quieter line about the payout when I didn't win, or null. */
         String payoutNote;
         List<Row> ranking;
@@ -191,6 +193,17 @@ final class VictoryPopup {
         col.addView(more, ml);
 
         stage.addView(scroll, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // The wallet the coins fly into, showing what the server says I have.
+        TextView walletPill = null;
+        if (s.reward != null) {
+            walletPill = Ui.bold(Ui.text(a, "🪙 " + Ui.fmt(RewardFx.wasPlayed(s.reward) ? a.app.balance() : s.reward.optLong("before")), 15, Color.WHITE));
+            walletPill.setGravity(Gravity.CENTER);
+            walletPill.setBackground(Ui.roundStroke(0xcc1f0f00, Ui.dp(a, 999), Ui.dp(a, 2), 0xffffc94a));
+            walletPill.setPadding(Ui.dp(a, 14), Ui.dp(a, 6), Ui.dp(a, 14), Ui.dp(a, 6));
+            FrameLayout.LayoutParams wl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+            wl.setMargins(0, Ui.dp(a, 10), Ui.dp(a, 12), 0);
+            stage.addView(walletPill, wl);
+        }
         FriendPopups.Floaters confetti = null;
         if (s.win) {
             confetti = new FriendPopups.Floaters(a, new String[]{"🎉", "✨", "💛", "⭐", "🪙", "💎"}, true);
@@ -212,6 +225,7 @@ final class VictoryPopup {
             trophy.setTranslationY(-Ui.dp(a, 320));
             trophy.animate().translationY(0).setStartDelay(250).setDuration(800).setInterpolator(new BounceInterpolator()).start();
         }
+        if (face != null && s.win && Effects.level() != Effects.REDUCED) FriendPopups.breathe(hero);
         if (face != null) {
             face.setScaleX(0f);
             face.setScaleY(0f);
@@ -235,6 +249,22 @@ final class VictoryPopup {
             count.setInterpolator(new DecelerateInterpolator());
             count.addUpdateListener(an -> pz.setText("+🪙 " + Ui.fmt(Math.round(s.coinsWon * (float) an.getAnimatedValue()))));
             count.start();
+        }
+        if (s.reward != null && walletPill != null && !RewardFx.wasPlayed(s.reward)) {
+            TextView target = walletPill;
+            View from = prize;
+            LudoApp.MAIN.postDelayed(() -> {
+                if (!shell.isShowing()) return;
+                RewardFx.Play play = new RewardFx.Play();
+                play.reward = s.reward;
+                play.anchor = target;
+                play.counter = target;
+                play.prefix = "🪙 ";
+                play.from = from;
+                // The prize pill already says the amount.
+                play.announce = false;
+                RewardFx.play(stage, play);
+            }, 2100);
         }
         if (confetti != null) {
             FriendPopups.Floaters c = confetti;

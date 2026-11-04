@@ -115,6 +115,10 @@ public class GameActivity extends BaseActivity {
     /** Short screens (e.g. 320x568 dp): smaller panels and controls, so the board keeps its room. */
     private boolean compact;
     private FrameLayout effects;
+    /** Capture and home effects over the board. */
+    private BoardFx boardFx;
+    /** How many tokens each colour had home at the last redraw, so a new one can pop. */
+    private final java.util.Map<String, Integer> homeCounts = new java.util.HashMap<>();
     private LinearLayout chatPanel, emotePanel, chatList;
     private ScrollView chatScroll;
     private android.app.Dialog resultDialog;
@@ -162,6 +166,19 @@ public class GameActivity extends BaseActivity {
         renderer.listener = () -> runOnUiThread(() -> gl.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS));
         // The die tumbles on the roller's card, in step with the board animation.
         renderer.rollListener = (player, value, ms) -> runOnUiThread(() -> animateRoll(player, value, ms));
+        // Only the renderer's own queue fires these, and only for updates that follow on from
+        // the last (onUpdate): nothing replays after a reconnect.
+        renderer.fxListener = new GameRenderer.FxListener() {
+            @Override
+            public void onCapture(int by, int victim, int victimToken, float x, float y) {
+                runOnUiThread(() -> showCapture(by, victim, victimToken, x, y));
+            }
+
+            @Override
+            public void onHome(int player, int token, int count, float x, float y) {
+                runOnUiThread(() -> showHome(player, count, x, y));
+            }
+        };
         gl = new GLSurfaceView(this);
         gl.setEGLContextClientVersion(2);
         gl.setEGLConfigChooser(new ConfigChooser());
@@ -195,6 +212,7 @@ public class GameActivity extends BaseActivity {
     protected void onResume() {
         super.onResume();
         gl.onResume();
+        renderer.fxLevel = Effects.level();
         if (local == null && app.socket.room == null) {
             if (!resultOpen) finish();
             return;
@@ -283,7 +301,9 @@ public class GameActivity extends BaseActivity {
                 finish();
                 break;
             case "match:settled":
-                if (state != null && "over".equals(state.phase)) showResult(true);
+                // Already showing: add the coins to it. Otherwise the card, when the last token has
+                // finished celebrating, finds them (see onUpdate).
+                if (state != null && "over".equals(state.phase) && resultShownFor == state.seq) showResult(true);
                 break;
             case "chat:message":
                 if (!app.socket.mySeatId().equals(((JSONObject) data).optString("seatId"))) Sfx.get().play(Sfx.S.MESSAGE, 0.8f, 1f);
@@ -358,11 +378,63 @@ public class GameActivity extends BaseActivity {
         renderChips();
         renderStatus();
         if ("over".equals(next.phase)) {
-            // Let the final hop play before the result card.
-            LudoApp.MAIN.postDelayed(() -> showResult(false), 1400);
+            // Let the final hop and the last token's celebration play before the result card.
+            LudoApp.MAIN.postDelayed(() -> showResult(false), 2300);
         } else {
             dismissResult();
         }
+    }
+
+    /** A match win lands on the result screen, which is about to open (see showResult). */
+    @Override
+    protected void onReward(JSONObject reward) {}
+
+    /** Is this seat mine? (Offline every seat has a name, and none is "you".) */
+    private boolean isMeAt(int player) {
+        return local == null && state != null && player >= 0 && player < state.players.size() && state.players.get(player).color.equals(myColor());
+    }
+
+    private String nameAt(int player) {
+        return state != null && player >= 0 && player < state.players.size() ? state.players.get(player).name : "Someone";
+    }
+
+    /** A token was caught (the server's event): the moment on the board and the words for everyone. */
+    private void showCapture(int by, int victim, int victimToken, float x, float y) {
+        if (boardFx == null || state == null || victim >= state.players.size()) return;
+        int color = Board.colorArgb(state.players.get(victim).color);
+        String top, sub = null;
+        boolean bold = true;
+        if (isMeAt(by)) {
+            top = "TOKEN CAPTURED!";
+            sub = state.seq % 2 == 0 ? "GREAT MOVE!" : "NICE SHOT!";
+        } else if (isMeAt(victim)) {
+            // Quiet: the sound and a buzz already told me.
+            top = nameAt(by) + " caught your token";
+            bold = false;
+        } else if (local != null) {
+            top = "TOKEN CAPTURED!";
+            sub = nameAt(by) + " caught " + nameAt(victim);
+        } else {
+            top = nameAt(by) + " caught " + nameAt(victim);
+            bold = false;
+        }
+        boardFx.capture(x, y, victim, victimToken, color, top, sub, bold);
+        // A small nudge on the card of the player who lost it.
+        if (Effects.level() != Effects.REDUCED) {
+            View chip = root.findViewWithTag("chip:" + state.players.get(victim).color);
+            if (chip != null) ObjectAnimator.ofFloat(chip, "translationX", 0, -Ui.dp(this, 5), Ui.dp(this, 5), -Ui.dp(this, 3), 0).setDuration(320).start();
+        }
+    }
+
+    /** A token reached home: 1st to 4th, each bigger than the last. */
+    private void showHome(int player, int count, float x, float y) {
+        if (boardFx == null || state == null || player >= state.players.size()) return;
+        int color = Board.colorArgb(state.players.get(player).color);
+        boolean mine = isMeAt(player) || local != null;
+        String top = count >= 4 ? "ALL HOME!" : count == 3 ? "3 HOME! ONE LEFT!" : count == 2 ? "2 HOME!" : "HOME!";
+        String sub = mine ? (count >= 4 ? "ALL TOKENS COMPLETED!" : "TOKEN COMPLETED!") : null;
+        if (!mine) top = nameAt(player) + ": " + top;
+        boardFx.home(x, y, count, color, top, sub, mine);
     }
 
     /** An online 2 vs 2 match. */
@@ -937,6 +1009,8 @@ public class GameActivity extends BaseActivity {
         bottomRow = cornerRow(0, 3);
         boardArea = new FrameLayout(this);
         boardArea.addView(gl, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        boardFx = new BoardFx(this, renderer);
+        boardArea.addView(boardFx, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         boardArea.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateBand());
         buildNetCard();
         stack.addView(topRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -1280,6 +1354,23 @@ public class GameActivity extends BaseActivity {
             av.addView(nb, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                     gone ? Gravity.CENTER : Gravity.TOP | (right ? Gravity.START : Gravity.END)));
         }
+        // How far along this player is: one pip per token, gold once it's home.
+        int homeNow = 0;
+        for (int tk : p.tokens) if (tk == GameRenderer.HOME_PROGRESS) homeNow++;
+        StringBuilder pipText = new StringBuilder();
+        for (int k = 0; k < 4; k++) pipText.append(k < homeNow ? "●" : "○");
+        TextView pips = Ui.bold(Ui.text(this, pipText, compact ? 7 : 8, Ui.GOLD));
+        pips.setGravity(Gravity.CENTER);
+        pips.setIncludeFontPadding(false);
+        pips.setShadowLayer(3, 0, 0, 0xff000000);
+        pips.setContentDescription(homeNow + " of 4 tokens home");
+        av.addView(pips, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL));
+        Integer homeBefore = homeCounts.put(p.color, homeNow);
+        if (homeBefore != null && homeNow > homeBefore && Effects.level() != Effects.REDUCED) {
+            pips.setScaleX(1.9f);
+            pips.setScaleY(1.9f);
+            pips.animate().scaleX(1f).scaleY(1f).setDuration(420).setInterpolator(new android.view.animation.OvershootInterpolator(3f)).start();
+        }
         if (bot || pstats != null) {
             TextView lvl = PlayerProfile.levelBadge(this, bot ? "BOT" : "Lv " + PlayerProfile.level(pstats), compact ? 8 : 9);
             av.addView(lvl, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -1583,7 +1674,10 @@ public class GameActivity extends BaseActivity {
             spec.onPrimary = this::localRematch;
             spec.onLeave = this::finish;
         } else {
-            spec.headline = iWon ? "VICTORY!" : "GOOD GAME";
+            spec.headline = iWon ? "YOU WIN!" : "GOOD GAME";
+            // The ledger's own entry: its coins fly into the wallet, from the old balance to the new.
+            JSONObject won = app.socket.matchReward;
+            if (iWon && won != null && won.optString("matchId").equals(app.socket.room != null ? app.socket.room.optString("matchId") : "")) spec.reward = won;
             boolean byForfeit = !leftColors.isEmpty() && (teamMatch || stillRacing() == 1);
             spec.sub = iWon ? (byForfeit ? (teamMatch ? "The other team forfeited. Your team won the match!" : "Your opponents are out. You won the match!")
                     : teamMatch ? "Your team won the match!" : "You won the match!")

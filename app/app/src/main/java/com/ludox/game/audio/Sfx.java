@@ -24,11 +24,12 @@ public final class Sfx {
     public enum S {
         CLICK, DICE_SHAKE, STEP, CAPTURE, HOME, TURN, EXTRA, VICTORY, DEFEAT, ERROR, MESSAGE,
         E_LAUGH, E_LOVE, E_FIRE, E_CLAP, E_WOW, E_CRY, E_PARTY, E_COOL, E_POP,
-        SEARCH, TICK, MATCH_FOUND, WARNING
+        SEARCH, TICK, MATCH_FOUND, WARNING,
+        COIN, DIAMOND, GIFT_NEW, GIFT_OPEN, HOME_FINAL
     }
 
     /** Bump when a sound's design changes so cached files are regenerated. */
-    private static final int VERSION = 4;
+    private static final int VERSION = 5;
     private static Sfx instance;
 
     private final SharedPreferences prefs;
@@ -140,6 +141,8 @@ public final class Sfx {
         switch (s) {
             case STEP:
             case CLICK:
+            case COIN:
+            case DIAMOND:
                 return false;
             default:
                 return true;
@@ -152,6 +155,7 @@ public final class Sfx {
             case DICE_SHAKE: return 500;
             case CAPTURE: case HOME: case TURN: case EXTRA: return 150;
             case STEP: return 40;
+            case COIN: case DIAMOND: return 45;
             default: return 60;
         }
     }
@@ -159,8 +163,8 @@ public final class Sfx {
     /** When SoundPool runs out of streams, game sounds win over decoration. */
     private static int priority(S s) {
         switch (s) {
-            case DICE_SHAKE: case CAPTURE: case WARNING: case VICTORY: case DEFEAT: return 3;
-            case STEP: case HOME: case TURN: case EXTRA: return 2;
+            case DICE_SHAKE: case CAPTURE: case WARNING: case VICTORY: case DEFEAT: case HOME_FINAL: return 3;
+            case STEP: case HOME: case TURN: case EXTRA: case GIFT_OPEN: return 2;
             default: return 1;
         }
     }
@@ -323,6 +327,42 @@ public final class Sfx {
                 x.bell(0.32, 0.6, C7, 0.3).bell(0.45, 0.5, E6 * 2, 0.22).bell(0.6, 0.55, G6 * 2, 0.18);
                 x.noise(0.32, 0.8, 0.07, 0.9, 0.9, 0.02, 2);
                 return x.render(0.8);
+            }
+            case COIN:
+                // A coin landing in the wallet: a short bright clink.
+                return new Synth(0.2)
+                        .tone(0, 0.012, 5200, 5200, Synth.SQUARE, 0.12, 0.0005, 2)
+                        .bell(0, 0.14, 2637, 0.5).bell(0.022, 0.16, 3520, 0.38)
+                        .render(0.55);
+            case DIAMOND:
+                // Glassier and higher than a coin, with a little shimmer.
+                return new Synth(0.32)
+                        .bell(0, 0.24, 3136, 0.42).bell(0.03, 0.26, 4186, 0.34).bell(0.07, 0.2, 5274, 0.2)
+                        .noise(0.01, 0.2, 0.05, 0.95, 0.9, 0.01, 2)
+                        .render(0.55);
+            case GIFT_NEW:
+                return new Synth(0.7)
+                        .bell(0, 0.34, G5, 0.5).bell(0.11, 0.34, C6, 0.5).bell(0.22, 0.34, E6, 0.5).bell(0.33, 0.36, G6, 0.5)
+                        .noise(0.3, 0.3, 0.07, 0.9, 0.9, 0.02, 2)
+                        .render(0.7);
+            case GIFT_OPEN: {
+                // A rising shake, then the lid pops into a bright chord.
+                x = new Synth(1.05);
+                x.noise(0, 0.48, 0.32, 0.25, 0, 0.3, 0.7);
+                x.tone(0, 0.5, 240, 760, Synth.SAW, 0.12, 0.2, 0.7);
+                x.tone(0.47, 0.08, 300, 1400, Synth.SINE, 0.6, 0.002, 1.5);
+                for (double f : new double[]{C6, E6, G6}) x.tone(0.5, 0.55, f, f, Synth.TRIANGLE, 0.25, 0.004, 1.7);
+                x.bell(0.52, 0.5, C7, 0.28).bell(0.64, 0.4, G6 * 2, 0.16);
+                x.noise(0.5, 0.5, 0.08, 0.9, 0.9, 0.02, 2);
+                return x.render(0.8);
+            }
+            case HOME_FINAL: {
+                // The fourth token home: the home chime, climbing into a held chord.
+                x = new Synth(1.25);
+                x.bell(0, 0.4, C6, 0.45).bell(0.08, 0.4, E6, 0.45).bell(0.16, 0.4, G6, 0.45).bell(0.24, 0.45, C7, 0.5);
+                for (double f : new double[]{C6, E6, G6, C7}) x.tone(0.34, 0.85, f, f, Synth.TRIANGLE, 0.2, 0.01, 1.7, 5, 0.004);
+                x.noise(0.34, 0.8, 0.08, 0.9, 0.9, 0.03, 2);
+                return x.render(0.85);
             }
             default: // E_POP
                 return new Synth(0.25)

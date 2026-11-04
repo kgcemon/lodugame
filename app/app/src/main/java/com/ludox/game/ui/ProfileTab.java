@@ -139,6 +139,14 @@ final class ProfileTab {
         effects.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 8));
         effects.setOnCheckedChangeListener((b, on) -> app.prefs.edit().putBoolean(BoardAmbient.PREF, on).apply());
         prefsCard.addView(effects);
+        android.widget.Switch fullFx = new android.widget.Switch(a);
+        fullFx.setText("🎆  Full reward and capture animations");
+        fullFx.setTextColor(Ui.INK);
+        fullFx.setTextSize(15);
+        fullFx.setChecked(Effects.fullWanted());
+        fullFx.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 8));
+        fullFx.setOnCheckedChangeListener((b, on) -> app.prefs.edit().putBoolean(Effects.PREF, on).apply());
+        prefsCard.addView(fullFx);
         android.widget.Switch vibrate = new android.widget.Switch(a);
         vibrate.setText("📳  Vibrate on my turn");
         vibrate.setTextColor(Ui.INK);

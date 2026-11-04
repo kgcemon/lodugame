@@ -18,7 +18,9 @@ export type TxType =
   | 'referral_reward'
   | 'admin_adjustment'
   /** Coins spent in the shop (boards). */
-  | 'shop_purchase';
+  | 'shop_purchase'
+  /** A gift from an administrator, claimed by the player. */
+  | 'gift';
 
 export interface WalletTxRow {
   id: string;

@@ -23,7 +23,8 @@ final class Notifications {
             case "wallet":
                 return "Your balance was adjusted by " + p.optLong("amount") + " coins" + (p.has("reason") ? ": " + p.optString("reason") : "");
             case "system":
-                return p.optString("message", "System message");
+                // A gift says more than the line kept for apps that can't open one.
+                return p.has("giftId") ? p.optString("title", "🎁 A gift from LudoX") : p.optString("message", "System message");
             default:
                 return null;
         }

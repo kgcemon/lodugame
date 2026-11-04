@@ -1,4 +1,5 @@
 import type { EmoteId } from './social';
+import type { RewardEvent } from './gifts';
 import type { Color, GameEvent, GameState, PlayerKind } from './types';
 
 /** Socket.IO contract shared by the client and the authoritative server. */
@@ -192,6 +193,12 @@ export interface ServerToClientEvents {
   'session:replaced': () => void;
   /** Wallet numbers changed (entry fee, payout, refund, admin adjustment...). */
   'wallet': (w: { balance: number; totalEarned: number; totalSpent: number }) => void;
+  /** Coins or diamonds the ledger just credited, for the app to animate (e.g. a match win). */
+  'reward': (r: RewardEvent) => void;
+  /** A new gift waits in your inbox. */
+  'gift:new': (g: { giftId: string; title: string }) => void;
+  /** A gift of yours changed: claimed on another phone, or cancelled by an administrator. */
+  'gift:update': (g: { giftId: string; status: string }) => void;
   'notify': (n: { id: string; type: string; payload: Record<string, unknown>; createdAt: string; readAt: string | null }) => void;
   'friends:changed': () => void;
   /** Someone asked to be your friend (a live Accept / Decline popup). */

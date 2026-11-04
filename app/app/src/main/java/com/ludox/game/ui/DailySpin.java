@@ -94,6 +94,8 @@ final class DailySpin extends Dialog {
     private final TextView subtitle;
     private ValueAnimator spinner;
     private boolean spinning, done;
+    /** What the server paid for this spin, played when the popup closes. */
+    private JSONObject reward;
     private long lastTick;
     private int lastSlice = Integer.MIN_VALUE;
     /** Degrees per second the wheel turns while it waits for the server. */
@@ -255,6 +257,10 @@ final class DailySpin extends Dialog {
         if (spinner != null) spinner.removeAllListeners();
         if (spinner != null) spinner.cancel();
         super.dismiss();
+        // The diamonds the server confirmed now fly to the counter in the top bar.
+        JSONObject won = reward;
+        reward = null;
+        if (won != null) a.playReward(won);
     }
 
     @Override
@@ -306,6 +312,12 @@ final class DailySpin extends Dialog {
             public void ok(JSONObject r) {
                 LudoApp.get().mergeWallet(r.optJSONObject("wallet"));
                 if (r.has("spin")) a.spinState = r.optJSONObject("spin");
+                // The diamonds fly to the counter when this popup closes; until then it keeps the old number.
+                reward = r.optJSONObject("reward");
+                if (reward != null) {
+                    RewardFx.hold("diamonds");
+                    a.showGems(reward.optLong("before"));
+                }
                 int index = r.optInt("index", 0);
                 int prize = r.optInt("prize", prizes[index]);
                 // Let the wind-up finish so the hand-off to the slow-down is smooth.
@@ -447,10 +459,7 @@ final class DailySpin extends Dialog {
                             .withEndAction(() -> stage.removeView(gem)).start())
                     .start();
         }
-        LudoApp.MAIN.postDelayed(() -> {
-            a.refreshHeader();
-            sound(Sfx.S.HOME, 0.8f, 1.2f);
-        }, 1500);
+        LudoApp.MAIN.postDelayed(() -> sound(Sfx.S.HOME, 0.8f, 1.2f), 1500);
 
         subtitle.setText("You won " + prize + (prize == 1 ? " diamond" : " diamonds") + "! Come back tomorrow for another spin.");
         collect.setVisibility(View.VISIBLE);

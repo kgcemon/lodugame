@@ -182,8 +182,8 @@ final class HomeTab {
         left.addView(spinButton());
         hero.addView(left, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.START | Gravity.TOP));
         LinearLayout right = Ui.vbox(a);
+        right.addView(giftButton());
         right.addView(sideButton("❓", "RULES", v -> rules()));
-        right.addView(sideButton("👥", "FRIENDS", v -> a.selectTab(1)));
         hero.addView(right, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END | Gravity.TOP));
         col.addView(hero, Ui.lpMatchWrap());
     }
@@ -236,6 +236,28 @@ final class HomeTab {
         return c;
     }
 
+    /** The gift inbox, with a beating badge while gifts wait to be claimed. */
+    private View giftButton() {
+        int waiting = app.unclaimedGifts;
+        LinearLayout c = Ui.vbox(a);
+        c.setGravity(Gravity.CENTER_HORIZONTAL);
+        FrameLayout box = new FrameLayout(a);
+        Fx.Tile t = Fx.badge(a, "🎁", waiting > 0 ? Fx.YELLOW : Fx.PURPLE, 50, v -> a.startActivity(new android.content.Intent(a, GiftInboxActivity.class)));
+        t.setContentDescription(waiting > 0 ? "Gift inbox, " + waiting + " waiting" : "Gift inbox");
+        box.addView(t, new FrameLayout.LayoutParams(Ui.dp(a, 50), Ui.dp(a, 54), Gravity.CENTER));
+        if (waiting > 0) {
+            TextView n = Ui.bold(Ui.text(a, waiting > 9 ? "9+" : String.valueOf(waiting), 10, android.graphics.Color.WHITE));
+            n.setGravity(Gravity.CENTER);
+            n.setBackground(Ui.roundStroke(0xffe53945, Ui.dp(a, 999), Ui.dp(a, 2), android.graphics.Color.WHITE));
+            n.setElevation(Ui.dp(a, 8));
+            box.addView(n, new FrameLayout.LayoutParams(Ui.dp(a, 20), Ui.dp(a, 20), Gravity.TOP | Gravity.END));
+        }
+        c.addView(box, new LinearLayout.LayoutParams(Ui.dp(a, 56), Ui.dp(a, 56)));
+        c.addView(Fx.GoldText.label(a, "GIFTS", 10, 0xff3b0d8c));
+        Ui.margins(c, a, 0, 4, 0, 6);
+        return c;
+    }
+
     private void claimBonus(JSONObject d, boolean available) {
         if (!available) {
             LudoApp.toast("Daily bonus collected — come back tomorrow!");
@@ -245,10 +267,10 @@ final class HomeTab {
             @Override
             public void ok(JSONObject res) {
                 app.mergeWallet(res.optJSONObject("wallet"));
-                com.ludox.game.audio.Sfx.get().play(com.ludox.game.audio.Sfx.S.HOME);
-                LudoApp.toast("+" + Ui.fmt(d.optLong("amount")) + " coins collected!");
                 a.refreshHeader();
                 a.selectTab(0);
+                // The coins the server just confirmed fly up to the wallet.
+                a.playReward(res.optJSONObject("reward"));
             }
         });
     }

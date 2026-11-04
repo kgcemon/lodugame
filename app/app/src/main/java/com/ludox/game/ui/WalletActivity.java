@@ -143,8 +143,10 @@ public class WalletActivity extends BaseActivity {
             @Override
             public void ok(JSONObject r) {
                 app.mergeWallet(r.optJSONObject("wallet"));
-                LudoApp.toast("Daily bonus collected!");
                 render();
+                RewardFx.Play p = new RewardFx.Play();
+                p.reward = r.optJSONObject("reward");
+                RewardFx.play(root, p);
             }
         });
     }

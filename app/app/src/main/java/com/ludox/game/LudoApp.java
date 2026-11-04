@@ -35,6 +35,8 @@ public class LudoApp extends Application {
     /** Public config (/config): modes, bonuses, payout multiplier. */
     public JSONObject config;
     public boolean requireEmailVerification;
+    /** Gifts waiting to be claimed (the badge on the home screen). */
+    public int unclaimedGifts;
 
     public static LudoApp get() {
         return instance;

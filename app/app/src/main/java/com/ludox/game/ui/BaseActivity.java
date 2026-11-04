@@ -148,6 +148,12 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
             case "notify":
                 showNotification((JSONObject) data);
                 break;
+            case "reward":
+                onReward((JSONObject) data);
+                break;
+            case "gift:new":
+                onGiftArrived((JSONObject) data);
+                break;
             // Friend requests pop up live on any screen, mid-match included.
             case "friend:request": {
                 FriendPopups.request(this, (JSONObject) data);
@@ -190,6 +196,22 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
         }
     }
 
+    /** A reward the server pushed (a match win when I'm not on the game screen): show it here. */
+    protected void onReward(JSONObject reward) {
+        RewardFx.Play p = new RewardFx.Play();
+        p.reward = reward;
+        RewardFx.play(root, p);
+    }
+
+    /**
+     * A gift just arrived. Most screens only mention it, so nothing gets in the way (above all a
+     * match); the home screen opens it (see MainActivity), and it waits in the inbox anyway.
+     */
+    protected void onGiftArrived(JSONObject gift) {
+        Sfx.get().play(Sfx.S.GIFT_NEW, 0.8f, 1f);
+        LudoApp.toast(gift.optString("title", "🎁 You received a gift") + " — it's in your Gift Inbox");
+    }
+
     protected void openGame() {
         startActivity(new Intent(this, GameActivity.class));
         if (this instanceof RoomActivity) finish();
@@ -204,8 +226,8 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
         if (p == null) p = new JSONObject();
         String text = Notifications.describe(n.optString("type"), p);
         String type = n.optString("type");
-        // Friend requests and acceptances have their own popups.
-        if ("friend_request".equals(type) || "friend_accepted".equals(type)) text = null;
+        // Friend requests, acceptances and gifts have their own popups.
+        if ("friend_request".equals(type) || "friend_accepted".equals(type) || p.has("giftId")) text = null;
         if ("room_invite".equals(type) && !(this instanceof GameActivity)) {
             InviteToast.show(this, p);
         } else if (text != null && !(this instanceof GameActivity)) {

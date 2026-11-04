@@ -14,6 +14,7 @@ import { PROFILE_FRAMES } from '../shared/frames';
 import { BOARDS, DEFAULT_BOARD } from '../shared/boards';
 import { diceProducts, diceSales, stockSold, type DiceProduct } from './dice';
 import { boardProducts, boardSales, type BoardProduct } from './boards';
+import { adminGiftRoutes, playerGiftRoutes, rewardFromGems, rewardFromWallet, type GiftCatalogue } from './gifts';
 import { payoutPolicy } from './settings';
 import { spin, spinState } from './spin';
 import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type TxType } from './wallet';
@@ -21,7 +22,7 @@ import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type T
 /** Player-facing and administrator REST API (everything under /api except auth). */
 
 const PAGE = 20;
-const TX_TYPES: TxType[] = ['welcome_bonus', 'match_entry', 'match_reward', 'match_refund', 'daily_bonus', 'referral_reward', 'admin_adjustment', 'shop_purchase'];
+const TX_TYPES: TxType[] = ['welcome_bonus', 'match_entry', 'match_reward', 'match_refund', 'daily_bonus', 'referral_reward', 'admin_adjustment', 'shop_purchase', 'gift'];
 const MIN_WINRATE_MATCHES = 5;
 /** How many friend requests one player may ever send another (declined or cancelled ones count). */
 export const MAX_FRIEND_REQUESTS = 2;
@@ -151,6 +152,12 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
     boardProducts(settings.get().boardProducts, settings.get().boardCustom, (id) => settings.price('board', id), await boardSales(db));
   const allDice = async (): Promise<DiceProduct[]> =>
     diceProducts(settings.get().diceProducts, (id) => settings.price('dice', id), await diceSales(db), await stockSold(db));
+  /** What can be gifted: every real product, at the prices the shop charges today. */
+  const giftCatalogue: GiftCatalogue = {
+    dice: async () => (await allDice()).map((p) => ({ id: p.id, name: p.name, rarity: p.rarity, price: p.price, currency: 'diamonds' })),
+    board: async () => (await allBoards()).map((p) => ({ id: p.id, name: p.name, rarity: p.rarity, price: p.price, currency: p.currency === 'gems' ? 'diamonds' : 'coins' })),
+    frame: async () => shopCatalogue('frame').map((p) => ({ id: p.id, name: p.name, rarity: 'epic', price: p.price, currency: 'diamonds' })),
+  };
 
   // ---------------------------------------------------------------- public config
 
@@ -300,7 +307,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const tx = await claimDailyBonus(db, req.user!.id, settings.get().dailyBonus);
       const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
       presence.emit(req.user!.id, 'wallet', wallet);
-      return { ok: true, tx, wallet };
+      return { ok: true, tx, wallet, reward: rewardFromWallet(tx, 'daily_bonus') };
     }),
   );
 
@@ -315,7 +322,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const result = await spin(db, req.user!.id);
       const wallet = await walletSummary(db, req.user!.id, settings.get().dailyBonus);
       presence.emit(req.user!.id, 'wallet', wallet);
-      return { ok: true, ...result, spin: await spinState(db, req.user!.id), wallet };
+      return { ok: true, ...result, spin: await spinState(db, req.user!.id), wallet, reward: rewardFromGems(result.txId, result.prize, result.gems, 'daily_spin') };
     }),
   );
 
@@ -439,6 +446,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       return { gems: wallet.gems, granted: pack.gems, wallet };
     }),
   );
+
+  playerGiftRoutes(r, ctx, giftCatalogue);
 
   // ---------------------------------------------------------------- rooms, matches, stats
 
@@ -1184,6 +1193,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       return { ok: true };
     }),
   );
+
+  adminGiftRoutes(admin, ctx, giftCatalogue);
 
   r.use('/admin', admin);
 
