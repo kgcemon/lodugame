@@ -28,7 +28,7 @@ final class BoardAmbient extends View {
 
     /** Whether board ambient effects are on (Settings → Board effects). */
     static boolean enabled() {
-        return LudoApp.get().prefs.getBoolean(PREF, true);
+        return Effects.ambience() && LudoApp.get().prefs.getBoolean(PREF, true);
     }
 
     private static final class Bit {

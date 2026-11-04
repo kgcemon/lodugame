@@ -7,6 +7,7 @@ import type { MatchMode, Settings } from './settings';
 import { applyWalletTx, walletSummary } from './wallet';
 import { MAX_REROLLS, REROLL_COSTS, applyGemTx, gemBalance, rerollsUsed } from './gems';
 import { cosmetics } from './skins';
+import { winTable } from './stats';
 import { rewardFromWallet } from './gifts';
 import type { RewardEvent } from '../shared/gifts';
 
@@ -253,22 +254,20 @@ export class MatchLedger {
 
   /** Leaderboard places (by wins, as on the Ranks tab) of players who have won at least once. */
   async ranks(userIds: string[]): Promise<Map<string, number>> {
-    if (!userIds.length) return new Map();
+    const out = new Map<string, number>();
+    if (!userIds.length) return out;
     const marks = userIds.map((_, i) => `$${i + 1}`).join(', ');
-    const rows = (await this.ctx.db.query<{ user_id: string; wins: number | string; place: number | string }>(
-      `with stats as (
-         select mp.user_id, sum(case when mp.won then 1 else 0 end) as wins
-         from match_players mp
-         join matches m on m.id = mp.match_id
-         join users u on u.id = mp.user_id and u.suspended_at is null
-         where m.status = 'completed' and mp.status in ('finished', 'forfeited')
-         group by mp.user_id
-       )
-       select me.user_id, me.wins, 1 + (select count(*) from stats o where o.wins > me.wins) as place
-       from stats me where me.user_id in (${marks})`,
+    const rows = (await this.ctx.db.query<{ user_id: string; wins: number | string }>(
+      `select mp.user_id, sum(case when mp.won then 1 else 0 end) as wins
+       from match_players mp join matches m on m.id = mp.match_id
+       where mp.user_id in (${marks}) and m.status = 'completed' and mp.status in ('finished', 'forfeited')
+       group by mp.user_id`,
       userIds,
     )).rows;
-    return new Map(rows.filter((r) => Number(r.wins) > 0).map((r) => [r.user_id, Number(r.place)]));
+    for (const r of rows) {
+      if (Number(r.wins) > 0) out.set(r.user_id, await winTable(this.ctx.db).rankFor(Number(r.wins)));
+    }
+    return out;
   }
 
   /** The server saw this player's connection drop; they have until `deadline` to come back. */
@@ -354,6 +353,7 @@ export class MatchLedger {
       return { winnerUserId: winner, winnerUserIds: paid, payout, pot, house: pot - totalPayout, players: players.map((p) => p.user_id), rewards };
     });
     if (!res) return null;
+    winTable(this.ctx.db).invalidate();
     await this.pushWallet(res.players);
     // The coins are in the ledger: the winner's app can show them flying to the wallet.
     for (const r of res.rewards) this.ctx.presence.emit(r.userId, 'reward', r.reward);

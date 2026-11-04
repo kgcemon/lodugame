@@ -183,6 +183,9 @@ async function connectMysql(url: string): Promise<Db> {
   const pool = mysql.createPool({
     uri: url,
     connectionLimit: 10,
+    // A database that has gone away is noticed quickly, and quiet connections stay alive through firewalls.
+    connectTimeout: 10_000,
+    enableKeepAlive: true,
     charset: 'utf8mb4',
     // Dates in and out as UTC, DECIMAL/SUM results as numbers (like the pg type parsers above).
     timezone: 'Z',

@@ -188,7 +188,7 @@ public class GameActivity extends BaseActivity {
         gl.setRenderer(renderer);
         // Frames are drawn on demand: the renderer asks for the next one only while animating.
         gl.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
-        renderer.requestRender = gl::requestRender;
+        renderer.requestRender = Effects.capFrameRate() ? this::requestFrameAt30 : gl::requestRender;
         compact = getResources().getConfiguration().screenHeightDp < 700;
         setupTouch();
         buildHud();
@@ -1118,6 +1118,17 @@ public class GameActivity extends BaseActivity {
         if (local == null) buildGifts();
     }
 
+    private final java.util.concurrent.atomic.AtomicBoolean frameQueued = new java.util.concurrent.atomic.AtomicBoolean();
+
+    /** The Low preset: the next frame waits, so an animation runs at about 30 fps. */
+    private void requestFrameAt30() {
+        if (!frameQueued.compareAndSet(false, true)) return;
+        LudoApp.MAIN.postDelayed(() -> {
+            frameQueued.set(false);
+            gl.requestRender();
+        }, 30);
+    }
+
     private void buildGifts() {
         giftFlights = new GiftFlights(this, root, this::cardCentre);
         giftShop = new GiftShopPanel(this, (product, toColor) -> giftFlights.preview(product, app.socket.myColor(), toColor));
@@ -1567,8 +1578,11 @@ public class GameActivity extends BaseActivity {
         String text;
         boolean online = local != null || "online".equals(app.socket.connection);
         if (local == null && app.socket.restoring) online = false;
-        connView.setText(local != null ? "● Offline" : online ? "● Online" : "● Reconnecting");
-        connView.setTextColor(local != null ? Ui.MUTED : online ? Ui.SUCCESS : Ui.GOLD);
+        String conn = local != null ? "Offline" : app.socket.connectionLabel();
+        connView.setText("● " + conn);
+        connView.setTextColor(local != null ? Ui.MUTED : !online ? Ui.GOLD : "Connected".equals(conn) ? Ui.SUCCESS : Ui.GOLD);
+        // Cosmetics step back while the connection struggles.
+        Effects.weakNetwork = local == null && app.socket.weak;
         long left = -1;
         if (!online || app.socket.restoring) {
             text = "📶 Connection lost — reconnecting…";

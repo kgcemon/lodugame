@@ -434,6 +434,10 @@ public class AvatarView extends TextView {
         };
         private static final Map<String, List<Cb>> WAITING = new HashMap<>();
 
+        static void trim() {
+            CACHE.evictAll();
+        }
+
         static void load(String url, Cb cb) {
             Bitmap hit = CACHE.get(url);
             if (hit != null) {

@@ -31,28 +31,24 @@ export async function announceOnline(db: Db, presence: Presence, userId: string)
   if (!p) return;
   const player = { username: p.username, publicId: p.public_id, avatarHue: p.avatar_hue, avatarUrl: p.avatar_url, frame: p.frame, country: p.country };
 
+  // For each online friend, whom they have played with among their friends, in one query.
+  const marks = friends.map((_, i) => `$${i + 1}`).join(', ');
+  const together = (
+    await db.query<{ friend: string; other: string; n: number | string }>(
+      `select a.user_id as friend, b.user_id as other, count(*) as n
+       from match_players a
+       join match_players b on b.match_id = a.match_id and b.user_id <> a.user_id
+       join friendships fr on fr.user_a = least(a.user_id, b.user_id) and fr.user_b = greatest(a.user_id, b.user_id)
+       where a.user_id in (${marks})
+       group by a.user_id, b.user_id`,
+      friends,
+    )
+  ).rows;
   for (const f of friends) {
-    const played = Number(
-      (
-        await db.query<{ n: number }>(
-          'select count(*)::int as n from match_players a join match_players b on b.match_id = a.match_id where a.user_id = $1 and b.user_id = $2',
-          [f, userId],
-        )
-      ).rows[0]?.n ?? 0,
-    );
-    let best = false;
-    if (played >= BEST_FRIEND_MIN_MATCHES) {
-      const top = await db.query<{ user_id: string; n: number }>(
-        `select b.user_id, count(*)::int as n
-         from match_players a
-         join match_players b on b.match_id = a.match_id and b.user_id <> a.user_id
-         join friendships fr on fr.user_a = least(a.user_id, b.user_id) and fr.user_b = greatest(a.user_id, b.user_id)
-         where a.user_id = $1
-         group by b.user_id order by n desc limit 1`,
-        [f],
-      );
-      best = top.rows[0]?.user_id === userId;
-    }
+    const mine = together.filter((t) => t.friend === f);
+    const played = Number(mine.find((t) => t.other === userId)?.n ?? 0);
+    const top = Math.max(0, ...mine.map((t) => Number(t.n)));
+    const best = played >= BEST_FRIEND_MIN_MATCHES && played === top;
     presence.emit(f, 'friend:online', { player, played, best });
   }
 }

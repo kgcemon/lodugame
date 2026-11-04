@@ -293,8 +293,7 @@ public class MainActivity extends BaseActivity {
                 android.animation.PropertyValuesHolder.ofFloat("scaleY", 1f, 1.25f, 1f, 1.12f, 1f));
         beat.setDuration(900);
         beat.setStartDelay(400);
-        beat.setRepeatCount(android.animation.ValueAnimator.INFINITE);
-        beat.start();
+        Fx.nudge(b, beat, Fx.NUDGE_REST_MS);
         return b;
     }
 
@@ -575,6 +574,11 @@ public class MainActivity extends BaseActivity {
                 finishSignOut();
             }
         });
+    }
+
+    /** The server has already ended the session (the account is gone): clear this phone. */
+    void signedOut() {
+        finishSignOut();
     }
 
     private void finishSignOut() {

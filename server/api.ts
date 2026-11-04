@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { publicUser } from './auth';
 import { jsonValue, type Queryable } from './db';
-import { h, rateLimit, requireAdmin, requireUser, type AppCtx } from './http';
+import { clearSessionCookie, h, rateLimit, requireAdmin, requireUser, type AppCtx } from './http';
 import { notify } from './presence';
 import type { RoomManager } from './rooms';
 import * as v from './security';
@@ -14,6 +14,8 @@ import { PROFILE_FRAMES } from '../shared/frames';
 import { BOARDS, DEFAULT_BOARD } from '../shared/boards';
 import { diceProducts, diceSales, stockSold, type DiceProduct } from './dice';
 import { boardProducts, boardSales, type BoardProduct } from './boards';
+import { dbPingMs } from './metrics';
+import { mayRefresh, playerStats, winTable } from './stats';
 import { adminPlayerGiftApi, displayedGifts, playerGiftApi } from './playergifts';
 import { adminGiftRoutes, playerGiftRoutes, rewardFromGems, rewardFromWallet, type GiftCatalogue } from './gifts';
 import { payoutPolicy } from './settings';
@@ -111,19 +113,7 @@ interface StatsRow {
   rank: number;
 }
 
-async function statsFor(q: Queryable, userId: string) {
-  const r = await q.query<StatsRow>(`with ${statsCte('$2')} select * from ranked where user_id = $1`, [userId, seasonStart()]);
-  const s = r.rows[0];
-  if (!s) throw new HttpError(404, 'Player not found');
-  return {
-    matches: s.matches,
-    wins: s.wins,
-    losses: s.matches - s.wins,
-    winRate: Number(s.win_rate),
-    rank: Number(s.rank),
-    seasonPoints: s.season_points,
-  };
-}
+const statsFor = (q: Queryable, userId: string) => playerStats(q, userId, seasonStart());
 
 function profileOut(r: { username: string; public_id: string; avatar_hue: number; avatar_url?: string | null; frame?: string | null; country?: string | null }) {
   return {
@@ -137,6 +127,9 @@ function profileOut(r: { username: string; public_id: string; avatar_hue: number
 }
 
 export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
+  type BoardPage = { at: number; total: number; rows: StatsRow[]; version: number; readMs: number };
+  const boardCache = new Map<string, BoardPage>();
+  const boardReads = new Map<string, Promise<BoardPage>>();
   const r = Router();
   const { db, settings, presence } = ctx;
   /** A shop's items at the prices the administrator set. */
@@ -289,6 +282,41 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   );
 
   // ---------------------------------------------------------------- wallet
+
+  /**
+   * Delete my account. The person goes: name, email, Google link, picture, friends, sessions and
+   * notifications. What stays is the anonymous record other players' matches and the coin and diamond
+   * ledgers rest on (the privacy policy says so). Not during a match: its outcome depends on the seat.
+   */
+  r.post(
+    '/account/delete',
+    rateLimit(5, 60_000, (req) => req.user!.id),
+    h(async (req, res) => {
+      const me = req.user!.id;
+      if ((req.body as { confirm?: unknown } | undefined)?.confirm !== 'DELETE') throw new HttpError(400, 'Please confirm');
+      if (rooms().isPlaying(me)) throw new HttpError(409, 'Finish or leave your match first');
+      await rooms().evict(me);
+      const tag = randomUUID().replace(/-/g, '').slice(0, 10);
+      await db.tx(async (q) => {
+        await q.query(
+          `update users set email = $2, password_hash = $3, google_sub = null, email_verified_at = null, is_guest = false,
+                  suspended_at = now(), suspended_reason = 'Account deleted by its owner', updated_at = now() where id = $1`,
+          [me, `deleted_${tag}@deleted.invalid`, 'deleted'],
+        );
+        await q.query(`update profiles set full_name = 'Deleted player', username = $2, avatar_url = null, frame = null, country = null where user_id = $1`, [me, `deleted_${tag}`]);
+        await q.query('delete from friendships where user_a = $1 or user_b = $1', [me]);
+        await q.query('delete from friend_requests where from_user = $1 or to_user = $1', [me]);
+        await q.query('delete from notifications where user_id = $1', [me]);
+        await q.query('delete from auth_tokens where user_id = $1', [me]);
+        await q.query('update player_gifts set displayed = false where recipient_id = $1', [me]);
+        await q.query('update sessions set revoked_at = now() where user_id = $1 and revoked_at is null', [me]);
+        await q.query('insert into audit_logs (actor_id, action, target_user_id, details) values ($1, $2, $1, $3::jsonb)', [me, 'account.delete', '{}']);
+      });
+      ctx.voice?.forget(me);
+      clearSessionCookie(res, ctx.cfg);
+      return { ok: true };
+    }),
+  );
 
   r.get('/wallet', h(async (req) => ({ ok: true, wallet: await walletSummary(db, req.user!.id, settings.get().dailyBonus) })));
 
@@ -557,14 +585,36 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const where = sort === 'winrate' ? `where matches >= ${MIN_WINRATE_MATCHES}` : sort === 'season' ? 'where season_points > 0' : '';
       const order =
         sort === 'winrate' ? 'win_rate desc, wins desc' : sort === 'season' ? 'season_points desc, wins desc' : 'wins desc, win_rate desc';
-      const total = (await db.query<{ n: number }>(`with ${statsCte('$1')} select count(*)::int as n from ranked ${where}`, [seasonStart()])).rows[0].n;
-      const rows = (
-        await db.query<StatsRow>(`with ${statsCte('$3')} select * from ranked ${where} order by ${order}, username limit $1 offset $2`, [
-          pg.limit,
-          pg.offset,
-          seasonStart(),
-        ])
-      ).rows;
+      // The whole table is read to rank it: a page is kept until results change or half a minute passes.
+      const version = winTable(db).version;
+      const cacheKey = `${sort}|${pg.page}`;
+      let cached = boardCache.get(cacheKey);
+      const age = cached ? Date.now() - cached.at : 0;
+      if (!cached || ((cached.version !== version || age > 30_000) && mayRefresh(cached.readMs, age))) {
+        // However many ask at once, the table is read once; a slow one refreshes behind the page already held.
+        let job = boardReads.get(cacheKey);
+        if (!job) {
+          const started = Date.now();
+          job = (async () => {
+            const total = (await db.query<{ n: number }>(`with ${statsCte('$1')} select count(*)::int as n from ranked ${where}`, [seasonStart()])).rows[0].n;
+            const rows = (
+              await db.query<StatsRow>(`with ${statsCte('$3')} select * from ranked ${where} order by ${order}, username limit $1 offset $2`, [
+                pg.limit,
+                pg.offset,
+                seasonStart(),
+              ])
+            ).rows;
+            if (boardCache.size > 200) boardCache.clear();
+            const fresh = { at: Date.now(), total, rows, version, readMs: Date.now() - started };
+            boardCache.set(cacheKey, fresh);
+            return fresh;
+          })().finally(() => boardReads.delete(cacheKey));
+          boardReads.set(cacheKey, job);
+        }
+        if (!cached || cached.readMs < 50) cached = await job;
+        else job.catch((e: unknown) => console.error('[leaderboard] refresh failed', e));
+      }
+      const { total, rows } = cached;
       return {
         ok: true,
         sort,
@@ -1199,6 +1249,18 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
 
   adminGiftRoutes(admin, ctx, giftCatalogue);
   adminPlayerGiftApi(admin, ctx);
+
+  /** How the server is doing right now: the event loop, CPU, memory, sockets and the database. */
+  admin.get(
+    '/health',
+    h(async () => ({
+      ok: true,
+      process: ctx.metrics?.sample() ?? null,
+      sockets: ctx.metrics?.sockets() ?? 0,
+      rooms: rooms().roomCount,
+      dbPingMs: await dbPingMs(db),
+    })),
+  );
 
   r.use('/admin', admin);
 

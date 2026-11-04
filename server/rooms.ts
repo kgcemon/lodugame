@@ -1583,6 +1583,15 @@ export class RoomManager {
     if (room) await this.removeFromRoom(room, userId, 'removed');
   }
 
+  /** Wait for the match writes already decided (a settlement must not be cut off by a restart). */
+  async drain(): Promise<void> {
+    await Promise.allSettled([...this.rooms.values()].map((r) => r.writes));
+  }
+
+  isPlaying(userId: string): boolean {
+    return this.roomOf(userId)?.status === 'playing';
+  }
+
   shutdown(): void {
     // Rooms stay "open" in the database; recovery on next boot refunds them.
     for (const room of this.rooms.values()) {

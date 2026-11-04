@@ -224,6 +224,8 @@ export interface ClientToServerEvents {
   'emote:send': (p: { id: string }, ack: AckFn) => void;
   /** A packet of compressed voice (binary), heard by your friends in the room. */
   'voice:frame': (data: ArrayBuffer | Uint8Array) => void;
+  /** An empty round trip: how the connection feels, for the app's indicator. */
+  'net:ping': (p: Record<string, never>, ack: AckFn) => void;
   /** Send a gift to a player in my match. `key`: a new one per tap on Send, the same one on a retry. */
   'playerGift:send': (p: { productId: string; toSeatId: string; key: string }, ack: AckFn<{ giftId: string; duplicate: boolean; balance: number; currency: string; price: number }>) => void;
   /** The gift has reached me. */

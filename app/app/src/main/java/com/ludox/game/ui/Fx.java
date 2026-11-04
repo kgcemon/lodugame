@@ -38,6 +38,38 @@ public final class Fx {
     public static final int[] PURPLE = {0xff9f6bff, 0xff6d35e0, 0xff3e1a8a};
     public static final int[] PURPLE_DARK = {0xff5b2bb5, 0xff3d1885, 0xff26104f};
 
+    /** How long an attention-seeking badge rests between nudges. */
+    static final long NUDGE_REST_MS = 10_000;
+
+    /**
+     * Play this animation now and then, not for ever: a looping one redraws the whole screen at
+     * full speed for as long as it is open. It rests while the screen is hidden and ends with the view.
+     */
+    static void nudge(View v, android.animation.Animator anim, long restMs) {
+        Runnable again = new Runnable() {
+            @Override
+            public void run() {
+                if (!v.isAttachedToWindow()) return;
+                if (v.getWindowVisibility() == View.VISIBLE && v.isShown()) anim.start();
+                else v.postDelayed(this, restMs);
+            }
+        };
+        anim.addListener(new android.animation.AnimatorListenerAdapter() {
+            private boolean cancelled;
+
+            @Override
+            public void onAnimationCancel(android.animation.Animator a) {
+                cancelled = true;
+            }
+
+            @Override
+            public void onAnimationEnd(android.animation.Animator a) {
+                if (!cancelled) v.postDelayed(again, restMs);
+            }
+        });
+        anim.start();
+    }
+
     static float dp(Context c, float v) {
         return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, c.getResources().getDisplayMetrics());
     }

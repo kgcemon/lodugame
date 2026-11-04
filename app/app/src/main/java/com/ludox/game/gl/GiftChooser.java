@@ -12,7 +12,8 @@ public final class GiftChooser implements GLSurfaceView.EGLConfigChooser {
 
     @Override
     public EGLConfig chooseConfig(EGL10 egl, EGLDisplay display) {
-        for (int samples : new int[]{4, 0}) {
+        for (int samples : new int[]{4, 2, 0}) {
+            if (samples > ConfigChooser.maxSamples) continue;
             int[] attrs = {
                     EGL10.EGL_RED_SIZE, 8,
                     EGL10.EGL_GREEN_SIZE, 8,

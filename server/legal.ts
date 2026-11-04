@@ -76,6 +76,9 @@ const PRIVACY = page(
   <li>You can remove LudoX's access to your Google account at any time in your Google Account settings (Security → Third-party apps).</li>
 </ul>
 
+<h2>Deleting your account</h2>
+<p>You can delete your account in the app (Profile, Security) or by following the steps on <a href="/delete-account">this page</a>.</p>
+
 <h2>Children</h2>
 <p>LudoX is not directed at children under 13, and we do not knowingly collect data from them. If you believe a child has created an account, contact us and we will delete it.</p>
 
@@ -114,8 +117,27 @@ const TERMS = page(
 <p><a href="mailto:${CONTACT}">${CONTACT}</a></p>`,
 );
 
+const DELETE_ACCOUNT = page(
+  'Delete your LudoX account',
+  `<h1>Delete your LudoX account</h1>
+<p class="muted">LudoX · last updated ${UPDATED}</p>
+<h2>In the app</h2>
+<ol>
+  <li>Open LudoX and go to <b>Profile</b>.</li>
+  <li>Scroll down to <b>Security</b> and tap <b>Delete my account</b>.</li>
+  <li>Confirm. It takes effect at once and cannot be undone. If you are in a match, finish or leave it first.</li>
+</ol>
+<h2>Can't open the app?</h2>
+<p>Email <a href="mailto:${CONTACT}">${CONTACT}</a> from the address on your account and ask for it to be deleted.</p>
+<h2>What is deleted</h2>
+<p>Your name, email address, Google link, profile picture and country, your friends and friend requests, your notifications and your sign-in sessions. Your coins, diamonds and items can no longer be used.</p>
+<h2>What is kept</h2>
+<p>An anonymous record with no name or contact details: your place in other players' match history, and the coin, diamond and purchase records needed for accounting, fraud prevention and legal obligations.</p>`,
+);
+
 export function legalPages(app: Express): void {
   const send = (html: string) => (_req: Request, res: Response) => res.type('html').send(html);
   app.get(['/privacy', '/privacy-policy'], send(PRIVACY));
   app.get(['/terms', '/terms-of-service'], send(TERMS));
+  app.get(['/delete-account', '/account-deletion'], send(DELETE_ACCOUNT));
 }

@@ -140,14 +140,25 @@ final class ProfileTab {
         effects.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 8));
         effects.setOnCheckedChangeListener((b, on) -> app.prefs.edit().putBoolean(BoardAmbient.PREF, on).apply());
         prefsCard.addView(effects);
-        android.widget.Switch fullFx = new android.widget.Switch(a);
-        fullFx.setText("🎆  Full reward and capture animations");
-        fullFx.setTextColor(Ui.INK);
-        fullFx.setTextSize(15);
-        fullFx.setChecked(Effects.fullWanted());
-        fullFx.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 8));
-        fullFx.setOnCheckedChangeListener((b, on) -> app.prefs.edit().putBoolean(Effects.PREF, on).apply());
-        prefsCard.addView(fullFx);
+        TextView graphics = Ui.text(a, "🎮  Graphics: " + Effects.label(Effects.choice()), 15, Ui.INK);
+        graphics.setPadding(0, Ui.dp(a, 10), 0, Ui.dp(a, 10));
+        graphics.setOnClickListener(v -> {
+            LinearLayout box = Ui.vbox(a);
+            box.addView(Ui.muted(a, "Lower settings save battery and run smoother on older phones. The game itself is the same on all of them."));
+            final Popup[] open = new Popup[1];
+            for (String p : Effects.PRESETS) {
+                TextView row = Ui.bold(Ui.text(a, (p.equals(Effects.choice()) ? "● " : "○ ") + Effects.label(p), 16, Ui.INK));
+                row.setPadding(0, Ui.dp(a, 10), 0, Ui.dp(a, 10));
+                row.setOnClickListener(x -> {
+                    Effects.choose(p);
+                    graphics.setText("🎮  Graphics: " + Effects.label(p));
+                    if (open[0] != null) open[0].dismiss();
+                });
+                box.addView(row);
+            }
+            open[0] = Popup.show(a, "Graphics", box, Popup.plain("Close", null));
+        });
+        prefsCard.addView(graphics);
         android.widget.Switch vibrate = new android.widget.Switch(a);
         vibrate.setText("📳  Vibrate on my turn");
         vibrate.setTextColor(Ui.INK);
@@ -181,6 +192,7 @@ final class ProfileTab {
                     "A guest account can't be opened again after signing out: its coins, diamonds and dice are lost. Link Google first to keep them.",
                     Popup.plain("Cancel", null), Popup.danger("Sign out", a::signOut));
         }));
+        sec.addView(link("🗑️  Delete my account", () -> confirmDelete(guest)));
         col.addView(sec);
 
         TextView server = Ui.muted(a, "LudoX " + com.ludox.game.BuildConfig.VERSION_NAME);
@@ -206,5 +218,22 @@ final class ProfileTab {
                 a.recreate();
             }
         });
+    }
+
+    /** Deleting can't be undone, so it asks twice. */
+    private void confirmDelete(boolean guest) {
+        Popup.message(a, "Delete your account?",
+                "Your name, email, friends and notifications are deleted, and your coins, diamonds and items are gone for good. "
+                        + "Anonymous match and purchase records are kept. This can't be undone.",
+                Popup.plain("Cancel", null),
+                Popup.danger("Continue", () -> Popup.message(a, "Are you sure?", "Your account will be deleted right now.",
+                        Popup.plain("Keep my account", null),
+                        Popup.danger("Delete my account", () -> app.api.post("/account/delete", PlayFlow.obj("confirm", "DELETE"), new com.ludox.game.net.Api.Cb(a) {
+                            @Override
+                            public void ok(org.json.JSONObject r) {
+                                LudoApp.toast("Your account was deleted");
+                                a.signedOut();
+                            }
+                        })))));
     }
 }

@@ -209,9 +209,8 @@ final class HomeTab {
         if (available) {
             android.animation.ObjectAnimator bounce = android.animation.ObjectAnimator.ofFloat(bag, "translationY", 0, -Ui.dp(a, 6), 0);
             bounce.setDuration(900);
-            bounce.setRepeatCount(android.animation.ValueAnimator.INFINITE);
-            bounce.setStartDelay(300);
-            bounce.start();
+            bounce.setRepeatCount(0);
+            Fx.nudge(bag, bounce, Fx.NUDGE_REST_MS);
         }
         Ui.margins(c, a, 0, 4, 0, 6);
         return c;
@@ -228,9 +227,9 @@ final class HomeTab {
         if (available) {
             android.animation.ObjectAnimator wiggle = android.animation.ObjectAnimator.ofFloat(wheel, "rotation", 0, -12, 12, -6, 0);
             wiggle.setDuration(1000);
-            wiggle.setRepeatCount(android.animation.ValueAnimator.INFINITE);
-            wiggle.setStartDelay(500);
-            wiggle.start();
+            wiggle.setRepeatCount(0);
+            wiggle.setStartDelay(600);
+            Fx.nudge(wheel, wiggle, Fx.NUDGE_REST_MS);
         }
         Ui.margins(c, a, 0, 4, 0, 6);
         return c;

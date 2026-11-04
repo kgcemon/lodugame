@@ -73,6 +73,65 @@ public final class GameSocket {
         this.app = app;
     }
 
+    // ---------------------------------------------------------------- connection quality
+
+    private static final long PROBE_MS = 5_000, SLOW_MS = 800;
+    /** Round trips (or misses) in a row that change the verdict. */
+    private static final int TO_WEAK = 2, TO_GOOD = 3;
+    /** The connection works but is struggling. Only measured during a match. */
+    public volatile boolean weak;
+    private int slowInARow, fastInARow;
+    private boolean probeAnswered, probeOut, serverProbes;
+    private long probeAt;
+    /** Told when `weak` changes. */
+    public volatile Runnable onQuality;
+
+    private final Runnable probe = new Runnable() {
+        @Override
+        public void run() {
+            LudoApp.MAIN.removeCallbacks(this);
+            if (room == null || !isConnected()) {
+                probeOut = false;
+                setWeak(false);
+                return;
+            }
+            // The last probe never came back within a whole period.
+            if (probeOut && serverProbes) note(true);
+            probeOut = true;
+            final long at = android.os.SystemClock.elapsedRealtime();
+            probeAt = at;
+            emit("net:ping", new JSONObject(), res -> {
+                if (at != probeAt || !res.optBoolean("ok")) return;
+                probeOut = false;
+                serverProbes = true;
+                note(android.os.SystemClock.elapsedRealtime() - at > SLOW_MS);
+            });
+            LudoApp.MAIN.postDelayed(this, PROBE_MS);
+        }
+    };
+
+    private void note(boolean slow) {
+        slowInARow = slow ? slowInARow + 1 : 0;
+        fastInARow = slow ? 0 : fastInARow + 1;
+        if (slowInARow >= TO_WEAK) setWeak(true);
+        else if (fastInARow >= TO_GOOD) setWeak(false);
+    }
+
+    private void setWeak(boolean w) {
+        if (weak == w) return;
+        weak = w;
+        Runnable r = onQuality;
+        if (r != null) r.run();
+    }
+
+    /** "Connected", "Weak Connection", "Reconnecting" or "Connection Lost". */
+    public String connectionLabel() {
+        if ("online".equals(connection) && !restoring) return weak ? "Weak Connection" : "Connected";
+        // Past the time a match waits for anyone, there's no point sounding hopeful.
+        boolean longGone = offlineAt != 0 && android.os.SystemClock.elapsedRealtime() - offlineAt > 20_000;
+        return longGone ? "Connection Lost" : "Reconnecting";
+    }
+
     public void addListener(Listener l) {
         listeners.add(l);
     }
@@ -291,6 +350,7 @@ public final class GameSocket {
             JSONObject prev = room;
             room = r;
             trackIntro(r);
+            if (prev == null) LudoApp.MAIN.post(probe);
             if (prev == null || !prev.optString("code").equals(r.optString("code"))) {
                 chat.clear();
                 unreadChat = 0;

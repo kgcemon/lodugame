@@ -11,14 +11,18 @@ import javax.microedition.khronos.egl.EGLDisplay;
  * board lines, precise depth), falling back step by step to a plain 16-bit-depth config.
  */
 public final class ConfigChooser implements GLSurfaceView.EGLConfigChooser {
+    /** Most MSAA samples to ask for (the graphics preset's choice); 0 is the cheapest to draw. */
+    public static volatile int maxSamples = 4;
+
     private static final int EGL_OPENGL_ES2_BIT = 4;
 
     @Override
     public EGLConfig chooseConfig(EGL10 egl, EGLDisplay display) {
         int[][] wanted = {
-                {24, 4}, {16, 4}, {24, 0}, {16, 0},
+                {24, 4}, {16, 4}, {24, 2}, {16, 2}, {24, 0}, {16, 0},
         };
         for (int[] w : wanted) {
+            if (w[1] > maxSamples) continue;
             EGLConfig c = find(egl, display, w[0], w[1]);
             if (c != null) return c;
         }

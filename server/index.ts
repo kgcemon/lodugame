@@ -35,6 +35,8 @@ import { announceOnline } from './online';
 const ONLINE_ALERT_AWAY_MS = 2 * 60_000;
 /** Connections one account may hold at once. */
 const MAX_SOCKETS_PER_USER = 8;
+import { dbPingMs, ProcessMetrics } from './metrics';
+import { cleanExpired } from './stats';
 import { DEFAULT_TIMINGS, RoomManager, type ClientSocket, type Timings } from './rooms';
 import { HttpError, WindowLimiter } from './security';
 import { Settings } from './settings';
@@ -155,6 +157,10 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   app.use(securityHeaders(cfg));
   legalPages(app);
   app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.roomCount }));
+  // For an uptime monitor: is the database answering too?
+  app.get('/healthz/db', (_req, res) => {
+    void dbPingMs(db!).then((ms) => res.status(ms === null ? 503 : 200).json({ ok: ms !== null, ms }));
+  });
   app.use('/api', floodGuard(cfg.limits.apiPerMin, 60_000));
   // Announcements may carry an uploaded picture: the big body is only read for a signed-in
   // administrator (the parser below then sees it already parsed).
@@ -190,6 +196,9 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     },
   });
   presence.attach(io as unknown as Server);
+  const metrics = new ProcessMetrics();
+  metrics.start();
+  ctx.metrics = { sample: () => metrics.sample(), sockets: () => io.engine.clientsCount };
   const rooms = new RoomManager(io, ledger, settings, presence, { ...DEFAULT_TIMINGS, ...opts.timings }, opts.roll, db);
   const voice = new VoiceRelay(db, io, rooms);
   ctx.voice = voice;
@@ -219,6 +228,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     presence.connect(user.id, socket.id);
     // Tell online friends (a live alert in their app).
     if (cameOnline) announceOnline(db!, presence, user.id).catch((e: unknown) => console.error('[online] alert failed', e));
+    // How the connection feels, for the app's indicator: an empty round trip.
+    socket.on('net:ping', handler(socket, () => {}));
     socket.on('session:hello', handler(socket, (p: { results?: unknown }) => rooms.resume(socket, p.results === true)));
     socket.on('match:resultSeen', handler(socket, (p: { matchId: unknown }) => rooms.resultSeen(socket, p.matchId)));
     socket.on('room:create', handler(socket, async (p: { modeId: unknown; maxPlayers: unknown; teams?: unknown }) => ({ room: await rooms.create(socket, p.modeId, p.maxPlayers, p.teams) })));
@@ -260,14 +271,17 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
         mailer,
         settings,
         port,
-        close: () =>
-          new Promise<void>((done) => {
+        close: async () => {
+          metrics.stop();
+          await rooms.drain();
+          await new Promise<void>((done) => {
             rooms.shutdown();
             io.close(() => {
               if (opts.db) done();
               else void db!.close().then(done, done);
             });
-          }),
+          });
+        },
       });
     });
   });
@@ -284,7 +298,25 @@ if (isMain) {
   // One bad promise must not take every running match down with the process.
   process.on('unhandledRejection', (e) => console.error('[ludo] unhandled rejection', e));
   startServer()
-    .then(({ port, db }) => {
+    .then(({ port, db, close }) => {
+      // A restart: finish the match writes under way, close cleanly. Open matches are refunded on
+      // the next start (MatchLedger.recover), as after any restart.
+      let closing = false;
+      const stop = (signal: string) => {
+        if (closing) return;
+        closing = true;
+        console.log(`[ludo] ${signal}: shutting down`);
+        const force = setTimeout(() => process.exit(1), 7000);
+        force.unref();
+        close().then(() => process.exit(0), () => process.exit(1));
+      };
+      process.on('SIGTERM', () => stop('SIGTERM'));
+      process.on('SIGINT', () => stop('SIGINT'));
+      // Daily: drop sessions and tokens that expired long ago.
+      const clean = () => cleanExpired(db).catch((e: unknown) => console.error('[ludo] cleanup failed', e));
+      setTimeout(clean, 5 * 60_000).unref();
+      setInterval(clean, 24 * 3600_000).unref();
+
       console.log(`[ludo] server listening on http://localhost:${port} (database: ${{ postgres: 'PostgreSQL', mysql: 'MySQL', pglite: 'PGlite (local file)' }[db.kind]})`);
     })
     .catch((e) => {

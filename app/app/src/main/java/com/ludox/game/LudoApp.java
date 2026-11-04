@@ -19,6 +19,14 @@ import org.json.JSONObject;
  * (user, wallet, public config). Everything else reads them from here.
  */
 public class LudoApp extends Application {
+    /** With no match to keep, the connection goes this long after the app leaves the screen. */
+    private static final long BACKGROUND_DISCONNECT_MS = 45_000;
+    private int visibleScreens;
+    private final Runnable dropIdleSocket = () -> {
+        // In a match the connection stays: the server's reconnection countdown is what counts.
+        if (visibleScreens == 0 && LudoApp.this.socket.room == null) LudoApp.this.socket.disconnect();
+    };
+
     private static LudoApp instance;
 
     public static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -51,6 +59,43 @@ public class LudoApp extends Application {
         Sfx.init(this, prefs);
         api = new Api(this);
         socket = new GameSocket(this);
+        com.ludox.game.ui.Graphics.init();
+        registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
+            @Override
+            public void onActivityStarted(android.app.Activity a) {
+                if (visibleScreens++ == 0) {
+                    MAIN.removeCallbacks(dropIdleSocket);
+                    if (user != null) socket.connect();
+                }
+            }
+
+            @Override
+            public void onActivityStopped(android.app.Activity a) {
+                if (--visibleScreens == 0) MAIN.postDelayed(dropIdleSocket, BACKGROUND_DISCONNECT_MS);
+            }
+
+            @Override
+            public void onActivityCreated(android.app.Activity a, android.os.Bundle b) {}
+
+            @Override
+            public void onActivityResumed(android.app.Activity a) {}
+
+            @Override
+            public void onActivityPaused(android.app.Activity a) {}
+
+            @Override
+            public void onActivitySaveInstanceState(android.app.Activity a, android.os.Bundle b) {}
+
+            @Override
+            public void onActivityDestroyed(android.app.Activity a) {}
+        });
+    }
+
+    /** Memory is short: let go of what can be painted or loaded again. */
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level >= TRIM_MEMORY_UI_HIDDEN) com.ludox.game.ui.Graphics.trim();
     }
 
     public String serverUrl() {

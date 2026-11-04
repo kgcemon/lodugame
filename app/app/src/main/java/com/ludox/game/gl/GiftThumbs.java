@@ -43,6 +43,11 @@ public final class GiftThumbs {
 
     private GiftThumbs() {}
 
+    /** Forget the pictures (views already showing one keep it). */
+    public static void trim() {
+        CACHE.clear();
+    }
+
     /** Calls back on the main thread (at once if already rendered); a phone without a context gets null. */
     public static void get(String model, Cb cb) {
         Bitmap have = CACHE.get(model);
