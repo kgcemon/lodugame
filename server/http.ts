@@ -133,10 +133,11 @@ export function securityHeaders(cfg: ServerConfig): RequestHandler {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader(
       'Content-Security-Policy',
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; " +
-        "connect-src 'self' ws: wss:; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        "connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     );
     if (cfg.secureCookies) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     next();
@@ -165,6 +166,15 @@ export function rateLimit(max: number, windowMs: number, keyFn: (req: Request) =
   const l = new WindowLimiter(max, windowMs);
   return (req, _res, next) => {
     if (!l.take(`${req.path}|${keyFn(req)}`)) return next(new HttpError(429, 'Too many requests — please wait a moment'));
+    next();
+  };
+}
+
+/** One limit per client across every path, unlike rateLimit (per path). */
+export function floodGuard(max: number, windowMs: number): RequestHandler {
+  const l = new WindowLimiter(max, windowMs);
+  return (req, _res, next) => {
+    if (!l.take(req.ip ?? 'ip')) return next(new HttpError(429, 'Too many requests — please wait a moment'));
     next();
   };
 }

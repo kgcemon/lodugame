@@ -13,6 +13,7 @@ import { connectDb, type Db } from './db';
 import {
   csrfGuard,
   errorHandler,
+  floodGuard,
   parseCookies,
   requireAdmin,
   securityHeaders,
@@ -32,8 +33,10 @@ import { announceOnline } from './online';
 
 /** Away at least this long before friends are told you came online. */
 const ONLINE_ALERT_AWAY_MS = 2 * 60_000;
+/** Connections one account may hold at once. */
+const MAX_SOCKETS_PER_USER = 8;
 import { DEFAULT_TIMINGS, RoomManager, type ClientSocket, type Timings } from './rooms';
-import { HttpError } from './security';
+import { HttpError, WindowLimiter } from './security';
 import { Settings } from './settings';
 
 export interface StartOptions {
@@ -147,10 +150,12 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   // ---------------------------------------------------------------- HTTP
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? 1 : false);
+  const trustProxy = process.env.TRUST_PROXY === 'true';
+  app.set('trust proxy', trustProxy ? 1 : false);
   app.use(securityHeaders(cfg));
   legalPages(app);
-  app.get('/healthz', (_req, res) => res.json({ ok: true, db: db!.kind, rooms: rooms.roomCount }));
+  app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.roomCount }));
+  app.use('/api', floodGuard(cfg.limits.apiPerMin, 60_000));
   // Announcements may carry an uploaded picture: the big body is only read for a signed-in
   // administrator (the parser below then sees it already parsed).
   app.use('/api/admin/announcements', csrfGuard(cfg), sessionMiddleware(ctx), requireAdmin, express.json({ limit: '3mb' }));
@@ -189,11 +194,16 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   const voice = new VoiceRelay(db, io, rooms);
   ctx.voice = voice;
 
+  const socketFlood = new WindowLimiter(cfg.limits.socketsPerMin, 60_000);
   // Every socket belongs to a signed-in, non-suspended user.
   io.use((socket, next) => {
+    // Behind the proxy the last address is the one the proxy itself saw (the rest can be forged).
+    const forwarded = String(socket.request.headers['x-forwarded-for'] ?? '').split(',').pop()?.trim();
+    if (!socketFlood.take((trustProxy && forwarded) || socket.request.socket.remoteAddress || 'ip')) return next(new Error('busy'));
     userForToken(db!, parseCookies(socket.request.headers.cookie)[SESSION_COOKIE]).then(
       (user) => {
         if (!user) return next(new Error('unauthorized'));
+        if (presence.socketCount(user.id) >= MAX_SOCKETS_PER_USER) return next(new Error('busy'));
         socket.data.user = user;
         next();
       },
@@ -204,6 +214,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   io.on('connection', (socket: ClientSocket) => {
     const user = socket.data.user!;
     socket.join(`user:${user.id}`);
+    socket.join(`session:${user.sessionId}`);
     const cameOnline = presence.comingOnline(user.id, ONLINE_ALERT_AWAY_MS);
     presence.connect(user.id, socket.id);
     // Tell online friends (a live alert in their app).
@@ -235,7 +246,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   });
 
   return new Promise((resolveStart) => {
-    http.listen(cfg.port, () => {
+    http.listen(cfg.port, cfg.host, () => {
       const addr = http.address();
       const port = typeof addr === 'object' && addr ? addr.port : cfg.port;
       resolveStart({
@@ -267,6 +278,8 @@ if (isMain) {
   } catch (e) {
     console.warn('[ludo] could not read .env:', (e as Error).message);
   }
+  // One bad promise must not take every running match down with the process.
+  process.on('unhandledRejection', (e) => console.error('[ludo] unhandled rejection', e));
   startServer()
     .then(({ port, db }) => {
       console.log(`[ludo] server listening on http://localhost:${port} (database: ${{ postgres: 'PostgreSQL', mysql: 'MySQL', pglite: 'PGlite (local file)' }[db.kind]})`);

@@ -27,6 +27,11 @@ export function createMailer(cfg: ServerConfig['mail']): Mailer {
         outbox.push(mail);
         return;
       }
+      if (cfg.mode === 'disabled') {
+        // Never the body: it holds password-reset and verification links.
+        console.warn(`[mail] not sent, RESEND_API_KEY is not set: ${mail.subject}`);
+        return;
+      }
       if (cfg.mode === 'console') {
         console.log(`\n[mail] (console mode — set RESEND_API_KEY to send real email)\n  to: ${mail.to}\n  subject: ${mail.subject}\n  ${mail.text.replace(/\n/g, '\n  ')}\n`);
         return;

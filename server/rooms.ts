@@ -31,7 +31,7 @@ import type { AuthUser } from './http';
 import { MAX_REROLLS, REROLL_COSTS } from './gems';
 import { NO_ELIGIBLE_PLAYERS, type MatchLedger } from './ledger';
 import type { Presence } from './presence';
-import { HttpError } from './security';
+import { HttpError, WindowLimiter } from './security';
 import type { MatchMode, Settings } from './settings';
 
 export type IO = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -178,6 +178,8 @@ interface Room {
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_ROOMS = 1000;
+/** Rooms one player may open or join per minute: each one is a database record. */
+const ROOMS_PER_MIN = 30;
 const BOT_NAMES = ['Nova', 'Atlas', 'Pixel', 'Orion', 'Echo', 'Vega', 'Blaze', 'Kiwi'];
 
 export function sanitizeName(raw: unknown): string {
@@ -211,6 +213,7 @@ export class RoomManager {
   /** Forfeits still being written: a result is read from the database only once they are done. */
   private forfeiting = new Map<string, Promise<unknown>>();
   private botCounter = 0;
+  private roomLimit = new WindowLimiter(ROOMS_PER_MIN, 60_000);
 
   constructor(
     private io: IO,
@@ -655,6 +658,7 @@ export class RoomManager {
     const u = this.user(socket);
     if (this.rooms.size >= MAX_ROOMS) throw new RuleError('Server is full, try again shortly');
     this.assertNotPlaying(u.id);
+    this.takeRoomSlot(u.id);
     await this.ledger.assertCanPlay(u.id, mode.entryFee);
     await this.leave(socket);
     const code = this.newCode();
@@ -724,6 +728,7 @@ export class RoomManager {
   async join(socket: ClientSocket, rawCode: unknown): Promise<RoomView> {
     const u = this.user(socket);
     if (typeof rawCode !== 'string') throw new RuleError('Enter a room code');
+    if (!this.rooms.has(rawCode.trim().toUpperCase())) this.takeRoomSlot(u.id); // guessing codes
     const code = rawCode.trim().toUpperCase();
     const room = this.rooms.get(code);
     if (!room) throw new RuleError('Room not found');
@@ -731,6 +736,7 @@ export class RoomManager {
     if (room.seats.some((s) => s.playerId === u.id)) return this.hello(socket)!;
     if (room.status !== 'lobby' || room.starting) throw new RuleError('That match has already started');
     this.assertNotPlaying(u.id);
+    this.takeRoomSlot(u.id);
     if (room.seats.length >= room.maxPlayers) throw new RuleError('Room is full');
     await this.ledger.assertCanPlay(u.id, room.entryFee);
     await this.leave(socket);
@@ -761,6 +767,10 @@ export class RoomManager {
     this.broadcastRoom(room);
     if (room.quick) this.checkQuickStart(room);
     return this.view(room, u.id);
+  }
+
+  private takeRoomSlot(pid: string): void {
+    if (!this.roomLimit.take(pid)) throw new RuleError('Too many rooms, please wait a moment');
   }
 
   /** Starting something else never walks out of a running match: leaving one is an explicit, confirmed forfeit. */
@@ -905,6 +915,7 @@ export class RoomManager {
   async rematch(socket: ClientSocket): Promise<void> {
     const { room } = this.hostRoom(socket);
     if (room.status !== 'over') throw new RuleError('The match is still running');
+    this.takeRoomSlot(room.hostPid!);
     const info = await this.ledger.createMatch({
       roomCode: room.code,
       mode: room.mode,

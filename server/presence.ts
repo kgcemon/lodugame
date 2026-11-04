@@ -61,9 +61,18 @@ export class Presence {
     this.io?.to(`user:${userId}`).emit(event, payload);
   }
 
-  /** Force-disconnect every socket of a user (suspension). */
+  socketCount(userId: string): number {
+    return this.sockets.get(userId)?.size ?? 0;
+  }
+
+  /** Force-disconnect every socket of a user (suspension, sessions revoked). */
   kick(userId: string): void {
     this.io?.in(`user:${userId}`).disconnectSockets(true);
+  }
+
+  /** Force-disconnect the sockets opened with one session (sign-out). */
+  kickSession(sessionId: string): void {
+    this.io?.in(`session:${sessionId}`).disconnectSockets(true);
   }
 }
 

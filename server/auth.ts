@@ -175,6 +175,8 @@ export function authRouter(ctx: AppCtx): Router {
     '/login',
     strict,
     rateLimit(8, 15 * 60_000, emailKey),
+    // Per account, whatever the IP: guessing one password from many addresses gets nowhere.
+    rateLimit(30, 15 * 60_000, (req) => String(req.body?.email ?? '').toLowerCase().slice(0, 254)),
     h(async (req, res) => {
       const b = req.body ?? {};
       const email = v.email(b.email);
@@ -216,8 +218,8 @@ export function authRouter(ctx: AppCtx): Router {
       }
       const settings = ctx.settings.get();
       const role = ctx.cfg.adminEmails.includes(g.email) ? 'admin' : 'player';
-      type Row = { id: string; suspended_at: string | null; suspended_reason: string | null; role: string; google_sub: string | null };
-      const cols = 'select id, suspended_at, suspended_reason, role, google_sub from users';
+      type Row = { id: string; suspended_at: string | null; suspended_reason: string | null; role: string; google_sub: string | null; email_verified_at: string | null };
+      const cols = 'select id, suspended_at, suspended_reason, role, google_sub, email_verified_at from users';
       const find = async () => {
         const bySub = await ctx.db.query<Row>(`${cols} where google_sub = $1`, [g.sub]);
         if (bySub.rows.length) return bySub.rows[0];
@@ -262,11 +264,22 @@ export function authRouter(ctx: AppCtx): Router {
         row = await find();
         if (!row) throw new HttpError(500, 'Could not create the account');
       } else if (!row.google_sub) {
-        // An email account signing in with Google for the first time: link it.
-        await ctx.db.query(
-          'update users set google_sub = $2, email_verified_at = coalesce(email_verified_at, now()), updated_at = now() where id = $1',
-          [row.id, g.sub],
-        );
+        // An email account signing in with Google for the first time: link it. If its address was
+        // never verified, whoever registered it may not own it: Google has now shown who does, so
+        // their password and sessions stop working (or they'd share this player's account).
+        const userId = row.id;
+        const unverified = !row.email_verified_at;
+        await ctx.db.tx(async (q) => {
+          await q.query(
+            'update users set google_sub = $2, email_verified_at = coalesce(email_verified_at, now()), updated_at = now() where id = $1',
+            [userId, g.sub],
+          );
+          if (!unverified) return;
+          await q.query('update users set password_hash = $2 where id = $1', [userId, NO_PASSWORD]);
+          await q.query('update sessions set revoked_at = now() where user_id = $1 and revoked_at is null', [userId]);
+          await q.query('update auth_tokens set used_at = now() where user_id = $1 and used_at is null', [userId]);
+        });
+        if (unverified) ctx.presence.kick(userId);
       }
       if (row.suspended_at) throw new HttpError(403, `This account is suspended${row.suspended_reason ? `: ${row.suspended_reason}` : ''}`);
       // The Google profile picture, kept fresh on every sign-in.
@@ -306,7 +319,10 @@ export function authRouter(ctx: AppCtx): Router {
   r.post(
     '/logout',
     h(async (req, res) => {
-      if (req.user) await ctx.db.query('update sessions set revoked_at = now() where id = $1', [req.user.sessionId]);
+      if (req.user) {
+        await ctx.db.query('update sessions set revoked_at = now() where id = $1', [req.user.sessionId]);
+        ctx.presence.kickSession(req.user.sessionId);
+      }
       clearSessionCookie(res, ctx.cfg);
       return { ok: true };
     }),
@@ -363,11 +379,14 @@ export function authRouter(ctx: AppCtx): Router {
       );
       if (u.rows.length) {
         const token = await issueToken(ctx.db, u.rows[0].id, 'reset_password', RESET_MS);
-        await ctx.mailer.send({
-          to: email,
-          subject: 'Reset your Ludo 3D password',
-          text: `Hi ${u.rows[0].full_name},\n\nReset your password here (valid for 1 hour):\n${ctx.cfg.appBaseUrl}/reset-password?token=${token}\n\nIf you didn't ask for this, you can ignore this email.`,
-        });
+        // Not awaited: a slow or failing provider must not reveal that this account exists.
+        ctx.mailer
+          .send({
+            to: email,
+            subject: 'Reset your Ludo 3D password',
+            text: `Hi ${u.rows[0].full_name},\n\nReset your password here (valid for 1 hour):\n${ctx.cfg.appBaseUrl}/reset-password?token=${token}\n\nIf you didn't ask for this, you can ignore this email.`,
+          })
+          .catch((err) => console.error('[mail] password reset failed', err));
       }
       // Same answer whether or not the account exists, so emails can't be enumerated.
       return { ok: true, message: 'If an account exists for that email, a reset link is on its way.' };
@@ -382,12 +401,14 @@ export function authRouter(ctx: AppCtx): Router {
       if (b.confirmPassword !== b.password) throw new HttpError(400, 'Passwords do not match');
       const pw = v.password(b.password);
       const hash = await v.hashPassword(pw);
-      await ctx.db.tx(async (q) => {
-        const userId = await consumeToken(q, b.token, 'reset_password');
-        await q.query('update users set password_hash = $2, updated_at = now() where id = $1', [userId, hash]);
+      const userId = await ctx.db.tx(async (q) => {
+        const id = await consumeToken(q, b.token, 'reset_password');
+        await q.query('update users set password_hash = $2, updated_at = now() where id = $1', [id, hash]);
         // A reset signs the account out everywhere.
-        await q.query('update sessions set revoked_at = now() where user_id = $1 and revoked_at is null', [userId]);
+        await q.query('update sessions set revoked_at = now() where user_id = $1 and revoked_at is null', [id]);
+        return id;
       });
+      ctx.presence.kick(userId);
       clearSessionCookie(res, ctx.cfg);
       return { ok: true };
     }),
@@ -410,6 +431,7 @@ export function authRouter(ctx: AppCtx): Router {
         await q.query('update users set password_hash = $2, updated_at = now() where id = $1', [u.id, hash]);
         await q.query('update sessions set revoked_at = now() where user_id = $1 and id <> $2 and revoked_at is null', [u.id, u.sessionId]);
       });
+      ctx.presence.kick(u.id);
       return { ok: true };
     }),
   );

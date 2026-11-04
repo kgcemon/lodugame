@@ -442,7 +442,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
 
   // ---------------------------------------------------------------- rooms, matches, stats
 
-  r.get('/rooms/:code', h(async (req) => ({ ok: true, room: rooms().preview(req.params.code) })));
+  r.get('/rooms/:code', rateLimit(60, 60_000, (req) => req.user!.id), h(async (req) => ({ ok: true, room: rooms().preview(req.params.code) })));
 
   r.get(
     '/me/stats',

@@ -2,6 +2,8 @@
 
 export interface ServerConfig {
   port: number;
+  /** Address to listen on; behind a reverse proxy, 127.0.0.1 keeps the app off the internet. */
+  host?: string;
   /** Public URL players open; used in emails and invitation links. */
   appBaseUrl: string;
   /** Browser origins allowed to call the API / open sockets. */
@@ -18,7 +20,8 @@ export interface ServerConfig {
    * verification link), so nobody can claim it by registering first. On in production.
    */
   adminNeedsVerifiedEmail: boolean;
-  mail: { mode: 'console' | 'resend' | 'memory'; from: string; resendApiKey?: string };
+  /** 'disabled': production without an email provider. Nothing is sent, and no link reaches the logs. */
+  mail: { mode: 'console' | 'resend' | 'memory' | 'disabled'; from: string; resendApiKey?: string };
   staticDir?: string | null;
   /** Google Play: service account key (file path or JSON) and the app package name. */
   googlePlayServiceAccount?: string;
@@ -27,6 +30,8 @@ export interface ServerConfig {
   googleClientIds: string[];
   /** Per-IP limits on account endpoints. */
   authLimits: { registrationsPer10Min: number; loginsPerMin: number };
+  /** Per-IP limits on all API calls and new socket connections, against floods. */
+  limits: { apiPerMin: number; socketsPerMin: number };
 }
 
 function list(v: string | undefined): string[] {
@@ -42,6 +47,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const production = env.NODE_ENV === 'production';
   return {
     port,
+    host: env.HOST || undefined,
     appBaseUrl,
     allowedOrigins: [...new Set([appBaseUrl, `http://localhost:${port}`, ...list(env.CORS_ORIGIN)])],
     databaseUrl: env.DATABASE_URL || undefined,
@@ -51,7 +57,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     adminEmails: list(env.ADMIN_EMAILS).map((e) => e.toLowerCase()),
     adminNeedsVerifiedEmail: env.ADMIN_NEEDS_VERIFIED_EMAIL ? env.ADMIN_NEEDS_VERIFIED_EMAIL === 'true' : production,
     mail: {
-      mode: env.RESEND_API_KEY ? 'resend' : 'console',
+      mode: env.RESEND_API_KEY ? 'resend' : production ? 'disabled' : 'console',
       from: env.MAIL_FROM ?? 'Ludo 3D <no-reply@localhost>',
       resendApiKey: env.RESEND_API_KEY,
     },
@@ -60,5 +66,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     googlePlayPackage: env.GOOGLE_PLAY_PACKAGE ?? 'com.ludox.game',
     googleClientIds: list(env.GOOGLE_CLIENT_IDS),
     authLimits: { registrationsPer10Min: Number(env.REGISTER_LIMIT ?? 5), loginsPerMin: Number(env.LOGIN_LIMIT ?? 10) },
+    limits: { apiPerMin: Number(env.API_LIMIT ?? 1200), socketsPerMin: Number(env.SOCKET_LIMIT ?? 240) },
   };
 }

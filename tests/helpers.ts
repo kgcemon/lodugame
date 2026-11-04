@@ -54,6 +54,7 @@ export async function bootServer(opts: StartOptions = {}): Promise<TestServer> {
       allowedOrigins: ['http://localhost:5173'],
       adminEmails: ['admin@example.com'],
       authLimits: { registrationsPer10Min: 10_000, loginsPerMin: 10_000 },
+      limits: { apiPerMin: 1_000_000, socketsPerMin: 1_000_000 },
       ...opts.config,
     },
     timings: { turnMs: 60_000, dropMs: 400, botThinkMs: 5, animScale: 0, lobbyGraceMs: 200, emptyRoomMs: 500, autoMoveMs: 60_000, autoMoveRerollMs: 60_000, ...opts.timings },
