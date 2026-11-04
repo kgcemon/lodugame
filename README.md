@@ -65,6 +65,17 @@ clients stay together and a reconnect joins part-way. The match is already on at
 is a forfeit and a lost connection has the usual 20 seconds. The app draws it in
 `app/.../ui/MatchIntroScreen.java` and `gl/TreasureRenderer.java`; the coins only show what is recorded.
 
+## Gifts between players
+
+During a match a player can send another player a cosmetic gift from their own coins or diamonds:
+`playerGift:send` (`server/rooms.ts → sendGift`) checks the seats, then one transaction
+(`server/playergifts.ts → sendPlayerGift`) checks the retry key, the catalogue price and that both
+are in the match, charges the coin or diamond ledger and writes `player_gifts`. Everyone in the match
+gets `playerGift:event`, once. Recipients get a collectible, never currency, and nothing touches the
+game. Administrators manage `gift_products` under *Match gifts*; a product picks from the models and
+animations the app can draw (`shared/playergifts.ts`), since the models are built in code
+(`app/.../gl/GiftModels.java`). A new model needs an app update.
+
 ## Database setup
 
 Migrations are plain SQL in `server/db/migrations/` (PostgreSQL/PGlite) and

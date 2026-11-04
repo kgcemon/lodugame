@@ -58,6 +58,13 @@ public final class GameSocket {
     public JSONObject playAgain;
     /** The coins the ledger last credited me for winning this room's match. */
     public JSONObject matchReward;
+    /** Gifts this phone has already shown flying: a journey plays once, reconnect or not. */
+    public final java.util.Set<String> giftsPlayed = java.util.Collections.newSetFromMap(new java.util.LinkedHashMap<String, Boolean>() {
+        @Override
+        protected boolean removeEldestEntry(java.util.Map.Entry<String, Boolean> eldest) {
+            return size() > 200;
+        }
+    });
     /** The confirmed match's Match Found introduction while it plays, and when it ends on this phone's clock. */
     private JSONObject intro;
     public long introEndsAt;
@@ -190,6 +197,9 @@ public final class GameSocket {
                 for (Listener l : listeners) l.onSocketEvent("reward", r);
             });
         });
+        s.on("playerGift:event", a -> fire("playerGift:event", obj(a)));
+        s.on("playerGift:reaction", a -> fire("playerGift:reaction", obj(a)));
+        s.on("playerGift:missed", a -> fire("playerGift:missed", obj(a)));
         s.on("gift:new", a -> fire("gift:new", obj(a)));
         s.on("gift:update", a -> fire("gift:update", obj(a)));
         s.on("session:replaced", a -> LudoApp.MAIN.post(() -> {

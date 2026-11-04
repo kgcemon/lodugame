@@ -191,6 +191,38 @@ final class Mesh {
         return b.build();
     }
 
+    /**
+     * A puffy solid from a flat outline around (0,0), counter-clockwise and visible from its centre:
+     * hearts, wings, flames. `depth` is its half thickness at the middle.
+     */
+    static Mesh extrude(float[][] outline, float depth) {
+        Builder b = new Builder();
+        int n = outline.length;
+        for (int side = -1; side <= 1; side += 2) {
+            int centre = b.vertex(0, 0, side * depth, 0, 0, side, 0.5f, 0.5f);
+            int first = -1, prev = -1;
+            for (float[] p : outline) {
+                float l = (float) Math.sqrt(p[0] * p[0] + p[1] * p[1]);
+                if (l == 0) l = 1;
+                int v = b.vertex(p[0], p[1], side * depth * 0.3f, p[0] / l * 0.75f, p[1] / l * 0.75f, side * 0.66f, 0.5f, 0.5f);
+                if (prev >= 0) b.tri(centre, prev, v);
+                else first = v;
+                prev = v;
+            }
+            b.tri(centre, prev, first);
+        }
+        for (int k = 0; k < n; k++) {
+            float[] p = outline[k], q = outline[(k + 1) % n];
+            float nx = q[1] - p[1], ny = p[0] - q[0];
+            float l = (float) Math.sqrt(nx * nx + ny * ny);
+            if (l == 0) l = 1;
+            float[] nn = {nx / l, ny / l, 0};
+            float z = depth * 0.3f;
+            b.quad(new float[]{p[0], p[1], -z}, new float[]{q[0], q[1], -z}, new float[]{q[0], q[1], z}, new float[]{p[0], p[1], z}, nn, 0, 0, 1, 1);
+        }
+        return b.build();
+    }
+
     /** A brilliant-cut gem, table up (+y), with hard facets. */
     static Mesh gem(int sides) {
         Builder b = new Builder();

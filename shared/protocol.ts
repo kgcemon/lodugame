@@ -1,5 +1,6 @@
 import type { EmoteId } from './social';
 import type { RewardEvent } from './gifts';
+import type { MissedGift, PlayerGiftEvent } from './playergifts';
 import type { Color, GameEvent, GameState, PlayerKind } from './types';
 
 /** Socket.IO contract shared by the client and the authoritative server. */
@@ -223,6 +224,12 @@ export interface ClientToServerEvents {
   'emote:send': (p: { id: string }, ack: AckFn) => void;
   /** A packet of compressed voice (binary), heard by your friends in the room. */
   'voice:frame': (data: ArrayBuffer | Uint8Array) => void;
+  /** Send a gift to a player in my match. `key`: a new one per tap on Send, the same one on a retry. */
+  'playerGift:send': (p: { productId: string; toSeatId: string; key: string }, ack: AckFn<{ giftId: string; duplicate: boolean; balance: number; currency: string; price: number }>) => void;
+  /** The gift has reached me. */
+  'playerGift:seen': (p: { ids: string[] }, ack: AckFn) => void;
+  /** Thank the sender of a gift I received, with an emote. */
+  'playerGift:react': (p: { giftId: string; reaction: string }, ack: AckFn) => void;
 }
 
 export interface ServerToClientEvents {
@@ -259,6 +266,12 @@ export interface ServerToClientEvents {
   'friend:online': (r: { player: FriendCard; played: number; best: boolean }) => void;
   /** A friend's voice packet, from their seat in your room. */
   'voice:frame': (seatId: string, data: ArrayBuffer | Uint8Array) => void;
+  /** A gift on its way, for everyone in the match to watch; sent once per gift. */
+  'playerGift:event': (e: PlayerGiftEvent) => void;
+  /** Gifts that arrived while I was away (when I come back). */
+  'playerGift:missed': (m: { gifts: MissedGift[] }) => void;
+  /** Someone thanked a gift. */
+  'playerGift:reaction': (r: { giftId: string; giftName: string; reaction: string; from: string }) => void;
 }
 
 /** A player's public card in the live friend popups. */

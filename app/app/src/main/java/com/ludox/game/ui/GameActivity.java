@@ -122,6 +122,9 @@ public class GameActivity extends BaseActivity {
     private LinearLayout chatPanel, emotePanel, chatList;
     private ScrollView chatScroll;
     private android.app.Dialog resultDialog;
+    /** Gifts flying over the match, and the shop to send them from (online matches only). */
+    private GiftFlights giftFlights;
+    private GiftShopPanel giftShop;
     /** The offline pass-and-play match, or null for an online one. */
     private LocalGame local;
     private JSONObject localUpdate;
@@ -202,7 +205,7 @@ public class GameActivity extends BaseActivity {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
-                if (chatPanel.getVisibility() == View.VISIBLE || emotePanel.getVisibility() == View.VISIBLE) closePanels();
+                if (chatPanel.getVisibility() == View.VISIBLE || emotePanel.getVisibility() == View.VISIBLE || (giftShop != null && giftShop.isOpen())) closePanels();
                 else confirmLeave();
             }
         });
@@ -212,6 +215,7 @@ public class GameActivity extends BaseActivity {
     protected void onResume() {
         super.onResume();
         gl.onResume();
+        if (giftFlights != null) giftFlights.onResume();
         renderer.fxLevel = Effects.level();
         if (local == null && app.socket.room == null) {
             if (!resultOpen) finish();
@@ -240,6 +244,7 @@ public class GameActivity extends BaseActivity {
     protected void onPause() {
         super.onPause();
         gl.onPause();
+        if (giftFlights != null) giftFlights.onPause();
         LudoApp.MAIN.removeCallbacks(ticker);
         Sfx.get().stopAll();
     }
@@ -248,6 +253,7 @@ public class GameActivity extends BaseActivity {
     protected void onDestroy() {
         super.onDestroy();
         if (pulse != null) pulse.cancel();
+        if (giftFlights != null) giftFlights.stop();
     }
 
     // ================================================================= socket
@@ -262,6 +268,14 @@ public class GameActivity extends BaseActivity {
         switch (event) {
             case "game:update":
                 onUpdate((JSONObject) data, false);
+                break;
+            case "playerGift:event":
+                if (giftFlights != null) giftFlights.play((JSONObject) data);
+                break;
+            case "wallet":
+                // The coins and diamonds on my card, and the shop if it's open.
+                renderChips();
+                if (giftShop != null) giftShop.refresh();
                 break;
             case "room:state":
                 JSONObject room = (JSONObject) data;
@@ -279,6 +293,7 @@ public class GameActivity extends BaseActivity {
                     syncDiceLooks();
                     syncOffline(room);
                     renderChips();
+                    if (giftShop != null) giftShop.refresh();
                 }
                 break;
             case "room:gone":
@@ -1081,6 +1096,12 @@ public class GameActivity extends BaseActivity {
             reactions.addView(r, new LinearLayout.LayoutParams(0, Ui.dp(this, ctl()), 1));
         }
         controls.addView(reactions, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        if (local == null) {
+            View giftBtn = roundIcon("🎁", "Send a gift", v -> openGifts());
+            LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl()));
+            gl.rightMargin = Ui.dp(this, 6);
+            controls.addView(giftBtn, gl);
+        }
         emoteBtn = roundIcon("😀", "Emotes", v -> openEmotes());
         controls.addView(emoteBtn, new LinearLayout.LayoutParams(Ui.dp(this, ctl()), Ui.dp(this, ctl())));
         bottom.addView(controls, Ui.lpMatchWrap());
@@ -1094,6 +1115,32 @@ public class GameActivity extends BaseActivity {
 
         buildChatPanel();
         buildEmotePanel();
+        if (local == null) buildGifts();
+    }
+
+    private void buildGifts() {
+        giftFlights = new GiftFlights(this, root, this::cardCentre);
+        giftShop = new GiftShopPanel(this, (product, toColor) -> giftFlights.preview(product, app.socket.myColor(), toColor));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+        lp.setMargins(Ui.dp(this, 6), 0, Ui.dp(this, 6), Ui.dp(this, 6));
+        root.addView(giftShop.view, lp);
+    }
+
+    /** Where a player's card is on screen, measured from the corner of root's content. */
+    private float[] cardCentre(String color) {
+        View chip = root.findViewWithTag("chip:" + color);
+        if (chip == null || chip.getWidth() == 0) return null;
+        int[] at = new int[2], base = new int[2];
+        chip.getLocationInWindow(at);
+        root.getLocationInWindow(base);
+        return new float[]{at[0] - base[0] - root.getPaddingLeft() + chip.getWidth() / 2f, at[1] - base[1] - root.getPaddingTop() + chip.getHeight() / 2f};
+    }
+
+    private void openGifts() {
+        chatPanel.setVisibility(View.GONE);
+        emotePanel.setVisibility(View.GONE);
+        app.socket.chatOpen = false;
+        giftShop.open();
     }
 
     private void buildNetCard() {
@@ -1844,6 +1891,7 @@ public class GameActivity extends BaseActivity {
 
     private void openChat() {
         Sfx.get().play(Sfx.S.CLICK);
+        if (giftShop != null) giftShop.close();
         emotePanel.setVisibility(View.GONE);
         chatPanel.setVisibility(View.VISIBLE);
         app.socket.chatOpen = true;
@@ -1860,12 +1908,14 @@ public class GameActivity extends BaseActivity {
 
     private void openEmotes() {
         Sfx.get().play(Sfx.S.CLICK);
+        if (giftShop != null) giftShop.close();
         chatPanel.setVisibility(View.GONE);
         app.socket.chatOpen = false;
         emotePanel.setVisibility(View.VISIBLE);
     }
 
     private void closePanels() {
+        if (giftShop != null) giftShop.close();
         chatPanel.setVisibility(View.GONE);
         emotePanel.setVisibility(View.GONE);
         app.socket.chatOpen = false;

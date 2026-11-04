@@ -149,6 +149,11 @@ export class MatchLedger {
     }
   }
 
+  /** Tell a player about a gift, in their notifications: it keeps until they read it. */
+  notifyGift(userId: string, giftId: string, message: string): void {
+    notify(this.ctx.db, this.ctx.presence, userId, 'system', { message, playerGiftId: giftId }).catch((e) => console.error('[ledger] gift notice failed', e));
+  }
+
   async assertCanPlay(userId: string, fee: number): Promise<void> {
     if (this.ctx.requireEmailVerification && fee > 0) {
       const u = await this.ctx.db.query<{ email_verified_at: string | null }>('select email_verified_at from users where id = $1', [userId]);

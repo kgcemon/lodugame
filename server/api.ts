@@ -14,6 +14,7 @@ import { PROFILE_FRAMES } from '../shared/frames';
 import { BOARDS, DEFAULT_BOARD } from '../shared/boards';
 import { diceProducts, diceSales, stockSold, type DiceProduct } from './dice';
 import { boardProducts, boardSales, type BoardProduct } from './boards';
+import { adminPlayerGiftApi, displayedGifts, playerGiftApi } from './playergifts';
 import { adminGiftRoutes, playerGiftRoutes, rewardFromGems, rewardFromWallet, type GiftCatalogue } from './gifts';
 import { payoutPolicy } from './settings';
 import { spin, spinState } from './spin';
@@ -22,7 +23,7 @@ import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type T
 /** Player-facing and administrator REST API (everything under /api except auth). */
 
 const PAGE = 20;
-const TX_TYPES: TxType[] = ['welcome_bonus', 'match_entry', 'match_reward', 'match_refund', 'daily_bonus', 'referral_reward', 'admin_adjustment', 'shop_purchase', 'gift'];
+const TX_TYPES: TxType[] = ['welcome_bonus', 'match_entry', 'match_reward', 'match_refund', 'daily_bonus', 'referral_reward', 'admin_adjustment', 'shop_purchase', 'gift', 'player_gift'];
 const MIN_WINRATE_MATCHES = 5;
 /** How many friend requests one player may ever send another (declined or cancelled ones count). */
 export const MAX_FRIEND_REQUESTS = 2;
@@ -280,6 +281,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
           joinedAt: row.created_at,
           online: presence.isOnline(row.user_id),
           stats: await statsFor(db, row.user_id),
+          gifts: await displayedGifts(db, row.user_id),
           friendship: row.user_id === req.user!.id ? null : await friendship(req.user!.id, row.user_id),
         },
       };
@@ -448,6 +450,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   );
 
   playerGiftRoutes(r, ctx, giftCatalogue);
+  playerGiftApi(r, ctx);
 
   // ---------------------------------------------------------------- rooms, matches, stats
 
@@ -1195,6 +1198,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   );
 
   adminGiftRoutes(admin, ctx, giftCatalogue);
+  adminPlayerGiftApi(admin, ctx);
 
   r.use('/admin', admin);
 

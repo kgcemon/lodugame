@@ -33,6 +33,9 @@ import { MAX_REROLLS, REROLL_COSTS } from './gems';
 import { NO_ELIGIBLE_PLAYERS, type MatchLedger } from './ledger';
 import type { Presence } from './presence';
 import { HttpError, WindowLimiter } from './security';
+import { GIFT_DURATION_MS, GIFT_SENDS_PER_MIN, type GiftRarity } from '../shared/playergifts';
+import type { Db } from './db';
+import { markGiftsSeen, reactToGift, sendPlayerGift, unseenGifts } from './playergifts';
 import type { MatchMode, Settings } from './settings';
 
 export type IO = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -226,6 +229,7 @@ export class RoomManager {
   private forfeiting = new Map<string, Promise<unknown>>();
   private botCounter = 0;
   private roomLimit = new WindowLimiter(ROOMS_PER_MIN, 60_000);
+  private giftLimit = new WindowLimiter(GIFT_SENDS_PER_MIN, 60_000);
 
   constructor(
     private io: IO,
@@ -234,6 +238,7 @@ export class RoomManager {
     private presence: Presence,
     private t: Timings = DEFAULT_TIMINGS,
     private roll: () => number = () => randomInt(1, 7),
+    private db: Db | null = null,
   ) {}
 
   get roomCount(): number {
@@ -424,6 +429,15 @@ export class RoomManager {
   /** session:hello: the player's match, or else the result of the one they are no longer in. */
   async resume(socket: ClientSocket, wantsResult: boolean): Promise<{ room: RoomView | null; result: MatchResult | null }> {
     const room = this.hello(socket);
+    // Gifts that reached me while I was away are news now; a notice, not the animation again.
+    if (this.db) {
+      void unseenGifts(this.db, this.user(socket).id).then(
+        (gifts) => {
+          if (gifts.length) socket.emit('playerGift:missed', { gifts });
+        },
+        (e) => console.error('[rooms] unseen gifts failed', e),
+      );
+    }
     if (room) return { room, result: null };
     const u = this.user(socket);
     await this.forfeiting.get(u.id);
@@ -1234,6 +1248,61 @@ export class RoomManager {
     if (room.status === 'lobby') throw new RuleError('Emotes are available during a match');
     if (!this.limiter(room, seat.playerId!).emote.take()) throw new RuleError('Emote cooling down');
     this.io.to(room.code).emit('emote', { id, seatId: seat.id, color: seat.color, name: seat.name, at: Date.now() });
+  }
+
+  // ---------------------------------------------------------------- gifts
+
+  /**
+   * A player sends a gift to another player in their match. Who is who comes from the seats, never
+   * from the client; what it costs comes from the catalogue. Gifts don't touch the game, its clocks
+   * or its dice. A retry of the same key is answered without a charge and without a second journey.
+   */
+  async sendGift(socket: ClientSocket, productId: unknown, toSeatId: unknown, key: unknown): Promise<{ giftId: string; duplicate: boolean; balance: number; currency: string; price: number }> {
+    const { room, seat } = this.mySeat(socket);
+    if (!this.db) throw new RuleError('Gifts are not available');
+    if (typeof productId !== 'string' || typeof toSeatId !== 'string' || typeof key !== 'string') throw new RuleError('Bad request');
+    if (room.status !== 'playing' || !room.game || room.game.phase === 'over' || room.intro) throw new RuleError('Gifts can be sent during a match');
+    const to = room.seats.find((s) => s.id === toSeatId);
+    if (!to || !to.playerId || to.left) throw new RuleError('That player cannot receive a gift');
+    if (to === seat) throw new RuleError('You cannot send a gift to yourself');
+    if (!to.connected || to.graceDeadline !== null) throw new RuleError(`${to.name} is offline right now`);
+    if (!this.giftLimit.take(seat.playerId!)) throw new RuleError('You are sending gifts too fast');
+    const matchId = room.matchId;
+    const { gift, duplicate, balance } = await sendPlayerGift(this.db, { matchId, senderId: seat.playerId!, recipientId: to.playerId, productId, key });
+    const out = { giftId: gift.id, duplicate, balance, currency: gift.currency, price: Number(gift.price) };
+    if (duplicate) return out;
+    await this.ledger.pushWallet([seat.playerId!]);
+    // The recipient's notifications keep it, whether or not they stay connected for the journey.
+    this.ledger.notifyGift(to.playerId, gift.id, `🎁 You received ${gift.name} from ${seat.name}!`);
+    this.io.to(room.code).emit('playerGift:event', {
+      id: gift.id,
+      matchId,
+      name: gift.name,
+      rarity: gift.rarity,
+      model: gift.model,
+      sendAnim: gift.send_anim,
+      receiveAnim: gift.receive_anim,
+      particle: gift.particle,
+      from: { seatId: seat.id, name: seat.name, color: seat.color },
+      to: { seatId: to.id, name: to.name, color: to.color },
+      durationMs: GIFT_DURATION_MS[gift.rarity as GiftRarity] ?? GIFT_DURATION_MS.common,
+    });
+    return out;
+  }
+
+  async giftsSeen(socket: ClientSocket, ids: unknown): Promise<void> {
+    if (!this.db || !Array.isArray(ids) || !ids.every((i) => typeof i === 'string' && /^[0-9a-f-]{36}$/i.test(i))) throw new RuleError('Bad request');
+    await markGiftsSeen(this.db, this.user(socket).id, ids as string[]);
+  }
+
+  /** The recipient thanks the sender (once): the room sees it if they're still there, and history keeps it. */
+  async reactGift(socket: ClientSocket, giftId: unknown, reaction: unknown): Promise<void> {
+    const u = this.user(socket);
+    if (!this.db || typeof giftId !== 'string' || !/^[0-9a-f-]{36}$/i.test(giftId)) throw new RuleError('Bad request');
+    if (!isEmoteId(reaction)) throw new RuleError('Unknown reaction');
+    const done = await reactToGift(this.db, u.id, giftId, reaction);
+    if (!done?.senderId) return;
+    this.presence.emit(done.senderId, 'playerGift:reaction', { giftId, giftName: done.name, reaction, from: u.username });
   }
 
   /** Bots occasionally react to captures and finishes, after the move has been animated. */

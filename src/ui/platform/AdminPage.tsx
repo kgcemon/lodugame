@@ -1,3 +1,4 @@
+import { PlayerGiftAdmin } from './PlayerGiftAdmin';
 import { useEffect, useState, type ComponentType } from 'react';
 import { api, fmt, get, post, type MatchMode } from '../../lib/api';
 import { toast } from '../../store/toast';
@@ -1169,6 +1170,7 @@ export const ADMIN_SECTIONS: { path: string; label: string; icon: string; group:
   { path: 'dice', label: 'Dice', icon: '🎯', group: 'Shop', hint: 'Dice prices, rarity, stock and sales.', page: DiceProducts },
   { path: 'gifts', label: 'Send gifts', icon: '🎁', group: 'Gifts', hint: 'Give players coins, diamonds, dice, boards or frames. Credited when they claim it.', page: GiftSend },
   { path: 'gift-history', label: 'Gift history', icon: '📜', group: 'Gifts', hint: 'Every gift sent, who claimed it, and cancelling unclaimed ones.', page: GiftHistory },
+  { path: 'player-gifts', label: 'Match gifts', icon: '💝', group: 'Gifts', hint: 'The gold and diamond gifts players send each other in a match: prices, looks, availability and sales.', page: PlayerGiftAdmin },
   { path: 'popups', label: 'Popups', icon: '📣', group: 'App', hint: 'Announcements shown on the app home screen.', page: Popups },
   { path: 'settings', label: 'Settings', icon: '⚙️', group: 'App', hint: 'Bonuses, match modes, payouts and frame prices.', page: SettingsTab },
   { path: 'audit', label: 'Audit log', icon: '🛡️', group: 'App', hint: 'Every change an administrator made.', page: Audit },

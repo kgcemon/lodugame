@@ -151,6 +151,14 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
             case "reward":
                 onReward((JSONObject) data);
                 break;
+            case "playerGift:missed":
+                onGiftsMissed((JSONObject) data);
+                break;
+            case "playerGift:reaction": {
+                JSONObject r = (JSONObject) data;
+                LudoApp.toast(r.optString("from") + " " + com.ludox.game.game.Social.emoji(r.optString("reaction")) + " your " + r.optString("giftName"));
+                break;
+            }
             case "gift:new":
                 onGiftArrived((JSONObject) data);
                 break;
@@ -194,6 +202,26 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
             default:
                 break;
         }
+    }
+
+    /** Gifts that reached me while I was away: say so once, and the server stops offering them. */
+    private void onGiftsMissed(JSONObject m) {
+        org.json.JSONArray gifts = m.optJSONArray("gifts");
+        if (gifts == null || gifts.length() == 0) return;
+        org.json.JSONArray ids = new org.json.JSONArray();
+        JSONObject news = null;
+        int count = 0;
+        for (int i = 0; i < gifts.length(); i++) {
+            JSONObject g = gifts.optJSONObject(i);
+            if (g == null) continue;
+            ids.put(g.optString("id"));
+            if (!app.socket.giftsPlayed.add(g.optString("id"))) continue;
+            count++;
+            if (news == null) news = g;
+        }
+        app.socket.emit("playerGift:seen", PlayFlow.obj("ids", ids), null);
+        if (news == null) return;
+        LudoApp.toast(count > 1 ? "🎁 You received " + count + " gifts: see My Gifts" : "🎁 You received " + news.optString("name") + " from " + news.optString("from") + "!");
     }
 
     /** A reward the server pushed (a match win when I'm not on the game screen): show it here. */

@@ -67,7 +67,7 @@ public final class TreasureRenderer implements GLSurfaceView.Renderer {
         }
     }
 
-    private static final String METAL_FS =
+    static final String METAL_FS =
             "precision mediump float;\n" +
             "uniform vec4 uColor;\n" +
             "uniform sampler2D uTex;\n" +

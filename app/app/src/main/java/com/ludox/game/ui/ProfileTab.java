@@ -63,6 +63,7 @@ final class ProfileTab {
 
         LinearLayout links = Ui.card(a);
         links.addView(link("📚  My Collection — boards, dice & frames", () -> a.startActivity(new android.content.Intent(a, CollectionActivity.class))));
+        links.addView(link("🎁  My Gifts — received and sent", () -> a.startActivity(new android.content.Intent(a, MyGiftsActivity.class))));
         links.addView(link("🪙  Wallet & transactions", () -> a.open(WalletActivity.class).onClick(null)));
         links.addView(link("📜  Match history", () -> a.open(HistoryActivity.class).onClick(null)));
         links.addView(link("🔔  Notifications", () -> a.open(NotificationsActivity.class).onClick(null)));

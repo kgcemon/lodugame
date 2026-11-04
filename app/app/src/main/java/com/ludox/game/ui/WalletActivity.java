@@ -16,7 +16,7 @@ import org.json.JSONObject;
 public class WalletActivity extends BaseActivity {
     private static final String[][] TYPES = {
             {"", "All"}, {"welcome_bonus", "Welcome"}, {"daily_bonus", "Daily"}, {"match_entry", "Entry fees"},
-            {"match_reward", "Rewards"}, {"match_refund", "Refunds"}, {"shop_purchase", "Shop"}, {"admin_adjustment", "Adjustments"},
+            {"match_reward", "Rewards"}, {"match_refund", "Refunds"}, {"shop_purchase", "Shop"}, {"player_gift", "Gifts sent"}, {"admin_adjustment", "Adjustments"},
     };
 
     private LinearLayout col;

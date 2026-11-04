@@ -20,7 +20,9 @@ export type TxType =
   /** Coins spent in the shop (boards). */
   | 'shop_purchase'
   /** A gift from an administrator, claimed by the player. */
-  | 'gift';
+  | 'gift'
+  /** A gift this player sent another player in a match. */
+  | 'player_gift';
 
 export interface WalletTxRow {
   id: string;

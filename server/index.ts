@@ -190,7 +190,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     },
   });
   presence.attach(io as unknown as Server);
-  const rooms = new RoomManager(io, ledger, settings, presence, { ...DEFAULT_TIMINGS, ...opts.timings }, opts.roll);
+  const rooms = new RoomManager(io, ledger, settings, presence, { ...DEFAULT_TIMINGS, ...opts.timings }, opts.roll, db);
   const voice = new VoiceRelay(db, io, rooms);
   ctx.voice = voice;
 
@@ -233,6 +233,9 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     socket.on('game:move', handler(socket, (p: { token: unknown; seq?: unknown }) => rooms.move(socket, p.token, p.seq)));
     socket.on('game:rematch', handler(socket, () => rooms.rematch(socket)));
     socket.on('game:reroll', handler(socket, () => rooms.reroll(socket)));
+    socket.on('playerGift:send', handler(socket, (p: { productId: unknown; toSeatId: unknown; key: unknown }) => rooms.sendGift(socket, p.productId, p.toSeatId, p.key)));
+    socket.on('playerGift:seen', handler(socket, (p: { ids: unknown }) => rooms.giftsSeen(socket, p.ids)));
+    socket.on('playerGift:react', handler(socket, (p: { giftId: unknown; reaction: unknown }) => rooms.reactGift(socket, p.giftId, p.reaction)));
     socket.on('chat:send', handler(socket, (p: { text: unknown; quick?: unknown; team?: unknown }) => rooms.chat(socket, p.text, p.quick, p.team)));
     socket.on('emote:send', handler(socket, (p: { id: unknown }) => rooms.emote(socket, p.id)));
     // Voice packets are fire-and-forget binary (no ack): forwarded to friends in the room.

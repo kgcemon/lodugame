@@ -410,6 +410,21 @@ final class PlayerProfile {
         panel.addView(fieldRow(a, "Level", String.valueOf(level), "Rank", matches > 0 ? "#" + s.optInt("rank") : "–"));
         panel.addView(fieldRow(a, "Player ID", pid, "Season points", Ui.fmt(s.optLong("seasonPoints"))));
 
+        // Gifts they chose to show.
+        org.json.JSONArray gifts = p.optJSONArray("gifts");
+        if (gifts != null && gifts.length() > 0) {
+            LinearLayout row = Ui.hbox(a);
+            row.setGravity(android.view.Gravity.CENTER);
+            for (int i = 0; i < gifts.length(); i++) {
+                JSONObject g = gifts.optJSONObject(i);
+                android.widget.ImageView pic = GiftShopPanel.thumb(a, g.optString("model"));
+                pic.setContentDescription(g.optString("name"));
+                pic.setOnClickListener(v -> GiftReveal.show(a, g, null, false));
+                row.addView(pic, new LinearLayout.LayoutParams(Ui.dp(a, 44), Ui.dp(a, 44)));
+            }
+            panel.addView(row, Ui.lpMatchWrap());
+        }
+
         // Level progress bar.
         FrameLayout bar = new FrameLayout(a);
         bar.setBackground(Ui.round(0x40000000, Ui.dp(a, 4)));
