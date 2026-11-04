@@ -23,39 +23,100 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
 
 /**
- * The "searching for players" screen for quick-play rooms: the LudoX logo, the mode
- * and entry fee, you VS the open seats (whose avatars shuffle until someone joins), a
- * search timer and a Cancel button. The server starts the match by itself.
+ * The "searching for an opponent" screen for quick-play rooms: the LudoX logo, the mode, entry
+ * fee and balance, you VS the open seats, a turning search ring, the timer and a Cancel button.
+ * An open seat stays empty until the server puts a real player in it (never a made-up face). The
+ * server starts the match by itself; {@link MatchIntroScreen} takes over when it is confirmed.
  */
 final class Matchmaking {
-    private static final String[] FACES = {"😎", "🤠", "🧑", "👩", "👨", "👱", "🧔", "👸", "🤴", "🦸", "🧑‍🚀", "🥷", "🧕", "👲"};
-
     /** When the current search began, kept across screen rotations and app switches. */
     private static String searchCode;
     private static long searchStart;
 
     private final RoomActivity a;
     private final LudoApp app = LudoApp.get();
-    private final Random rng = new Random();
     private final List<Slot> slots = new ArrayList<>();
     private final List<ValueAnimator> loops = new ArrayList<>();
-    private TextView timer, searching, title;
+    private TextView timer, searching, title, balance;
+    private long shownBalance = -1;
+    private SearchFx fx;
     private int lastFilled = -1;
     /** When bots fill the empty seats (elapsedRealtime), or 0 if the server hasn't said. */
     private long deadline;
 
-    /** One avatar frame: shows a player, or shuffles faces while the seat is open. */
+    /**
+     * The search's backdrop: the dark purple room, a little gold dust drifting up through it and a
+     * ring of light turning round the seats. Drawn from the clock, one frame per tick of the screen.
+     */
+    private static final class SearchFx extends View {
+        private final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final float[][] motes = new float[Effects.level() == Effects.FULL ? 22 : 10][4];
+        private final float d;
+        /** Where the ring turns (this view's coordinates), once the seats are laid out. */
+        float cx = -1, cy, radius;
+
+        SearchFx(android.content.Context c) {
+            super(c);
+            d = Ui.dp(c, 1);
+            java.util.Random r = new java.util.Random(7);
+            for (float[] m : motes) {
+                m[0] = r.nextFloat();
+                m[1] = r.nextFloat();
+                m[2] = 0.02f + r.nextFloat() * 0.03f;
+                m[3] = 1 + r.nextFloat() * 1.6f;
+            }
+        }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas c) {
+            float w = getWidth(), h = getHeight(), secs = SystemClock.uptimeMillis() / 1000f;
+            p.setColor(Color.BLACK); // the dust below leaves its alpha on the paint
+            p.setShader(new android.graphics.RadialGradient(w / 2, h * 0.5f, Math.max(w, h) * 0.75f, new int[]{0xf02a0d63, 0xff14052f}, null, android.graphics.Shader.TileMode.CLAMP));
+            c.drawRect(0, 0, w, h, p);
+            p.setShader(null);
+            for (float[] m : motes) {
+                float y = 1f - ((m[1] + secs * m[2]) % 1f);
+                float glow = (float) Math.sin(y * Math.PI);
+                p.setColor(Color.argb((int) (150 * glow), 255, 210, 110));
+                c.drawCircle(m[0] * w + (float) Math.sin(secs + m[1] * 9) * d * 5, y * h, m[3] * d, p);
+            }
+            if (cx >= 0) {
+                c.save();
+                c.rotate(secs * 150f % 360f, cx, cy);
+                p.setStyle(android.graphics.Paint.Style.STROKE);
+                p.setStrokeWidth(d * 4);
+                p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+                p.setColor(Color.BLACK);
+                p.setShader(new android.graphics.SweepGradient(cx, cy, new int[]{0x00ffc94a, 0x00ffc94a, 0xccffc94a, 0xffffffff}, new float[]{0f, 0.45f, 0.97f, 1f}));
+                c.drawCircle(cx, cy, radius, p);
+                p.setShader(null);
+                p.setStyle(android.graphics.Paint.Style.FILL);
+                c.restore();
+                p.setStyle(android.graphics.Paint.Style.STROKE);
+                p.setStrokeWidth(d);
+                p.setColor(0x33ffc94a);
+                c.drawCircle(cx, cy, radius, p);
+                c.drawCircle(cx, cy, radius * 0.72f, p);
+                p.setStyle(android.graphics.Paint.Style.FILL);
+            }
+        }
+    }
+
+    /** One avatar frame: shows a player, or an open seat while it is empty. */
     private final class Slot {
         final FrameLayout frame;
         final TextView face;
         final TextView name;
         final View ring;
+        final int sizeDp;
+        View photo;
+        String seatId;
         boolean filled;
 
         Slot(int sizeDp) {
+            this.sizeDp = sizeDp;
             frame = new FrameLayout(a);
             ring = new View(a);
             frame.addView(ring, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -76,18 +137,29 @@ final class Matchmaking {
 
         void setOpen() {
             filled = false;
+            seatId = null;
             Fx.bevel(ring, Fx.PURPLE_DARK, 18, 5, false);
-            name.setText("???");
-            shuffle();
+            name.setText("Searching…");
+            showPhoto(null);
+            face.setText("?");
+            face.setBackground(Ui.round(0x552a0d63, Ui.dp(a, 14)));
         }
 
-        void shuffle() {
-            if (filled) return;
-            face.setText(FACES[rng.nextInt(FACES.length)]);
-            face.setBackground(Ui.round(Color.HSVToColor(new float[]{rng.nextInt(360), 0.55f, 0.85f}), Ui.dp(a, 14)));
+        private void showPhoto(View v) {
+            if (photo != null) frame.removeView(photo);
+            photo = v;
+            if (v == null) return;
+            int in = Ui.dp(a, 7);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+            lp.setMargins(in, in, in, in + Ui.dp(a, 5));
+            frame.addView(v, lp);
         }
 
         void setPlayer(JSONObject seat, boolean me) {
+            // A room update repeats the seats: nothing to redo for the same player.
+            String who = seat.optString("id");
+            if (filled && who.equals(seatId)) return;
+            seatId = who;
             boolean was = filled;
             filled = true;
             boolean bot = "ai".equals(seat.optString("kind"));
@@ -95,8 +167,10 @@ final class Matchmaking {
             int[] frameColors = {Fx.blend(col, Color.WHITE, 0.35f), col, Fx.blend(col, Color.BLACK, 0.45f)};
             Fx.bevel(ring, frameColors, 18, 5, false);
             String n = seat.optString("name");
-            face.setText(bot ? "🤖" : n.isEmpty() ? "?" : n.substring(0, n.offsetByCodePoints(0, 1)).toUpperCase());
-            face.setBackground(Ui.round(bot ? Fx.blend(col, Color.BLACK, 0.2f) : Color.HSVToColor(new float[]{seat.optInt("avatarHue", 210), 0.6f, 0.8f}), Ui.dp(a, 14)));
+            face.setText(bot ? "🤖" : "");
+            face.setBackground(Ui.round(bot ? Fx.blend(col, Color.BLACK, 0.2f) : 0x552a0d63, Ui.dp(a, 14)));
+            // Their own picture or initial, the same avatar they have everywhere.
+            showPhoto(bot ? null : Ui.avatar(a, seat, n, sizeDp - 14));
             String shown = bot ? n : Flags.of(seat) + " " + n;
             name.setText(me ? shown + " (you)" : shown);
             if (!was) {
@@ -111,7 +185,8 @@ final class Matchmaking {
             LinearLayout c = Ui.vbox(a);
             c.setGravity(Gravity.CENTER_HORIZONTAL);
             c.addView(frame, new LinearLayout.LayoutParams(Ui.dp(a, sizeDp), Ui.dp(a, sizeDp + 5)));
-            LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(Ui.dp(a, sizeDp + 30), ViewGroup.LayoutParams.WRAP_CONTENT);
+            // Wide enough for a name, narrow enough that four seats still fit a small phone.
+            LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(Ui.dp(a, sizeDp + (sizeDp < 100 ? 12 : 30)), ViewGroup.LayoutParams.WRAP_CONTENT);
             nlp.topMargin = Ui.dp(a, 4);
             c.addView(name, nlp);
             return c;
@@ -131,6 +206,9 @@ final class Matchmaking {
         int maxPlayers = room.optInt("maxPlayers", 2);
         JSONObject mode = room.optJSONObject("mode");
         long fee = room.optLong("entryFee");
+
+        fx = new SearchFx(a);
+        a.root.addView(fx, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         LinearLayout col = Ui.vbox(a);
         col.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -179,13 +257,16 @@ final class Matchmaking {
         int depth = Fx.bevel(table, Fx.RED, 16, 5, false);
         table.setPadding(0, 0, 0, depth);
         LinearLayout head = Ui.hbox(a);
-        head.addView(cell("Game Mode", true), Ui.weight(1));
-        head.addView(cell("Entry Amount", true), Ui.weight(1));
+        head.addView(cell("Game Mode", true), Ui.weight(1.3f));
+        head.addView(cell("Entry Fee", true), Ui.weight(1));
+        head.addView(cell("Balance", true), Ui.weight(1));
         table.addView(head);
         LinearLayout values = Ui.hbox(a);
         values.setBackground(Ui.round(0x33000000, 0));
-        values.addView(cell("🏆 " + (mode != null ? mode.optString("name") : "Quick"), false), Ui.weight(1));
+        values.addView(cell(mode != null ? mode.optString("name") : "Quick", false), Ui.weight(1.3f));
         values.addView(cell(fee > 0 ? "🪙 " + Ui.fmt(fee) : "FREE", false), Ui.weight(1));
+        balance = cell("🪙 " + Ui.fmt(app.balance()), false);
+        values.addView(balance, Ui.weight(1));
         table.addView(values);
         LinearLayout.LayoutParams tblp = Ui.lpMatchWrap();
         tblp.topMargin = Ui.dp(a, 10);
@@ -201,9 +282,9 @@ final class Matchmaking {
         Slot mine = new Slot(size);
         slots.add(mine);
         row.addView(mine.column(size));
-        TextView vs = new Fx.GoldText(a, "VS", 40, new int[]{0xffffffff, 0xffffe082, 0xffff8f00}, 0xff7a1d00);
+        TextView vs = new Fx.GoldText(a, "VS", maxPlayers <= 2 ? 40 : 28, new int[]{0xffffffff, 0xffffe082, 0xffff8f00}, 0xff7a1d00);
         vs.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(Ui.dp(a, 76), ViewGroup.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(Ui.dp(a, maxPlayers <= 2 ? 76 : 52), ViewGroup.LayoutParams.WRAP_CONTENT);
         row.addView(vs, vlp);
         loop(ObjectAnimator.ofFloat(vs, "scaleX", 1f, 1.18f), 520, true);
         loop(ObjectAnimator.ofFloat(vs, "scaleY", 1f, 1.18f), 520, true);
@@ -249,7 +330,7 @@ final class Matchmaking {
         searchRow.setGravity(Gravity.CENTER);
         TextView glass = Ui.text(a, "🔍", 22, Color.WHITE);
         searchRow.addView(glass);
-        searching = new Fx.GoldText(a, "SEARCHING FOR PLAYERS...", 18);
+        searching = new Fx.GoldText(a, "SEARCHING FOR OPPONENT...", 18);
         searchRow.addView(searching);
         LinearLayout.LayoutParams srlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         srlp.topMargin = Ui.dp(a, 26);
@@ -273,20 +354,30 @@ final class Matchmaking {
         sv.addView(col, new android.widget.ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         a.root.addView(sv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // Shuffle open seats, tick the timer, animate the dots.
+        // The ring turns round the seats, wherever they ended up on this screen.
+        arena.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            int[] at = new int[2], base = new int[2];
+            row.getLocationInWindow(at);
+            fx.getLocationInWindow(base);
+            fx.cx = at[0] - base[0] + row.getWidth() / 2f;
+            fx.cy = at[1] - base[1] + row.getHeight() / 2f;
+            fx.radius = Ui.dp(a, 42);
+        });
+
+        // Tick the timer, animate the dots.
         ValueAnimator ticker = ValueAnimator.ofInt(0, 1000);
         ticker.setDuration(1000);
         ticker.setRepeatCount(ValueAnimator.INFINITE);
         ticker.setInterpolator(new LinearInterpolator());
-        final long[] lastShuffle = {0};
         final long[] lastMusic = {-10_000};
         final long[] lastTickSec = {-1};
         ticker.addUpdateListener(va -> {
             long now = SystemClock.elapsedRealtime();
             boolean searchingNow = lastFilled < slots.size();
-            if (now - lastShuffle[0] > 110) {
-                lastShuffle[0] = now;
-                for (Slot s : slots) s.shuffle();
+            fx.invalidate();
+            if (shownBalance != app.balance()) {
+                shownBalance = app.balance();
+                balance.setText("🪙 " + Ui.fmt(shownBalance));
             }
             // Gentle search music, looped every two seconds while we wait.
             if (searchingNow && now - lastMusic[0] >= 2000) {
@@ -313,7 +404,7 @@ final class Matchmaking {
                     searching.setText("ADDING BOTS...");
                 } else {
                     int dots = (int) ((now / 400) % 4);
-                    searching.setText("SEARCHING FOR PLAYERS" + "...".substring(0, dots) + "   ".substring(dots));
+                    searching.setText("SEARCHING FOR OPPONENT" + "...".substring(0, dots) + "   ".substring(dots));
                 }
             }
         });
@@ -350,8 +441,11 @@ final class Matchmaking {
             Sfx.get().play(filled >= slots.size() ? Sfx.S.MATCH_FOUND : Sfx.S.EXTRA);
         }
         if (filled >= slots.size()) {
-            searching.setText("MATCH FOUND! GET READY...");
-            title.setText("MATCH FOUND!");
+            // Full, but a seat's player has dropped: no match until they are back or the seat is free again.
+            boolean everyoneHere = true;
+            for (JSONObject s : order) if (s != null && !s.optBoolean("connected", true) && !"ai".equals(s.optString("kind"))) everyoneHere = false;
+            searching.setText(everyoneHere ? "MATCH FOUND! GET READY..." : "A PLAYER IS RECONNECTING...");
+            title.setText(everyoneHere ? "MATCH FOUND!" : "ONLINE MULTIPLAYER");
         } else if (lastFilled >= slots.size()) {
             title.setText("ONLINE MULTIPLAYER");
         }

@@ -1662,6 +1662,7 @@ public class GameActivity extends BaseActivity {
         }
         JSONObject s = local != null ? null : app.socket.settlement;
         if (s != null && s.optLong("entryFee") > 0) {
+            spec.pool = s.optLong("pool");
             if (iWon) spec.coinsWon = s.optLong("payout");
             else spec.payoutNote = (teamMatch ? "Each winner got 🪙 " : "Winner got 🪙 ") + Ui.fmt(s.optLong("payout"));
         }

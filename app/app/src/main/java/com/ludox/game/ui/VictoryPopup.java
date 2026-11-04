@@ -59,6 +59,8 @@ final class VictoryPopup {
         JSONObject reward;
         /** A quieter line about the payout when I didn't win, or null. */
         String payoutNote;
+        /** The match's prize pool, as the server settled it; 0 for a free match. */
+        long pool;
         List<Row> ranking;
         String primary;
         Runnable onPrimary, onLeave;
@@ -160,6 +162,13 @@ final class VictoryPopup {
             note.setGravity(Gravity.CENTER);
             note.setPadding(0, Ui.dp(a, 8), 0, 0);
             col.addView(note, Ui.lpMatchWrap());
+        }
+
+        if (s.pool > 0) {
+            TextView poolNote = Ui.bold(Ui.text(a, "Final prize pool: 🪙 " + Ui.fmt(s.pool), 14, 0xfffff3c4));
+            poolNote.setGravity(Gravity.CENTER);
+            poolNote.setPadding(0, Ui.dp(a, 8), 0, 0);
+            col.addView(poolNote, Ui.lpMatchWrap());
         }
 
         // Finishing order.

@@ -6,6 +6,7 @@ import type {
   ClientToServerEvents,
   ForfeitReason,
   GameUpdate,
+  MatchIntro,
   MatchResult,
   RoomPreview,
   RoomStatus,
@@ -13,7 +14,7 @@ import type {
   SeatStatus,
   ServerToClientEvents,
 } from '../shared/protocol';
-import { MAX_NAME_LENGTH, RECONNECT_GRACE_MS, ROOM_CODE_LENGTH, type ChatMessage } from '../shared/protocol';
+import { MATCH_INTRO_FREE_MS, MATCH_INTRO_MS, MAX_NAME_LENGTH, RECONNECT_GRACE_MS, ROOM_CODE_LENGTH, type ChatMessage } from '../shared/protocol';
 import {
   botReaction,
   CHAT_HISTORY,
@@ -65,6 +66,10 @@ export interface Timings {
   autoMoveMs: number;
   /** The same, when they could still pay to re-roll that roll (time to decide). */
   autoMoveRerollMs: number;
+  /** The Match Found introduction: the match is on, the first turn waits this long (0: none). */
+  introMs: number;
+  /** The same for a match with no coins in it. */
+  introFreeMs: number;
   /** Overrides the configured matchmaking wait (tests). */
   matchWaitMs?: number;
 }
@@ -80,6 +85,8 @@ export const DEFAULT_TIMINGS: Timings = {
   animScale: 1,
   autoMoveMs: 600,
   autoMoveRerollMs: 2_000,
+  introMs: MATCH_INTRO_MS,
+  introFreeMs: MATCH_INTRO_FREE_MS,
 };
 
 /** One JSON line per game action when GAME_LOG=1 (room, match, turn, dice, moves; no secrets). */
@@ -167,6 +174,11 @@ interface Room {
    */
   readyAt: number;
   starting: boolean;
+  /** Settles when a confirmation under way has gone one way or the other: seats don't change before that. */
+  commit: Promise<void> | null;
+  /** The confirmed match's introduction while it plays, and when it ends. */
+  intro: { view: Omit<MatchIntro, 'msLeft'>; until: number } | null;
+  introTimer: NodeJS.Timeout | null;
   lastEvents: GameEvent[];
   chat: ChatMessage[];
   chatSeq: number;
@@ -245,6 +257,7 @@ export class RoomManager {
       you: pid ? room.seats.findIndex((s) => s.playerId === pid) : -1,
       dropAfterMs: this.t.dropMs,
       waitMsLeft: room.waitUntil ? Math.max(0, room.waitUntil - Date.now()) : null,
+      intro: room.intro ? { ...room.intro.view, msLeft: Math.max(0, room.intro.until - Date.now()) } : null,
       seats: room.seats.map((s, i) => ({
         id: s.id,
         name: s.name,
@@ -403,6 +416,8 @@ export class RoomManager {
       socket.emit('game:update', this.update(room, []));
     }
     this.broadcastRoom(room);
+    // A full quick room was waiting for this player to come back.
+    if (room.quick && room.status === 'lobby') this.checkQuickStart(room);
     return this.view(room, u.id);
   }
 
@@ -552,6 +567,7 @@ export class RoomManager {
     room.status = 'over';
     room.heldWin = false;
     room.pausedTurn = null;
+    this.clearIntro(room);
     if (room.timer) clearTimeout(room.timer);
     room.timer = null;
     room.deadline = null;
@@ -689,6 +705,9 @@ export class RoomManager {
       rerollBusy: false,
       readyAt: 0,
       starting: false,
+      commit: null,
+      intro: null,
+      introTimer: null,
       lastEvents: [],
       chat: [],
       chatSeq: 0,
@@ -775,7 +794,9 @@ export class RoomManager {
 
   /** Starting something else never walks out of a running match: leaving one is an explicit, confirmed forfeit. */
   private assertNotPlaying(pid: string): void {
-    if (this.roomOf(pid)?.status === 'playing') throw new RuleError('Finish or leave your current match first');
+    const room = this.roomOf(pid);
+    if (room?.starting) throw new RuleError('Your match is starting');
+    if (room?.status === 'playing') throw new RuleError('Finish or leave your current match first');
   }
 
   /** Public matchmaking for a mode: join a waiting room of that mode or open one. */
@@ -808,7 +829,8 @@ export class RoomManager {
   private checkQuickStart(room: Room): void {
     const seated = room.seats.filter((s) => !s.pending).length;
     if (seated >= room.maxPlayers) {
-      void this.startGame(room).catch((e) => console.error('[rooms] quick start failed', e));
+      // Nobody is committed to a match while offline: they come back (hello) or lose the seat, with a refund.
+      if (!this.anyoneOffline(room)) this.quickStart(room);
       return;
     }
     if (seated >= 1 && !room.waitTimer) {
@@ -824,12 +846,32 @@ export class RoomManager {
           this.checkQuickStart(room);
           return;
         }
+        // The same goes for bots: hello or the lobby's grace period picks this up again.
+        if (this.anyoneOffline(room)) return;
         // Nobody else came: fill the empty seats with bots so the player isn't kept waiting.
         while (room.seats.length < room.maxPlayers) room.seats.push(this.makeBot(room));
         this.broadcastRoom(room);
-        void this.startGame(room).catch((e) => console.error('[rooms] quick start failed', e));
+        this.quickStart(room);
       }, ms);
     }
+  }
+
+  private anyoneOffline(room: Room): boolean {
+    return room.seats.some((s) => s.playerId && !s.connected);
+  }
+
+  /** A quick room has no host to tell: if the match can't be confirmed, the room closes and everyone is refunded. */
+  private quickStart(room: Room): void {
+    void this.startGame(room).catch((e) => {
+      console.error('[rooms] quick start failed', e);
+      if (!this.rooms.has(room.code) || room.status !== 'lobby') return;
+      for (const s of room.seats) {
+        if (!s.socketId) continue;
+        this.io.to(s.socketId).emit('room:closed', 'The match could not be confirmed. Your entry fee was refunded.');
+        this.io.sockets.sockets.get(s.socketId)?.leave(room.code);
+      }
+      this.deleteRoom(room, 'match could not be confirmed');
+    });
   }
 
   private makeBot(room: Room): Seat {
@@ -870,7 +912,7 @@ export class RoomManager {
 
   addBot(socket: ClientSocket): void {
     const { room } = this.hostRoom(socket);
-    if (room.status !== 'lobby') throw new RuleError('Match already started');
+    if (room.status !== 'lobby' || room.starting) throw new RuleError('Match already started');
     if (room.entryFee > 0) throw new RuleError('Bots can only join free Friendly rooms');
     if (room.seats.length >= room.maxPlayers) throw new RuleError('Room is full');
     room.seats.push(this.makeBot(room));
@@ -879,7 +921,7 @@ export class RoomManager {
 
   async kick(socket: ClientSocket, seatIdx: number): Promise<void> {
     const { room } = this.hostRoom(socket);
-    if (room.status !== 'lobby') throw new RuleError('Match already started');
+    if (room.status !== 'lobby' || room.starting) throw new RuleError('Match already started');
     const seat = room.seats[seatIdx];
     if (!Number.isInteger(seatIdx) || !seat) throw new RuleError('No such seat');
     if (seat.pending) throw new RuleError('That player is still joining');
@@ -908,6 +950,8 @@ export class RoomManager {
     }
     const notReady = room.seats.filter((s) => s.kind === 'human' && s.playerId !== room.hostPid && !s.ready);
     if (notReady.length) throw new RuleError(`Waiting for ${notReady.map((s) => s.name).join(', ')} to be ready`);
+    const offline = room.seats.filter((s) => s.playerId && !s.connected);
+    if (offline.length) throw new RuleError(`Waiting for ${offline.map((s) => s.name).join(', ')} to reconnect`);
     await this.startGame(room);
   }
 
@@ -959,46 +1003,111 @@ export class RoomManager {
     this.broadcastRoom(room);
   }
 
+  /**
+   * Confirm the match, then start it: the ledger checks the fees and fixes the pool in one step,
+   * and from there the match is on (leaving forfeits, a lost connection has the usual grace
+   * period). Its Match Found introduction plays while the first turn waits (beginPlay).
+   */
   private async startGame(room: Room): Promise<void> {
     if (room.starting || room.status !== 'lobby') return;
     room.starting = true;
+    let release = () => {};
+    room.commit = new Promise((r) => (release = r));
     if (room.waitTimer) clearTimeout(room.waitTimer);
     room.waitTimer = null;
     room.waitUntil = null;
     try {
       const colors = colorsForCount(room.seats.length);
       room.seats.forEach((s, i) => (s.color = colors[i]));
-      await this.ledger.start(
+      const humans = room.seats.filter((s) => s.playerId);
+      // A place on the leaderboard is nice to show, never a reason to hold up a match.
+      const ranks = await this.ledger.ranks(humans.map((s) => s.playerId!)).catch(() => new Map<string, number>());
+      const confirmed = await this.ledger.start(
         room.matchId,
-        room.seats.filter((s) => s.playerId).map((s) => ({ userId: s.playerId!, color: s.color })),
+        humans.map((s) => ({ userId: s.playerId!, color: s.color })),
         room.seats.map((s) => ({ color: s.color, name: s.name, kind: s.kind })),
       );
+      if (!this.rooms.has(room.code)) {
+        // The room closed while this was confirming: not the players' doing, so they get their fees back.
+        await this.ledger.abandon(room.matchId, 'room closed before the start', true);
+        return;
+      }
+      room.game = createGame(room.seats.map((s) => ({ color: s.color, name: s.name, kind: s.kind, aiLevel: s.aiLevel })), { teams: room.teams });
+      room.status = 'playing';
+      // Lock the board: a host changing boards (or leaving) mid-match changes nothing, and
+      // anyone reconnecting gets the same one.
+      const locked = this.roomBoard(room);
+      room.matchBoard = locked.board;
+      room.matchBoardBy = locked.by;
+      room.lastEvents = [];
+      room.rerollable = null;
+      for (const s of room.seats) s.rerolls = 0;
+      this.playIntro(room, confirmed.pool, confirmed.winnerReward, ranks);
+      // Someone who dropped just as this was confirming has their countdown start with the match.
+      for (const s of room.seats) if (s.playerId && !s.connected) this.beginGrace(room, s);
+      this.reschedule(room, 0);
+      this.broadcastRoom(room);
+      this.io.to(room.code).emit('game:update', this.update(room, []));
+      // Gem balances decide whether a roll that passed the turn is held for a re-roll.
+      for (const s of room.seats) {
+        if (s.playerId) {
+          const seat = s;
+          this.ledger.gems(seat.playerId!).then((g) => (seat.gems = g), () => {});
+        }
+      }
     } finally {
       room.starting = false;
+      room.commit = null;
+      release();
     }
-    if (!this.rooms.has(room.code)) return;
-    room.game = createGame(room.seats.map((s) => ({ color: s.color, name: s.name, kind: s.kind, aiLevel: s.aiLevel })), { teams: room.teams });
-    room.status = 'playing';
-    // Lock the board: a host changing boards (or leaving) mid-match changes nothing, and
-    // anyone reconnecting gets the same one.
-    const locked = this.roomBoard(room);
-    room.matchBoard = locked.board;
-    room.matchBoardBy = locked.by;
-    room.lastEvents = [];
-    room.rerollable = null;
-    for (const s of room.seats) s.rerolls = 0;
-    // Someone who dropped in the lobby just before the start has their countdown start with the match.
-    for (const s of room.seats) if (s.playerId && !s.connected) this.beginGrace(room, s);
+  }
+
+  /** Hold the first turn for the introduction everyone in the match is about to see. */
+  private playIntro(room: Room, pool: number, winnerReward: number, ranks: Map<string, number>): void {
+    const durationMs = pool > 0 ? this.t.introMs : this.t.introFreeMs;
+    if (durationMs <= 0) return;
+    room.intro = {
+      until: Date.now() + durationMs,
+      view: {
+        matchId: room.matchId,
+        modeName: room.mode.name,
+        entryFee: room.entryFee,
+        pool,
+        winnerReward,
+        winners: room.teams ? 2 : 1,
+        durationMs,
+        players: room.seats.map((s) => ({
+          seatId: s.id,
+          name: s.name,
+          color: s.color,
+          kind: s.kind,
+          publicId: s.publicId,
+          avatarHue: s.avatarHue,
+          avatarUrl: s.avatarUrl,
+          frame: s.frame,
+          country: s.country,
+          rank: s.playerId ? ranks.get(s.playerId) ?? null : null,
+          contribution: s.playerId ? room.entryFee : 0,
+        })),
+      },
+    };
+    room.readyAt = room.intro.until;
+    room.introTimer = setTimeout(() => this.beginPlay(room), durationMs);
+  }
+
+  /** The introduction is over: the first turn starts, for everyone at once. */
+  private beginPlay(room: Room): void {
+    if (!this.rooms.has(room.code) || !room.intro) return;
+    this.clearIntro(room);
     this.reschedule(room, 0);
     this.broadcastRoom(room);
     this.io.to(room.code).emit('game:update', this.update(room, []));
-    // Gem balances decide whether a roll that passed the turn is held for a re-roll.
-    for (const s of room.seats) {
-      if (s.playerId) {
-        const seat = s;
-        this.ledger.gems(seat.playerId!).then((g) => (seat.gems = g), () => {});
-      }
-    }
+  }
+
+  private clearIntro(room: Room): void {
+    if (room.introTimer) clearTimeout(room.introTimer);
+    room.introTimer = null;
+    room.intro = null;
   }
 
   /**
@@ -1009,6 +1118,8 @@ export class RoomManager {
     const u = socket.data.user as AuthUser | undefined;
     if (!u) return { result: null };
     const room = this.roomOf(u.id);
+    // Being confirmed right now: whether this is a refund or a forfeit depends on how that ends.
+    await room?.commit;
     const matchId = room?.status === 'playing' ? room.matchId : null;
     if (room) {
       socket.leave(room.code);
@@ -1022,6 +1133,7 @@ export class RoomManager {
   }
 
   private async removeFromRoom(room: Room, pid: string, reason: ForfeitReason = 'left'): Promise<void> {
+    await room.commit;
     const idx = room.seats.findIndex((s) => s.playerId === pid);
     if (idx < 0) {
       this.track(pid, null);
@@ -1058,6 +1170,8 @@ export class RoomManager {
       return;
     }
     this.broadcastRoom(room);
+    // Someone offline was holding up a quick room: the others carry on searching.
+    if (room.quick && room.status === 'lobby') this.checkQuickStart(room);
     if (room.game) this.io.to(room.code).emit('game:update', this.update(room, []));
   }
 
@@ -1143,6 +1257,7 @@ export class RoomManager {
     for (const t of room.botTimers) clearTimeout(t);
     room.botTimers.clear();
     if (room.timer) clearTimeout(room.timer);
+    if (room.introTimer) clearTimeout(room.introTimer);
     if (room.emptyTimer) clearTimeout(room.emptyTimer);
     if (room.waitTimer) clearTimeout(room.waitTimer);
     for (const s of room.seats) {
@@ -1283,7 +1398,7 @@ export class RoomManager {
     const winnerName = winnerColors.map((c) => room.seats.find((s) => s.color === c)?.name ?? 'Unknown').join(' & ');
     void this.write(room, async () => {
       const res = await this.ledger.settle(matchId, ranking, winnerColor, winners, endReason);
-      if (res) this.io.to(room.code).emit('match:settled', { winnerName, winnerColor, winnerColors, payout: res.payout, entryFee });
+      if (res) this.io.to(room.code).emit('match:settled', { winnerName, winnerColor, winnerColors, payout: res.payout, entryFee, pool: res.pot });
     });
   }
 
@@ -1302,6 +1417,8 @@ export class RoomManager {
     room.deadline = null;
     const g = room.game;
     if (!g || g.phase === 'over') return;
+    // The first turn's clock starts when the introduction ends (beginPlay), whatever happens during it.
+    if (room.intro) return;
     const p = g.players[g.current];
     const seat = room.seats.find((s) => s.color === p.color);
     let wait: number;
@@ -1402,6 +1519,7 @@ export class RoomManager {
     for (const room of this.rooms.values()) {
       for (const t of room.botTimers) clearTimeout(t);
       if (room.timer) clearTimeout(room.timer);
+      if (room.introTimer) clearTimeout(room.introTimer);
       if (room.emptyTimer) clearTimeout(room.emptyTimer);
       if (room.waitTimer) clearTimeout(room.waitTimer);
       for (const s of room.seats) if (s.graceTimer) clearTimeout(s.graceTimer);

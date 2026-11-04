@@ -213,6 +213,11 @@ public abstract class BaseActivity extends AppCompatActivity implements GameSock
     }
 
     protected void openGame() {
+        // A match that has just been confirmed starts with its introduction, on the room screen.
+        if (app.socket.activeIntro() != null) {
+            if (!(this instanceof RoomActivity)) openRoom();
+            return;
+        }
         startActivity(new Intent(this, GameActivity.class));
         if (this instanceof RoomActivity) finish();
     }

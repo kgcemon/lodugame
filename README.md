@@ -50,6 +50,21 @@ verification and password-reset links are printed in the server terminal.
 | `npm start`          | Production: one process serves `dist/`, `/api` and the game socket     |
 | `npm run db:migrate` | Apply database migrations and exit (the server also does this on boot) |
 
+## How a match starts
+
+Entry fees are charged when a player takes a seat and refunded if they leave while the match is
+still waiting. When the room fills (`server/rooms.ts → startGame`), one transaction
+(`server/ledger.ts → start`) checks that seat records and ledger agree each fee was paid exactly
+once, records `matches.prize_pool` and starts the match. If that fails, a quick room closes and
+everyone is refunded. Nobody is committed while offline: a full quick room waits until they are back
+or the lobby's grace period frees their seat.
+
+The room then carries `intro` (`shared/protocol.ts → MatchIntro`) while the Match Found introduction
+plays and the first turn is held: the same players, colours and numbers for everyone, and `msLeft`, so
+clients stay together and a reconnect joins part-way. The match is already on at this point: leaving
+is a forfeit and a lost connection has the usual 20 seconds. The app draws it in
+`app/.../ui/MatchIntroScreen.java` and `gl/TreasureRenderer.java`; the coins only show what is recorded.
+
 ## Database setup
 
 Migrations are plain SQL in `server/db/migrations/` (PostgreSQL/PGlite) and

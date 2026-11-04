@@ -126,6 +126,107 @@ final class Mesh {
         return b.build();
     }
 
+    /** A flat square in the XY plane, -1..1, facing +z (sprites, and full screen with an identity matrix). */
+    static Mesh quad() {
+        Builder b = new Builder();
+        b.quad(new float[]{-1, -1, 0}, new float[]{1, -1, 0}, new float[]{1, 1, 0}, new float[]{-1, 1, 0}, new float[]{0, 0, 1}, 0, 0, 1, 1);
+        return b.build();
+    }
+
+    /** A half cylinder lying along X (x -1..1, y 0..1, z -1..1): the arched lid of a chest, closed at both ends. */
+    static Mesh arch(int segments) {
+        Builder b = new Builder();
+        int[] near = new int[segments + 1], far = new int[segments + 1];
+        for (int k = 0; k <= segments; k++) {
+            double a = Math.PI * k / segments;
+            float y = (float) Math.sin(a), z = (float) Math.cos(a), u = k / (float) segments;
+            near[k] = b.vertex(-1, y, z, 0, y, z, 0, u);
+            far[k] = b.vertex(1, y, z, 0, y, z, 1, u);
+        }
+        for (int k = 0; k < segments; k++) {
+            b.tri(near[k], far[k], far[k + 1]);
+            b.tri(near[k], far[k + 1], near[k + 1]);
+        }
+        for (int side = -1; side <= 1; side += 2) {
+            int centre = b.vertex(side, 0, 0, side, 0, 0, 0.5f, 0.5f);
+            int prev = -1;
+            for (int k = 0; k <= segments; k++) {
+                double a = Math.PI * k / segments;
+                float y = (float) Math.sin(a), z = (float) Math.cos(a);
+                int v = b.vertex(side, y, z, side, 0, 0, 0.5f + z * 0.5f, 0.5f - y * 0.5f);
+                if (prev >= 0) b.tri(centre, prev, v);
+                prev = v;
+            }
+        }
+        return b.build();
+    }
+
+    /** A coin (radius 1, y -1..1): a picture of its face on both sides, a plain rim. */
+    static Mesh coin(int segments) {
+        Builder b = new Builder();
+        for (int side = -1; side <= 1; side += 2) {
+            int centre = b.vertex(0, side, 0, 0, side, 0, 0.5f, 0.5f);
+            int prev = -1;
+            for (int k = 0; k <= segments; k++) {
+                double a = 2 * Math.PI * k / segments;
+                float x = (float) Math.cos(a), z = (float) Math.sin(a);
+                int v = b.vertex(x, side, z, 0, side, 0, 0.5f + x * 0.5f, 0.5f + z * 0.5f);
+                if (prev >= 0) b.tri(centre, prev, v);
+                prev = v;
+            }
+        }
+        int prevTop = -1, prevBottom = -1;
+        for (int k = 0; k <= segments; k++) {
+            double a = 2 * Math.PI * k / segments;
+            float x = (float) Math.cos(a), z = (float) Math.sin(a);
+            int t = b.vertex(x, 1, z, x, 0, z, 0.02f, 0.5f);
+            int d = b.vertex(x, -1, z, x, 0, z, 0.02f, 0.5f);
+            if (prevTop >= 0) {
+                b.tri(prevTop, t, d);
+                b.tri(prevTop, d, prevBottom);
+            }
+            prevTop = t;
+            prevBottom = d;
+        }
+        return b.build();
+    }
+
+    /** A brilliant-cut gem, table up (+y), with hard facets. */
+    static Mesh gem(int sides) {
+        Builder b = new Builder();
+        float tableR = 0.58f, tableY = 0.42f, girdleY = 0.1f, culetY = -0.75f;
+        float[] up = {0, 1, 0};
+        int centre = b.vertex(0, tableY, 0, 0, 1, 0, 0.5f, 0.5f);
+        for (int k = 0; k < sides; k++) {
+            double a0 = 2 * Math.PI * k / sides, a1 = 2 * Math.PI * (k + 1) / sides;
+            float c0 = (float) Math.cos(a0), s0 = (float) Math.sin(a0), c1 = (float) Math.cos(a1), s1 = (float) Math.sin(a1);
+            float[] t0 = {c0 * tableR, tableY, s0 * tableR}, t1 = {c1 * tableR, tableY, s1 * tableR};
+            float[] g0 = {c0, girdleY, s0}, g1 = {c1, girdleY, s1};
+            float[] culet = {0, culetY, 0};
+            // Table.
+            b.tri(centre, b.vertex(t0[0], t0[1], t0[2], up[0], up[1], up[2], 0.5f, 0.5f), b.vertex(t1[0], t1[1], t1[2], up[0], up[1], up[2], 0.5f, 0.5f));
+            // Crown facet and pavilion facet, each with its own flat normal.
+            float[] crown = facet(t0, g0, t1);
+            b.quad(g0, g1, t1, t0, crown, 0, 0, 1, 1);
+            float[] pav = facet(g0, culet, g1);
+            int p0 = b.vertex(g0[0], g0[1], g0[2], pav[0], pav[1], pav[2], 0, 0);
+            int p1 = b.vertex(g1[0], g1[1], g1[2], pav[0], pav[1], pav[2], 1, 0);
+            int p2 = b.vertex(culet[0], culet[1], culet[2], pav[0], pav[1], pav[2], 0.5f, 1);
+            b.tri(p0, p1, p2);
+        }
+        return b.build();
+    }
+
+    /** Outward unit normal of a gem's facet, whichever way round its corners came. */
+    private static float[] facet(float[] a, float[] b, float[] c) {
+        float[] n = cross(new float[]{b[0] - a[0], b[1] - a[1], b[2] - a[2]}, new float[]{c[0] - a[0], c[1] - a[1], c[2] - a[2]});
+        float l = (float) Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        if (l == 0) l = 1;
+        float cx = (a[0] + b[0] + c[0]) / 3, cz = (a[2] + b[2] + c[2]) / 3;
+        float dir = n[0] * cx + n[2] * cz >= 0 ? 1 : -1;
+        return new float[]{dir * n[0] / l, dir * n[1] / l, dir * n[2] / l};
+    }
+
     private static float[] cross(float[] a, float[] c) {
         return new float[]{a[1] * c[2] - a[2] * c[1], a[2] * c[0] - a[0] * c[2], a[0] * c[1] - a[1] * c[0]};
     }

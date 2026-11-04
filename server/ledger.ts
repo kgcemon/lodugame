@@ -19,6 +19,9 @@ import type { RewardEvent } from '../shared/gifts';
  *   refund  key refund:<match>:<attempt>   (leaving before start, cancellations, server faults)
  *   reward  key reward:<match>             + match_settlements primary key (exactly once)
  *
+ * start() is the point of no return: it checks that everyone's fee is in the ledger exactly once,
+ * fixes the prize pool and starts the match, in one transaction. Only then do clients see coins fly.
+ *
  * REFUND POLICY
  *   - Leaving a room (or being removed / timing out) before the match starts: full refund.
  *   - Room cancelled before start (host left everyone, creation failure, empty room): full refund.
@@ -41,6 +44,14 @@ export interface MatchInfo {
   matchId: string;
   entryFee: number;
   payoutMultiplier: number;
+}
+
+/** What start() confirmed. */
+export interface ConfirmedMatch {
+  /** What everyone paid in. */
+  pool: number;
+  /** What each winner will be credited. */
+  winnerReward: number;
 }
 
 export interface SettleResult {
@@ -204,19 +215,55 @@ export class MatchLedger {
     if (refunded) await this.pushWallet([userId]);
   }
 
-  async start(matchId: string, seats: { userId: string; color: string }[], lineup: LineupSeat[] = []): Promise<void> {
-    await this.ctx.db.tx(async (q) => {
+  /**
+   * Confirm the match, all or nothing: every seated player has paid the official fee exactly once
+   * (seat record and ledger agree) and nobody else is waiting on this match. Then the pool is fixed
+   * and the match is on. If any check fails nothing has changed and the fees can still be refunded.
+   */
+  async start(matchId: string, seats: { userId: string; color: string }[], lineup: LineupSeat[] = []): Promise<ConfirmedMatch> {
+    return this.ctx.db.tx(async (q) => {
       const m = await lockMatch(q, matchId);
       if (m.status !== 'waiting') throw new HttpError(409, 'Match cannot be started');
       for (const s of seats) {
         const r = await q.query(
-          `update match_players set status = 'playing', color = $3 where match_id = $1 and user_id = $2 and status = 'joined'`,
-          [matchId, s.userId, s.color],
+          `update match_players set status = 'playing', color = $3
+           where match_id = $1 and user_id = $2 and status = 'joined' and entry_paid = $4 and refunded = 0`,
+          [matchId, s.userId, s.color, m.entry_fee],
         );
         if (!r.rowCount) throw new HttpError(409, 'A player is not properly seated');
+        const paid = await q.query<{ net: number | string }>(
+          `select coalesce(sum(amount), 0) as net from wallet_transactions
+           where match_id = $1 and user_id = $2 and type in ('match_entry', 'match_refund')`,
+          [matchId, s.userId],
+        );
+        if (Number(paid.rows[0].net) !== -m.entry_fee) throw new HttpError(409, 'A player is not properly seated');
       }
-      await q.query(`update matches set status = 'in_progress', started_at = now(), lineup = $2 where id = $1`, [matchId, JSON.stringify(lineup)]);
+      const strays = await q.query(`select user_id from match_players where match_id = $1 and status = 'joined'`, [matchId]);
+      if (strays.rows.length) throw new HttpError(409, 'A player is not properly seated');
+      const pool = seats.length * m.entry_fee;
+      await q.query(`update matches set status = 'in_progress', started_at = now(), lineup = $2, prize_pool = $3 where id = $1`, [matchId, JSON.stringify(lineup), pool]);
+      return { pool, winnerReward: Math.round(m.entry_fee * m.payout_multiplier) };
     });
+  }
+
+  /** Leaderboard places (by wins, as on the Ranks tab) of players who have won at least once. */
+  async ranks(userIds: string[]): Promise<Map<string, number>> {
+    if (!userIds.length) return new Map();
+    const marks = userIds.map((_, i) => `$${i + 1}`).join(', ');
+    const rows = (await this.ctx.db.query<{ user_id: string; wins: number | string; place: number | string }>(
+      `with stats as (
+         select mp.user_id, sum(case when mp.won then 1 else 0 end) as wins
+         from match_players mp
+         join matches m on m.id = mp.match_id
+         join users u on u.id = mp.user_id and u.suspended_at is null
+         where m.status = 'completed' and mp.status in ('finished', 'forfeited')
+         group by mp.user_id
+       )
+       select me.user_id, me.wins, 1 + (select count(*) from stats o where o.wins > me.wins) as place
+       from stats me where me.user_id in (${marks})`,
+      userIds,
+    )).rows;
+    return new Map(rows.filter((r) => Number(r.wins) > 0).map((r) => [r.user_id, Number(r.place)]));
   }
 
   /** The server saw this player's connection drop; they have until `deadline` to come back. */

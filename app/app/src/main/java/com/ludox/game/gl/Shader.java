@@ -4,7 +4,7 @@ import android.opengl.GLES20;
 
 /** One lit shader for everything: Lambert + Blinn specular, optional texture, optional unlit mode. */
 final class Shader {
-    private static final String VS =
+    static final String VS =
             "uniform mat4 uMVP;\n" +
             "uniform mat4 uModel;\n" +
             "attribute vec3 aPos;\n" +
@@ -51,7 +51,12 @@ final class Shader {
     final int uMVP, uModel, uColor, uTex, uUseTex, uUnlit, uSpec, uLight, uEye;
 
     Shader() {
-        program = link(compile(GLES20.GL_VERTEX_SHADER, VS), compile(GLES20.GL_FRAGMENT_SHADER, FS));
+        this(VS, FS);
+    }
+
+    /** Another look with the same attributes and uniforms. */
+    Shader(String vs, String fs) {
+        program = link(compile(GLES20.GL_VERTEX_SHADER, vs), compile(GLES20.GL_FRAGMENT_SHADER, fs));
         aPos = GLES20.glGetAttribLocation(program, "aPos");
         aNormal = GLES20.glGetAttribLocation(program, "aNormal");
         aUV = GLES20.glGetAttribLocation(program, "aUV");

@@ -22,11 +22,17 @@ public class RoomActivity extends BaseActivity {
     private LinearLayout col;
     /** Quick-play rooms show the full-screen "searching for players" screen instead. */
     private Matchmaking matchmaking;
+    /** MATCH FOUND, over whatever this screen was showing, until the board takes over. */
+    private MatchIntroScreen intro;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         JSONObject room = app.socket.room;
+        if (app.socket.activeIntro() != null) {
+            showIntro();
+            return;
+        }
         if (room != null && room.optBoolean("isPublic")) {
             matchmaking = new Matchmaking(this);
             matchmaking.build(room);
@@ -34,7 +40,8 @@ public class RoomActivity extends BaseActivity {
             getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
                 @Override
                 public void handleOnBackPressed() {
-                    leave();
+                    // Once the match is confirmed there is nothing to cancel.
+                    if (intro == null) leave();
                 }
             });
             return;
@@ -47,21 +54,66 @@ public class RoomActivity extends BaseActivity {
     protected void onDestroy() {
         super.onDestroy();
         if (matchmaking != null) matchmaking.stop();
+        if (intro != null) intro.stop();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (intro != null) intro.onPause();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        if (intro != null) intro.onResume();
         if (app.socket.room == null) finish();
         else refresh();
     }
 
     private void refresh() {
+        JSONObject room = app.socket.room;
+        if (room != null && intro == null && app.socket.activeIntro() != null) showIntro();
+        if (intro != null) {
+            // The server moved on before the animation did (it has ended, or the opponent is gone).
+            if (room == null || room.isNull("intro")) intro.finish();
+            return;
+        }
         if (matchmaking != null) {
             if (app.socket.room != null) matchmaking.update(app.socket.room);
         } else {
             render();
         }
+    }
+
+    /** The match is confirmed: both players see who they're playing and the pool fill, then the board. */
+    private void showIntro() {
+        JSONObject room = app.socket.room;
+        JSONObject it = app.socket.activeIntro();
+        if (room == null || it == null || intro != null) return;
+        if (matchmaking != null) matchmaking.stop();
+        intro = new MatchIntroScreen(this, it, room.optInt("you", -1), app.socket.introEndsAt, this::introDone);
+        // The room runs on behind the status and navigation bars.
+        root.setBackgroundColor(0xff160736);
+        intro.show(root);
+        getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                // Nothing to cancel any more; the board is seconds away.
+            }
+        });
+    }
+
+    private void introDone() {
+        if (isFinishing()) return;
+        if (app.socket.room == null) {
+            finish();
+            return;
+        }
+        // Time's up on this phone, even if the server's word that it ended is a moment away.
+        startActivity(new Intent(this, GameActivity.class));
+        finish();
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
     }
 
     @Override
@@ -84,7 +136,7 @@ public class RoomActivity extends BaseActivity {
 
     @Override
     protected void onVoiceChanged() {
-        if (matchmaking == null) render();
+        if (matchmaking == null && intro == null && col != null) render();
     }
 
     private void alertAndClose(String reason) {
@@ -94,6 +146,7 @@ public class RoomActivity extends BaseActivity {
 
     private void render() {
         JSONObject room = app.socket.room;
+        if (col == null) return;
         col.removeAllViews();
         if (room == null) return;
         JSONArray seats = room.optJSONArray("seats");

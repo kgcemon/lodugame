@@ -39,6 +39,7 @@
             android:windowSoftInputMode="adjustResize" />
         <activity
             android:name=".ui.RoomActivity"
+            android:launchMode="singleTop"
             android:screenOrientation="portrait" />
         <activity
             android:name=".ui.GameActivity"

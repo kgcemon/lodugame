@@ -9,6 +9,10 @@ export type RoomStatus = 'lobby' | 'playing' | 'over';
 /** How long a player who loses their connection mid-match has to come back. */
 export const RECONNECT_GRACE_MS = 20_000;
 
+/** How long the Match Found introduction holds the first turn: with coins going into the pool, and without (free rooms). */
+export const MATCH_INTRO_MS = 6_000;
+export const MATCH_INTRO_FREE_MS = 3_000;
+
 export type SeatStatus = 'connected' | 'disconnected' | 'forfeited' | 'eliminated';
 
 /** Why a player is out of a match: offline past the deadline, left it themselves, or removed by an administrator. */
@@ -62,6 +66,44 @@ export interface SeatView {
   diceSkin: string;
 }
 
+/** One real participant in the Match Found introduction (bots say so: kind 'ai'). */
+export interface MatchIntroPlayer {
+  seatId: string;
+  name: string;
+  color: Color;
+  kind: PlayerKind;
+  publicId: string | null;
+  avatarHue: number;
+  avatarUrl: string | null;
+  frame: string | null;
+  country: string | null;
+  /** Place on the wins leaderboard; null for bots and players without a win yet. */
+  rank: number | null;
+  /** Coins this player's seat actually paid into the pool (0 for bots and free rooms). */
+  contribution: number;
+}
+
+/**
+ * The confirmed match, as the server recorded it: the entry fees are in the ledger and the pool is
+ * fixed before anyone sees it. Everyone in the match gets the same one, with the players in seat order.
+ * The coins in the animation only show this; nothing a client does changes it.
+ */
+export interface MatchIntro {
+  matchId: string;
+  modeName: string;
+  players: MatchIntroPlayer[];
+  entryFee: number;
+  /** What everyone paid in. */
+  pool: number;
+  /** What each winner is credited (multiplier x entry fee). */
+  winnerReward: number;
+  /** How many win: two partners in 2 vs 2. */
+  winners: number;
+  durationMs: number;
+  /** Time left when this was sent: clients play from durationMs - msLeft, so they stay together and a reconnect picks up where it should. */
+  msLeft: number;
+}
+
 export interface RoomView {
   code: string;
   matchId: string;
@@ -85,6 +127,8 @@ export interface RoomView {
   board: string;
   /** Whose board it is (their name), or null for the free classic board. */
   boardBy: string | null;
+  /** The Match Found introduction while it plays (status 'playing', the first turn is held); null otherwise. */
+  intro: MatchIntro | null;
 }
 
 /** What a player sees before confirming a join (and paying). */
@@ -110,6 +154,8 @@ export interface MatchSettled {
   /** Coins credited to each human winner (0 for free rooms or a bot winner). */
   payout: number;
   entryFee: number;
+  /** The match's prize pool: what everyone paid in. */
+  pool: number;
 }
 
 export interface GameUpdate {

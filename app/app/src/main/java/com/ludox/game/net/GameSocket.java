@@ -58,6 +58,9 @@ public final class GameSocket {
     public JSONObject playAgain;
     /** The coins the ledger last credited me for winning this room's match. */
     public JSONObject matchReward;
+    /** The confirmed match's Match Found introduction while it plays, and when it ends on this phone's clock. */
+    private JSONObject intro;
+    public long introEndsAt;
 
     public GameSocket(LudoApp app) {
         this.app = app;
@@ -277,6 +280,7 @@ public final class GameSocket {
         LudoApp.MAIN.post(() -> {
             JSONObject prev = room;
             room = r;
+            trackIntro(r);
             if (prev == null || !prev.optString("code").equals(r.optString("code"))) {
                 chat.clear();
                 unreadChat = 0;
@@ -292,9 +296,28 @@ public final class GameSocket {
         });
     }
 
+    /** Timed from when it first reached this phone: later room updates about the same match don't restart it. */
+    private void trackIntro(JSONObject r) {
+        JSONObject next = r.optJSONObject("intro");
+        if (next == null) {
+            intro = null;
+            introEndsAt = 0;
+        } else if (intro == null || !intro.optString("matchId").equals(next.optString("matchId"))) {
+            intro = next;
+            introEndsAt = android.os.SystemClock.elapsedRealtime() + next.optLong("msLeft");
+        }
+    }
+
+    /** The introduction to show right now, or null. */
+    public JSONObject activeIntro() {
+        return intro != null && android.os.SystemClock.elapsedRealtime() < introEndsAt ? intro : null;
+    }
+
     private void resetRoom() {
         com.ludox.game.audio.VoiceChat.get().stopAll();
         room = null;
+        intro = null;
+        introEndsAt = 0;
         lastUpdate = null;
         settlement = null;
         matchReward = null;
