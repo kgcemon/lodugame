@@ -64,7 +64,15 @@ public class PlayerActivity extends BaseActivity {
             col.addView(c);
         }
         JSONObject f = p.optJSONObject("friendship");
-        if (f != null) col.addView(friendButton(p, f));
+        // f is null on my own profile.
+        if (f != null) {
+            boolean blocked = p.optBoolean("blocked");
+            if (!blocked) col.addView(friendButton(p, f));
+            LinearLayout actions = Ui.hbox(this);
+            Ui.margins(actions, this, 0, 12, 0, 0);
+            col.addView(actions);
+            Moderation.fill(this, actions, p.optString("publicId"), p.optString("username"), blocked, nowBlocked -> load());
+        }
     }
 
     /** Add friend; once sent it becomes Cancel; Accept if they asked first; nothing once friends. */

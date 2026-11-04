@@ -1,3 +1,4 @@
+import type { BlockList } from './blocks';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { ServerConfig } from './config';
 import type { Db } from './db';
@@ -16,6 +17,8 @@ export interface AppCtx {
   mailer: Mailer;
   settings: Settings;
   presence: Presence;
+  /** Who has blocked whom (read for every chat line and emote). */
+  blocks: BlockList;
   /** Google Play purchase verification; null when not configured. */
   play: PlayVerifier | null;
   /** Google Sign-In token checks; null when not configured. */

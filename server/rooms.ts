@@ -35,6 +35,8 @@ import type { Presence } from './presence';
 import { HttpError, WindowLimiter } from './security';
 import { GIFT_DURATION_MS, GIFT_SENDS_PER_MIN, type GiftRarity } from '../shared/playergifts';
 import type { Db } from './db';
+import { BlockList } from './blocks';
+import { REPORT_EVIDENCE_MESSAGES, type ReportedMessage } from '../shared/moderation';
 import { markGiftsSeen, reactToGift, sendPlayerGift, unseenGifts } from './playergifts';
 import type { MatchMode, Settings } from './settings';
 
@@ -230,6 +232,8 @@ export class RoomManager {
   private botCounter = 0;
   private roomLimit = new WindowLimiter(ROOMS_PER_MIN, 60_000);
   private giftLimit = new WindowLimiter(GIFT_SENDS_PER_MIN, 60_000);
+  /** Who wrote each room message: messages go to clients, so the user id can't travel on them. */
+  private chatSender = new WeakMap<ChatMessage, string>();
 
   constructor(
     private io: IO,
@@ -239,6 +243,7 @@ export class RoomManager {
     private t: Timings = DEFAULT_TIMINGS,
     private roll: () => number = () => randomInt(1, 7),
     private db: Db | null = null,
+    private blocks: BlockList = new BlockList(),
   ) {}
 
   get roomCount(): number {
@@ -340,9 +345,44 @@ export class RoomManager {
 
   /** Chat this player may read: everything for the room plus their own team's messages. */
   private chatFor(room: Room, seat: Seat): ChatMessage[] {
-    if (!room.teams) return room.chat;
-    const team = this.teamOfSeat(room, seat);
-    return room.chat.filter((m) => m.team === null || m.team === team);
+    return room.chat.filter((m) => this.mayRead(room, seat, m) && !this.isBlockedSender(seat, m));
+  }
+
+  private mayRead(room: Room, seat: Seat, m: ChatMessage): boolean {
+    return !room.teams || m.team === null || m.team === this.teamOfSeat(room, seat);
+  }
+
+  private isBlockedSender(seat: Seat, m: ChatMessage): boolean {
+    const from = this.chatSender.get(m);
+    return !!from && !!seat.playerId && this.blocks.has(seat.playerId, from);
+  }
+
+  /** Who hears this player's chat and emotes: the connected seats that haven't blocked them. */
+  private listeners(room: Room, from: string): Seat[] {
+    return room.seats.filter((s) => s.socketId && s.playerId && !this.blocks.has(s.playerId, from));
+  }
+
+  /** A player's blocks changed: their room chat is sent again, without whoever they blocked. */
+  refreshChat(userId: string): void {
+    const room = this.roomOf(userId);
+    const seat = room?.seats.find((s) => s.playerId === userId);
+    if (room && seat?.socketId) this.io.to(seat.socketId).emit('chat:history', this.chatFor(room, seat));
+  }
+
+  /**
+   * What the reported player said that the reporter could read, from the server's own copy (also
+   * if the reporter has blocked them since). Null unless the two share a room right now.
+   */
+  chatEvidence(reporterId: string, targetId: string): { matchId: string; messages: ReportedMessage[] } | null {
+    const room = this.roomOf(reporterId);
+    const seat = room?.seats.find((s) => s.playerId === reporterId);
+    if (!room || !seat) return null;
+    const messages = room.chat
+      .filter((m) => this.chatSender.get(m) === targetId && this.mayRead(room, seat, m))
+      .slice(-REPORT_EVIDENCE_MESSAGES)
+      .map((m) => ({ text: m.text, at: m.at, quick: m.quick }));
+    if (!messages.length && !room.seats.some((s) => s.playerId === targetId)) return null;
+    return { matchId: room.matchId, messages };
   }
 
   private broadcastRoom(room: Room): void {
@@ -1231,14 +1271,11 @@ export class RoomManager {
       quick: quick === true,
       team: myTeam,
     };
+    this.chatSender.set(msg, seat.playerId!);
     room.chat.push(msg);
     if (room.chat.length > CHAT_HISTORY) room.chat.splice(0, room.chat.length - CHAT_HISTORY);
-    if (myTeam === null) {
-      this.io.to(room.code).emit('chat:message', msg);
-      return;
-    }
-    for (const s of room.seats) {
-      if (s.socketId && s.playerId && this.teamOfSeat(room, s) === myTeam) this.io.to(s.socketId).emit('chat:message', msg);
+    for (const s of this.listeners(room, seat.playerId!)) {
+      if (myTeam === null || this.teamOfSeat(room, s) === myTeam) this.io.to(s.socketId!).emit('chat:message', msg);
     }
   }
 
@@ -1247,7 +1284,8 @@ export class RoomManager {
     if (!isEmoteId(id)) throw new RuleError('Unknown emote');
     if (room.status === 'lobby') throw new RuleError('Emotes are available during a match');
     if (!this.limiter(room, seat.playerId!).emote.take()) throw new RuleError('Emote cooling down');
-    this.io.to(room.code).emit('emote', { id, seatId: seat.id, color: seat.color, name: seat.name, at: Date.now() });
+    const emote = { id, seatId: seat.id, color: seat.color, name: seat.name, at: Date.now() };
+    for (const s of this.listeners(room, seat.playerId!)) this.io.to(s.socketId!).emit('emote', emote);
   }
 
   // ---------------------------------------------------------------- gifts
@@ -1301,7 +1339,8 @@ export class RoomManager {
     if (!this.db || typeof giftId !== 'string' || !/^[0-9a-f-]{36}$/i.test(giftId)) throw new RuleError('Bad request');
     if (!isEmoteId(reaction)) throw new RuleError('Unknown reaction');
     const done = await reactToGift(this.db, u.id, giftId, reaction);
-    if (!done?.senderId) return;
+    // A reaction is an emote too: it stays on the gift's record but doesn't reach someone who blocked them.
+    if (!done?.senderId || this.blocks.has(done.senderId, u.id)) return;
     this.presence.emit(done.senderId, 'playerGift:reaction', { giftId, giftName: done.name, reaction, from: u.username });
   }
 

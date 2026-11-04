@@ -67,6 +67,7 @@ final class ProfileTab {
         links.addView(link("🪙  Wallet & transactions", () -> a.open(WalletActivity.class).onClick(null)));
         links.addView(link("📜  Match history", () -> a.open(HistoryActivity.class).onClick(null)));
         links.addView(link("🔔  Notifications", () -> a.open(NotificationsActivity.class).onClick(null)));
+        links.addView(link("🚫  Blocked players", () -> a.startActivity(new android.content.Intent(a, BlockedActivity.class))));
         links.addView(link("🌐  My public profile", () -> a.startActivity(new android.content.Intent(a, PlayerActivity.class).putExtra("publicId", u.optString("publicId")))));
         col.addView(links);
 

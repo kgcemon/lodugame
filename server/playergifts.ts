@@ -116,6 +116,12 @@ export async function sendPlayerGift(db: Db, s: SendGift): Promise<{ gift: Playe
       [s.matchId, s.senderId, s.recipientId],
     );
     if (s.senderId === s.recipientId || seats.rows.length !== 2) throw new HttpError(409, 'That player cannot receive a gift');
+    // After the retry check: a gift already paid for before a block is still answered as sent.
+    const blocked = await q.query(
+      'select 1 from player_blocks where (blocker_id = $1 and blocked_id = $2) or (blocker_id = $2 and blocked_id = $1)',
+      [s.senderId, s.recipientId],
+    );
+    if (blocked.rows.length) throw new HttpError(403, 'That player cannot receive a gift', 'BLOCKED');
 
     const price = Number(p.price);
     const ledgerKey = `player-gift:${s.key}`;

@@ -5,6 +5,7 @@ import { toast } from '../../store/toast';
 import { Avatar, Button, Segmented, Toggle } from '../common';
 import { EFFECTS, RARITIES } from '../../../shared/skins';
 import { PROFILE_FRAMES } from '../../../shared/frames';
+import type { ReportedMessage, ReportReason, ReportStatus } from '../../../shared/moderation';
 import { BOARD_AMBIENTS, BOARD_COLLECTIONS, BOARD_CURRENCIES, BOARD_DECORS, BOARD_EMBLEMS, BOARD_PATTERNS, BOARD_RARITIES } from '../../../shared/boards';
 import { Card, Confirm, Empty, ErrorNote, Spinner, useFetch } from './kit';
 import { GiftHistory, GiftSend } from './GiftAdmin';
@@ -25,6 +26,7 @@ function Overview() {
     { label: 'Active today', value: fmt(x.activeToday), icon: '⚡', tone: 'green' },
     { label: 'Live rooms', value: fmt(x.liveRooms), icon: '🎲', tone: 'blue' },
     { label: 'Open disputes', value: fmt(x.openDisputes), icon: '⚖️', tone: x.openDisputes > 0 ? 'red' : 'violet', hint: x.openDisputes > 0 ? 'Needs a decision' : 'All clear' },
+    { label: 'Open reports', value: fmt(x.openReports), icon: '🚩', tone: x.openReports > 0 ? 'red' : 'violet', hint: x.openReports > 0 ? 'Needs a decision' : 'All clear' },
     { label: 'Coins in circulation', value: fmt(x.coinsInCirculation), icon: '🪙', tone: 'gold' },
     { label: 'Total payouts', value: fmt(x.totalPayouts), icon: '🏆', tone: 'gold' },
     { label: 'House total', value: fmt(x.houseTotal), icon: '🏦', tone: 'gold' },
@@ -421,6 +423,81 @@ function Disputes() {
         </ul>
       ) : (
         <Empty title={`No ${status} disputes`} />
+      )}
+    </Card>
+  );
+}
+
+const REPORT_REASON_LABELS: Record<ReportReason, string> = {
+  harassment: 'Harassment or bullying',
+  hate: 'Hate speech',
+  sexual: 'Sexual content',
+  spam: 'Spam or scams',
+  cheating: 'Cheating',
+  other: 'Something else',
+};
+
+function PlayerReports() {
+  const [status, setStatus] = useState<ReportStatus>('open');
+  const list = useFetch(() => get<{ items: Row[] }>(`/admin/reports?status=${status}`), [status]);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const decide = async (id: string, s: 'resolved' | 'dismissed') => {
+    try {
+      await post(`/admin/reports/${id}`, { status: s, note: notes[id] ?? '' });
+      toast(`Report ${s}`);
+      list.reload();
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  };
+  return (
+    <Card>
+      <Segmented value={status} options={[{ value: 'open', label: 'Open' }, { value: 'resolved', label: 'Resolved' }, { value: 'dismissed', label: 'Dismissed' }]} onChange={setStatus} />
+      {list.loading && !list.data ? (
+        <Spinner />
+      ) : list.data?.items.length ? (
+        <ul className="dispute-list">
+          {list.data.items.map((x) => {
+            const said = (x.chat_excerpt ?? []) as unknown as ReportedMessage[];
+            return (
+              <li key={String(x.id)} className="glass">
+                <div>
+                  <b>{x.target}</b> <span className="mono">{x.target_public_id}</span> reported by <b>{x.reporter ?? 'a deleted account'}</b>: {REPORT_REASON_LABELS[x.reason as ReportReason] ?? x.reason}
+                  {x.target_suspended_at ? ' (suspended)' : ''}
+                  {x.note && <p>{x.note}</p>}
+                  {said.length > 0 && (
+                    <>
+                      <p className="muted">What they said in the room:</p>
+                      {said.map((m, i) => (
+                        <p key={i}>
+                          <small className="muted">{new Date(m.at).toLocaleString()}</small> {m.text}
+                        </p>
+                      ))}
+                    </>
+                  )}
+                  {x.admin_note && <p className="muted">Decision by {x.resolved_by_name ?? 'an administrator'}: {x.admin_note}</p>}
+                  <small className="muted">{d(x.created_at)} · {x.reports_on_target} report(s) on this player</small>
+                </div>
+                {status === 'open' && (
+                  <div className="stack">
+                    <input className="input" placeholder="Decision note (required)" value={notes[String(x.id)] ?? ''} onChange={(e) => setNotes({ ...notes, [String(x.id)]: e.target.value })} />
+                    <div className="row gap-s">
+                      <Button size="sm" variant="primary" onClick={() => decide(String(x.id), 'resolved')}>
+                        Resolve
+                      </Button>
+                      <Button size="sm" onClick={() => decide(String(x.id), 'dismissed')}>
+                        Dismiss
+                      </Button>
+                    </div>
+                    <p className="hint">To suspend this player, use Players and search for their ID.</p>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <Empty title={`No ${status} reports`} />
       )}
     </Card>
   );
@@ -1164,6 +1241,7 @@ export const ADMIN_SECTIONS: { path: string; label: string; icon: string; group:
   { path: 'overview', label: 'Overview', icon: '📊', group: 'Dashboard', hint: 'Players, coins and matches at a glance.', page: Overview },
   { path: 'users', label: 'Players', icon: '👥', group: 'People', hint: 'Find players, adjust coins and diamonds, suspend accounts.', page: Users },
   { path: 'disputes', label: 'Disputes', icon: '⚖️', group: 'People', hint: 'Match reports waiting for a decision.', page: Disputes },
+  { path: 'reports', label: 'Reports', icon: '🚩', group: 'People', hint: 'Players reported by other players, waiting for a decision.', page: PlayerReports },
   { path: 'transactions', label: 'Transactions', icon: '🧾', group: 'Money', hint: 'Every coin movement, newest first.', page: Transactions },
   { path: 'matches', label: 'Matches', icon: '🎲', group: 'Money', hint: 'Matches, their players and payouts.', page: Matches },
   { path: 'boards', label: 'Boards', icon: '👑', group: 'Shop', hint: 'Board prices (coins or diamonds), looks, publishing and sales.', page: BoardProducts },

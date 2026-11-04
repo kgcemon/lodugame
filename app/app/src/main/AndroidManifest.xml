@@ -60,6 +60,9 @@
             android:name=".ui.PlayerActivity"
             android:screenOrientation="portrait" />
         <activity
+            android:name=".ui.BlockedActivity"
+            android:screenOrientation="portrait" />
+        <activity
             android:name=".ui.GemShopActivity"
             android:screenOrientation="portrait" />
         <activity

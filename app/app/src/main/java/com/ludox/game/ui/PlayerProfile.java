@@ -115,6 +115,11 @@ final class PlayerProfile {
         // Where we stand with this player (friends / request sent / ...), filled once the profile loads.
         final JSONObject[] friendship = {null};
         final Runnable[] showFriendship = {() -> {}};
+        // Whether I blocked this player, and the row of Report / Block buttons (other real players only).
+        final boolean[] blocked = {false};
+        final boolean canModerate = !bot && !mine && pid != null;
+        final LinearLayout moderation = Ui.hbox(a);
+        final Runnable[] showModeration = {() -> {}};
 
         android.app.Dialog dialog = new android.app.Dialog(a);
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
@@ -250,7 +255,9 @@ final class PlayerProfile {
                 else panel.addView(note(a, "Couldn't load the profile right now."));
                 if (fresh != null && fresh.optJSONObject("friendship") != null) {
                     friendship[0] = fresh.optJSONObject("friendship");
+                    blocked[0] = fresh.optBoolean("blocked");
                     showFriendship[0].run();
+                    showModeration[0].run();
                 }
             });
         }
@@ -276,6 +283,10 @@ final class PlayerProfile {
             showFriendship[0] = () -> {
                 String st = friendState(friendship[0]);
                 footer.removeAllViews();
+                // Blocked: no friend button until they're unblocked.
+                footer.setVisibility(blocked[0] ? View.GONE : View.VISIBLE);
+                if (quick != null) quick.setVisibility(blocked[0] ? View.GONE : View.VISIBLE);
+                if (blocked[0]) return;
                 int[] colors = "outgoing".equals(st) ? Fx.RED : "friend".equals(st) || "limit".equals(st) ? Fx.PURPLE_DARK : Fx.GREEN;
                 int outline = "outgoing".equals(st) ? 0xff8a0d16 : "friend".equals(st) || "limit".equals(st) ? 0xff26104f : 0xff1f6d0a;
                 String label = "outgoing".equals(st) ? "✖ CANCEL REQUEST" : "incoming".equals(st) ? "✓ ACCEPT REQUEST"
@@ -298,8 +309,31 @@ final class PlayerProfile {
                 }
             };
             JSONObject known = cached(pid);
-            if (known != null) friendship[0] = known.optJSONObject("friendship");
+            if (known != null) {
+                friendship[0] = known.optJSONObject("friendship");
+                blocked[0] = known.optBoolean("blocked");
+            }
             showFriendship[0].run();
+        }
+        if (canModerate) {
+            final String shownName = name;
+            LinearLayout.LayoutParams mlp = Ui.lpMatchWrap();
+            mlp.topMargin = Ui.dp(a, 10);
+            card.addView(moderation, mlp);
+            showModeration[0] = () -> Moderation.fill(a, moderation, pid, shownName, blocked[0], nowBlocked -> {
+                blocked[0] = nowBlocked;
+                // Blocking ends a friendship and cancels a pending request: read where we stand again.
+                friendship[0] = null;
+                showFriendship[0].run();
+                showModeration[0].run();
+                load(a, pid, true, () -> {
+                    JSONObject fresh = cached(pid);
+                    if (fresh == null) return;
+                    friendship[0] = fresh.optJSONObject("friendship");
+                    showFriendship[0].run();
+                });
+            });
+            showModeration[0].run();
         }
 
         android.widget.ScrollView sv = new android.widget.ScrollView(a);

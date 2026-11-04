@@ -7,7 +7,7 @@ import type { Express, Request, Response } from 'express';
  */
 
 const CONTACT = 'kgcimambd@gmail.com';
-const UPDATED = '2 November 2026';
+const UPDATED = '4 November 2026';
 
 function page(title: string, body: string): string {
   return `<!doctype html>
@@ -48,6 +48,7 @@ const PRIVACY = page(
   <li><b>Game activity</b>: matches you play, results, coins, diamonds, dice skins and the history of these balances.</li>
   <li><b>Purchases</b>: when you buy diamonds through Google Play we receive the order id and purchase token to confirm the payment. Payment details (card numbers and the like) stay with Google; we never see them.</li>
   <li><b>Chat and emotes</b> you send in match rooms, so the other players can see them.</li>
+  <li><b>Reports and blocks</b>: players you block, reports you send, and reports about you. A report keeps the note its sender wrote and, if you shared a room, the messages you sent there, for an administrator to review.</li>
   <li><b>Technical data</b>: IP address, device or browser type, and sign-in sessions, used to keep your account secure and prevent abuse.</li>
 </ul>
 

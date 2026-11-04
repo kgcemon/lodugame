@@ -18,6 +18,7 @@ import { dbPingMs } from './metrics';
 import { mayRefresh, playerStats, winTable } from './stats';
 import { adminPlayerGiftApi, displayedGifts, playerGiftApi } from './playergifts';
 import { adminGiftRoutes, playerGiftRoutes, rewardFromGems, rewardFromWallet, type GiftCatalogue } from './gifts';
+import { MAX_REPORT_NOTE, REPORT_REASONS, REPORT_STATUSES, type ReportReason, type ReportStatus } from '../shared/moderation';
 import { payoutPolicy } from './settings';
 import { spin, spinState } from './spin';
 import { applyWalletTx, claimDailyBonus, listTransactions, walletSummary, type TxType } from './wallet';
@@ -131,7 +132,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
   const boardCache = new Map<string, BoardPage>();
   const boardReads = new Map<string, Promise<BoardPage>>();
   const r = Router();
-  const { db, settings, presence } = ctx;
+  const { db, settings, presence, blocks } = ctx;
   /** A shop's items at the prices the administrator set. */
   const shopCatalogue = (kind: ShopKind) =>
     (kind === 'dice' ? DICE_SKINS : kind === 'frame' ? PROFILE_FRAMES : BOARDS).map((x) => ({
@@ -276,6 +277,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
           stats: await statsFor(db, row.user_id),
           gifts: await displayedGifts(db, row.user_id),
           friendship: row.user_id === req.user!.id ? null : await friendship(req.user!.id, row.user_id),
+          // Whether I blocked them. Whether they blocked me is not mine to know.
+          blocked: blocks.has(req.user!.id, row.user_id),
         },
       };
     }),
@@ -306,6 +309,10 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         await q.query(`update profiles set full_name = 'Deleted player', username = $2, avatar_url = null, frame = null, country = null where user_id = $1`, [me, `deleted_${tag}`]);
         await q.query('delete from friendships where user_a = $1 or user_b = $1', [me]);
         await q.query('delete from friend_requests where from_user = $1 or to_user = $1', [me]);
+        await q.query('delete from player_blocks where blocker_id = $1 or blocked_id = $1', [me]);
+        // Reports stay for the record, without what this person wrote.
+        await q.query('update player_reports set chat_excerpt = null where target_id = $1', [me]);
+        await q.query('update player_reports set note = null where reporter_id = $1', [me]);
         await q.query('delete from notifications where user_id = $1', [me]);
         await q.query('delete from auth_tokens where user_id = $1', [me]);
         await q.query('update player_gifts set displayed = false where recipient_id = $1', [me]);
@@ -313,6 +320,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         await q.query('insert into audit_logs (actor_id, action, target_user_id, details) values ($1, $2, $1, $3::jsonb)', [me, 'account.delete', '{}']);
       });
       ctx.voice?.forget(me);
+      blocks.forget(me);
       clearSessionCookie(res, ctx.cfg);
       return { ok: true };
     }),
@@ -736,6 +744,8 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       const target = t.rows[0];
       if (!target) throw new HttpError(404, 'No player with that username or ID');
       if (target.user_id === me) throw new HttpError(400, 'You cannot add yourself');
+      if (blocks.has(me, target.user_id)) throw new HttpError(409, `Unblock ${target.username} first`, 'BLOCKED');
+      if (blocks.has(target.user_id, me)) throw new HttpError(403, 'This player is not accepting friend requests', 'BLOCKED');
       const [a, b] = pair(me, target.user_id);
       if ((await db.query('select 1 from friendships where user_a = $1 and user_b = $2', [a, b])).rows.length) {
         throw new HttpError(409, `You and ${target.username} are already friends`);
@@ -775,6 +785,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         [id, me],
       );
       if (!r2.rows.length) throw new HttpError(404, 'Friend request not found');
+      if (blocks.between(r2.rows[0].from_user, r2.rows[0].to_user)) throw new HttpError(404, 'Friend request not found');
       await q.query(`update friend_requests set status = 'accepted', responded_at = now() where id = $1`, [id]);
       const [a, b] = pair(r2.rows[0].from_user, r2.rows[0].to_user);
       await q.query('insert into friendships (user_a, user_b) values ($1, $2) on conflict do nothing', [a, b]);
@@ -840,7 +851,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
       ]);
       if (!t.rows.length) throw new HttpError(404, 'Player not found');
       const [a, b] = pair(me.id, t.rows[0].user_id);
-      if (!(await db.query('select 1 from friendships where user_a = $1 and user_b = $2', [a, b])).rows.length) {
+      if (blocks.between(me.id, t.rows[0].user_id) || !(await db.query('select 1 from friendships where user_a = $1 and user_b = $2', [a, b])).rows.length) {
         throw new HttpError(403, 'You can only invite friends');
       }
       const code = presence.roomOf(me.id);
@@ -854,6 +865,109 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         entryFee: room.entryFee,
       });
       return { ok: true };
+    }),
+  );
+
+  // ---------------------------------------------------------------- blocking & reporting
+
+  r.get(
+    '/blocks',
+    h(async (req) => {
+      const rows = (
+        await db.query<{ username: string; public_id: string; avatar_hue: number; avatar_url: string | null; frame: string | null; country: string | null; created_at: string }>(
+          `select p.username, p.public_id, p.avatar_hue, p.avatar_url, p.frame, p.country, b.created_at
+           from player_blocks b join profiles p on p.user_id = b.blocked_id
+           where b.blocker_id = $1 order by b.created_at desc limit 500`,
+          [req.user!.id],
+        )
+      ).rows;
+      return { ok: true, items: rows.map((x) => ({ ...profileOut(x), blockedAt: x.created_at })) };
+    }),
+  );
+
+  /**
+   * Block a player. Their chat and emotes stop reaching me, and neither of us can send the other
+   * friend requests, invites or gifts. Any friendship ends. Seats, turns and matchmaking don't change.
+   * A pending request is cancelled, not deleted: it still counts towards the request limit.
+   */
+  r.post(
+    '/blocks',
+    rateLimit(60, 60_000, (req) => req.user!.id),
+    h(async (req) => {
+      const me = req.user!.id;
+      const t = await db.query<{ user_id: string }>(
+        'select p.user_id from profiles p join users u on u.id = p.user_id and u.suspended_at is null where p.public_id = $1',
+        [v.str(req.body?.player, 'Player', 8, 8).toUpperCase()],
+      );
+      if (!t.rows.length) throw new HttpError(404, 'Player not found');
+      const other = t.rows[0].user_id;
+      if (other === me) throw new HttpError(400, 'You cannot block yourself');
+      const [a, b] = pair(me, other);
+      const cancelled = await db.tx(async (q) => {
+        await q.query('insert into player_blocks (blocker_id, blocked_id) values ($1, $2) on conflict do nothing', [me, other]);
+        await q.query('delete from friendships where user_a = $1 and user_b = $2', [a, b]);
+        const pending = await q.query<{ id: string; to_user: string }>(
+          `select id, to_user from friend_requests where status = 'pending' and least(from_user, to_user) = $1 and greatest(from_user, to_user) = $2 for update`,
+          [a, b],
+        );
+        for (const fr of pending.rows) await q.query(`update friend_requests set status = 'cancelled', responded_at = now() where id = $1`, [fr.id]);
+        return pending.rows;
+      });
+      blocks.add(me, other);
+      for (const fr of cancelled) presence.emit(fr.to_user, 'friend:cancelled', { id: fr.id });
+      touchFriends(me, other);
+      rooms().refreshChat(me);
+      return { ok: true };
+    }),
+  );
+
+  /** Unblock a player (they may be suspended by now). Friendship doesn't come back by itself. */
+  r.delete(
+    '/blocks/:publicId',
+    rateLimit(60, 60_000, (req) => req.user!.id),
+    h(async (req) => {
+      const me = req.user!.id;
+      const t = await db.query<{ user_id: string }>('select user_id from profiles where public_id = $1', [String(req.params.publicId).toUpperCase()]);
+      if (!t.rows.length) throw new HttpError(404, 'Player not found');
+      await db.query('delete from player_blocks where blocker_id = $1 and blocked_id = $2', [me, t.rows[0].user_id]);
+      blocks.remove(me, t.rows[0].user_id);
+      rooms().refreshChat(me);
+      return { ok: true };
+    }),
+  );
+
+  /**
+   * Report a player to the administrators. One open report per reporter and player. While the two
+   * share a room, the reported player's own messages are kept with it from the server's copy.
+   */
+  r.post(
+    '/reports',
+    rateLimit(10, 60 * 60_000, (req) => req.user!.id),
+    h(async (req) => {
+      const me = req.user!.id;
+      const reason = req.body?.reason as ReportReason;
+      if (!REPORT_REASONS.includes(reason)) throw new HttpError(400, 'Choose a reason');
+      const note = req.body?.note == null ? '' : v.str(req.body.note, 'Note', 0, MAX_REPORT_NOTE).replace(/[\u0000-\u001f\u007f]+/g, ' ');
+      const t = await db.query<{ user_id: string }>(
+        'select p.user_id from profiles p join users u on u.id = p.user_id and u.suspended_at is null where p.public_id = $1',
+        [v.str(req.body?.player, 'Player', 8, 8).toUpperCase()],
+      );
+      if (!t.rows.length) throw new HttpError(404, 'Player not found');
+      const target = t.rows[0].user_id;
+      if (target === me) throw new HttpError(400, 'You cannot report yourself');
+      const evidence = rooms().chatEvidence(me, target);
+      const id = randomUUID();
+      await db.tx(async (q) => {
+        // One at a time per reporter, so a double tap can't file two.
+        await q.query('select id from users where id = $1 for update', [me]);
+        const open = await q.query(`select 1 from player_reports where reporter_id = $1 and target_id = $2 and status = 'open'`, [me, target]);
+        if (open.rows.length) throw new HttpError(409, 'You already reported this player. An administrator will review it.', 'ALREADY_REPORTED');
+        await q.query(
+          `insert into player_reports (id, reporter_id, target_id, reason, note, match_id, chat_excerpt) values ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+          [id, me, target, reason, note || null, evidence?.matchId ?? null, evidence?.messages.length ? JSON.stringify(evidence.messages) : null],
+        );
+      });
+      return { ok: true, id };
     }),
   );
 
@@ -904,6 +1018,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
         totalPayouts: await one('select coalesce(sum(payout), 0)::bigint as n from match_settlements'),
         houseTotal: await one('select coalesce(sum(house_amount), 0)::bigint as n from match_settlements'),
         openDisputes: await one(`select count(*)::int as n from match_disputes where status = 'open'`),
+        openReports: await one(`select count(*)::int as n from player_reports where status = 'open'`),
         matchesByStatus: Object.fromEntries(byStatus.map((x) => [x.status, x.n])),
         liveRooms: rooms().roomCount,
       };
@@ -1111,6 +1226,49 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
           req.user!.id,
         ]);
         await audit(q, req.user!.id, `dispute.${status}`, { note, disputeId: id }, d.rows[0].user_id, d.rows[0].match_id);
+      });
+      return { ok: true };
+    }),
+  );
+
+  admin.get(
+    '/reports',
+    h(async (req) => {
+      const status = REPORT_STATUSES.includes(req.query.status as ReportStatus) ? String(req.query.status) : 'open';
+      const rows = (
+        await db.query<Record<string, unknown>>(
+          `select r.id, r.reason, r.note, r.chat_excerpt, r.status, r.admin_note, r.match_id, r.created_at, r.resolved_at,
+                  rp.username as reporter, rp.public_id as reporter_public_id,
+                  tp.username as target, tp.public_id as target_public_id, tu.suspended_at as target_suspended_at,
+                  a.username as resolved_by_name,
+                  (select count(*)::int from player_reports x where x.target_id = r.target_id) as reports_on_target
+           from player_reports r
+           join profiles tp on tp.user_id = r.target_id join users tu on tu.id = r.target_id
+           left join profiles rp on rp.user_id = r.reporter_id left join profiles a on a.user_id = r.resolved_by
+           where r.status = $1 order by r.created_at desc limit 100`,
+          [status],
+        )
+      ).rows;
+      return { ok: true, items: rows.map((x) => ({ ...x, chat_excerpt: jsonValue(x.chat_excerpt) })) };
+    }),
+  );
+
+  admin.post(
+    '/reports/:id',
+    h(async (req) => {
+      const id = v.uuid(req.params.id, 'report');
+      const status = req.body?.status;
+      if (status !== 'resolved' && status !== 'dismissed') throw new HttpError(400, 'Status must be resolved or dismissed');
+      const note = v.str(req.body?.note, 'Note', 3, 500);
+      await db.tx(async (q) => {
+        const found = await q.query<{ target_id: string; match_id: string | null; reason: string }>(
+          `select target_id, match_id, reason from player_reports where id = $1 and status = 'open' for update`,
+          [id],
+        );
+        if (!found.rows.length) throw new HttpError(404, 'Open report not found');
+        const x = found.rows[0];
+        await q.query('update player_reports set status = $2, admin_note = $3, resolved_by = $4, resolved_at = now() where id = $1', [id, status, note, req.user!.id]);
+        await audit(q, req.user!.id, `report.${status}`, { note, reportId: id, reason: x.reason }, x.target_id, x.match_id);
       });
       return { ok: true };
     }),

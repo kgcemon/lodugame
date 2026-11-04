@@ -118,17 +118,16 @@ current policies were not re-read for this report; check them before submitting.
 | Coins | No cash value, cannot be withdrawn; not sold for money directly |
 | Privacy policy, terms | Present at `/privacy`, `/terms` |
 | Microphone | Requested only when turning the mic on, friends only |
-| **Reporting and blocking players** | **Missing.** Free-text chat with strangers needs both. Only match disputes exist |
+| Reporting and blocking players | **Added**: on the player's card in the app, with a reports list in the admin panel |
 | Paid match entry and prizes | Virtual coins only, but review how Play classifies it (simulated gambling, content rating) |
 | Data safety form | Must be filled in by the owner in the Play Console |
 | Children | Set the target audience and check the policy text against it |
 
 ## Open items
 
-1. Add report and block for players (Play requirement, see above).
-2. Harden SSH: root and password logins are enabled. It needs root access, which this review did not
+1. Harden SSH: root and password logins are enabled. It needs root access, which this review did not
    have, and should be done with a recovery path ready.
-3. Bind MariaDB to localhost, and restrict CloudPanel's port to known addresses. The firewall already
+2. Bind MariaDB to localhost, and restrict CloudPanel's port to known addresses. The firewall already
    blocks MariaDB from outside.
-4. Copy backups off the server: they are on the same disk today.
-5. Test on real low-end phones, and run this load test against a staging copy of the VPS.
+3. Copy backups off the server: they are on the same disk today.
+4. Test on real low-end phones, and run this load test against a staging copy of the VPS.

@@ -29,6 +29,7 @@ import { GoogleIdTokenVerifier, type GoogleVerifier } from './google';
 import { GooglePlayVerifier, type PlayVerifier } from './googleplay';
 import { Presence } from './presence';
 import { VoiceRelay } from './voice';
+import { BlockList } from './blocks';
 import { announceOnline } from './online';
 
 /** Away at least this long before friends are told you came online. */
@@ -142,7 +143,9 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   const presence = new Presence();
   const play = opts.playVerifier !== undefined ? opts.playVerifier : GooglePlayVerifier.fromEnv(cfg.googlePlayServiceAccount, cfg.googlePlayPackage);
   const google = opts.googleVerifier !== undefined ? opts.googleVerifier : GoogleIdTokenVerifier.fromEnv(cfg.googleClientIds);
-  const ctx: AppCtx = { db, cfg, mailer, settings, presence, play, google };
+  const blocks = new BlockList();
+  await blocks.load(db);
+  const ctx: AppCtx = { db, cfg, mailer, settings, presence, blocks, play, google };
   const ledger = new MatchLedger({ db, settings, presence, requireEmailVerification: cfg.requireEmailVerification });
   if (!opts.skipRecovery) {
     const rec = await ledger.recover();
@@ -199,7 +202,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   const metrics = new ProcessMetrics();
   metrics.start();
   ctx.metrics = { sample: () => metrics.sample(), sockets: () => io.engine.clientsCount };
-  const rooms = new RoomManager(io, ledger, settings, presence, { ...DEFAULT_TIMINGS, ...opts.timings }, opts.roll, db);
+  const rooms = new RoomManager(io, ledger, settings, presence, { ...DEFAULT_TIMINGS, ...opts.timings }, opts.roll, db, blocks);
   const voice = new VoiceRelay(db, io, rooms);
   ctx.voice = voice;
 

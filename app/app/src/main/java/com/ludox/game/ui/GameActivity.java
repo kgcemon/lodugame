@@ -1954,6 +1954,7 @@ public class GameActivity extends BaseActivity {
         chatList.removeAllViews();
         String mine = app.socket.mySeatId();
         if (app.socket.chat.isEmpty()) chatList.addView(Ui.muted(this, teams ? "No messages yet. Plan with your partner! 🤝" : "No messages yet. Say hi! 👋"));
+        else chatList.addView(Ui.text(this, "Tap a message to report or block its sender.", 11, Ui.MUTED));
         for (JSONObject m : app.socket.chat) {
             boolean me = mine.equals(m.optString("seatId"));
             boolean team = !m.isNull("team") && m.has("team");
@@ -1963,6 +1964,7 @@ public class GameActivity extends BaseActivity {
                     : Ui.round(me ? 0x332f7cf0 : 0x14ffffff, Ui.dp(this, 12)));
             line.addView(Ui.bold(Ui.text(this, (team ? "🤝 TEAM · " : "") + m.optString("name") + (me ? " (you)" : ""), 12, Board.colorArgb(m.optString("color")))));
             line.addView(Ui.text(this, m.optString("text"), 15, Ui.INK));
+            if (!me) line.setOnClickListener(v -> openChatSender(m));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.gravity = me ? Gravity.END : Gravity.START;
             lp.topMargin = Ui.dp(this, 6);
@@ -1971,6 +1973,19 @@ public class GameActivity extends BaseActivity {
         if (chatPanel.getVisibility() == View.VISIBLE) app.socket.unreadChat = 0;
         chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
         renderStatus();
+    }
+
+    /** The card of whoever wrote this message: it has Report and Block on it. */
+    private void openChatSender(JSONObject m) {
+        JSONArray seats = app.socket.room != null ? app.socket.room.optJSONArray("seats") : null;
+        for (int i = 0; seats != null && i < seats.length(); i++) {
+            JSONObject seat = seats.optJSONObject(i);
+            if (seat != null && m.optString("seatId").equals(seat.optString("id"))) {
+                PlayerProfile.show(this, seat.optString("name"), seat.optString("color"), seat, false, false, seat.optBoolean("connected", true));
+                return;
+            }
+        }
+        LudoApp.toast("This player has left the room");
     }
 
     private void sendChat(String text, boolean quick) {
