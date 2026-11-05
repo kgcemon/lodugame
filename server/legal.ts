@@ -43,7 +43,7 @@ const PRIVACY = page(
 
 <h2>What we collect</h2>
 <ul>
-  <li><b>Your Google account basics</b> when you sign in with Google: your name, email address and Google account id. We do not get your Google password or access to your other Google data.</li>
+  <li><b>Your Google account basics</b> when you sign in with Google: your name, email address, profile picture and Google account id. Other players can see your name and picture. We do not get your Google password or access to your other Google data.</li>
   <li><b>Your game profile</b>: the player name and avatar colour you choose, your public player id, friends and friend requests.</li>
   <li><b>Game activity</b>: matches you play, results, coins, diamonds, dice skins and the history of these balances.</li>
   <li><b>Purchases</b>: when you buy diamonds through Google Play we receive the order id and purchase token to confirm the payment. Payment details (card numbers and the like) stay with Google; we never see them.</li>
@@ -51,6 +51,7 @@ const PRIVACY = page(
   <li><b>Voice chat</b>: the Android app uses your microphone only after you give permission and turn your mic on in a match room. While it is on, your voice goes through our server to your friends in that room, live. We do not record or store it, and players who are not your friends never hear it.</li>
   <li><b>Reports and blocks</b>: players you block, reports you send, and reports about you. A report keeps the note its sender wrote and, if you shared a room, the messages you sent there, for an administrator to review.</li>
   <li><b>Technical data</b>: IP address, device or browser type, and sign-in sessions, used to keep your account secure and prevent abuse.</li>
+  <li><b>Your country</b>: we work it out from your IP address on our own server, without sending the address to anyone, and show it as a flag beside your name to other players. It does not give your precise location.</li>
 </ul>
 
 <h2>How we use it</h2>
