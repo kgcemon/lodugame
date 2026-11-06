@@ -185,7 +185,7 @@ Gems are a second currency, bought in the Android app through Google Play
   at most 3 times per match. It works until they move; if the roll already passed the turn,
   the next player is held for 2.5 s so the roller can still decide. The server rolls the new
   number. Every gem change is a row in `gem_transactions`; the balance can't go negative.
-* **Packs:** `gems_50`, `gems_150`, `gems_500` (consumable in-app products). Create them with
+* **Packs:** `gems_100`, `gems_240`, `gems_500`, `gems_1200` (consumable in-app products). Create them with
   these exact ids in Play Console → Monetize → In-app products and set the prices there.
 * **Verification:** the app sends the purchase token to `POST /api/gems/purchase`; the server
   checks it with the Google Play Developer API, grants the gems once (tokens are unique and tied

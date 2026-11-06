@@ -7,7 +7,7 @@ import { notify } from './presence';
 import type { RoomManager } from './rooms';
 import * as v from './security';
 import { HttpError } from './security';
-import { GEM_PACKS, REROLL_COSTS, applyGemTx } from './gems';
+import { GEM_PACKS, RETIRED_GEM_PACKS, REROLL_COSTS, applyGemTx } from './gems';
 import { buyItem, equipItem, shopState, type ShopKind } from './skins';
 import { DICE_SKINS } from '../shared/skins';
 import { PROFILE_FRAMES } from '../shared/frames';
@@ -434,7 +434,7 @@ export function apiRouter(ctx: AppCtx, rooms: () => RoomManager): Router {
     h(async (req) => {
       const productId = v.str(req.body?.productId, 'Product', 1, 100);
       const token = v.str(req.body?.purchaseToken, 'Purchase token', 10, 500);
-      const pack = GEM_PACKS.find((p) => p.productId === productId);
+      const pack = [...GEM_PACKS, ...RETIRED_GEM_PACKS].find((p) => p.productId === productId);
       if (!pack) throw new HttpError(400, 'Unknown diamond pack');
       if (!ctx.play) throw new HttpError(503, 'Diamond purchases are not set up on this server yet');
       const me = req.user!.id;

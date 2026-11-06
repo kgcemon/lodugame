@@ -17,9 +17,16 @@ export const MAX_REROLLS = REROLL_COSTS.length;
 
 /** Google Play in-app products (consumables) and the gems each grants. */
 export const GEM_PACKS: { productId: string; gems: number }[] = [
+  { productId: 'gems_100', gems: 100 },
+  { productId: 'gems_240', gems: 240 },
+  { productId: 'gems_500', gems: 500 },
+  { productId: 'gems_1200', gems: 1200 },
+];
+
+/** No longer sold, but a purchase made before they were retired can still be redeemed. */
+export const RETIRED_GEM_PACKS: { productId: string; gems: number }[] = [
   { productId: 'gems_50', gems: 50 },
   { productId: 'gems_150', gems: 150 },
-  { productId: 'gems_500', gems: 500 },
 ];
 
 export const NOT_ENOUGH_GEMS = 'Not enough diamonds! Buy more in the diamond shop.';
